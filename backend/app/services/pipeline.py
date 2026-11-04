@@ -34,7 +34,8 @@ from app.services.ingest import Quota, append_integrity, object_key, zone_for
 
 log = logging.getLogger(__name__)
 VIDEO_STEPS = ("media_probe", "make_proxy", "make_thumbnail")
-STEP_FOR_JOB = {"media_probe": "META", "make_proxy": "PROXY", "make_thumbnail": "THUMBNAIL"}
+STEP_FOR_JOB = {"media_probe": "META", "make_proxy": "PROXY", "make_thumbnail": "THUMBNAIL",
+                "sensor_parse": "SENSOR_PARSE"}
 JOB_FOR_STEP = {v: k for k, v in STEP_FOR_JOB.items()}
 
 
@@ -330,11 +331,19 @@ def make_thumbnail(c: Container, asset_id: str, job_id: str | None = None) -> st
     return "OK"
 
 
+SENSOR_MIME = ("text/csv", "application/json", "application/x-ndjson", "text/plain")
+
+
 def schedule_after_register(c: Container, asset: Asset) -> None:
-    """REGISTERED 후 작업 등록 (요구사항 2.1, 2.3, 2.5). 다른 스펙은 STEP_HANDLERS에 유형을 더한다."""
-    if asset.data_type == "VIDEO" and asset.has_binary and asset.variant in ("ORIGINAL", "CLIP"):
+    """REGISTERED 후 작업 등록 (05번 요구사항 2.1, 2.3, 2.5; 07번 요구사항 5.1)."""
+    if not asset.has_binary:
+        return
+    if asset.data_type == "VIDEO" and asset.variant in ("ORIGINAL", "CLIP"):
         c.queue.enqueue("media_probe", {"asset_id": asset.asset_id, "chain": list(VIDEO_STEPS[1:])},
                         organization_id=asset.organization_id, dedupe_key=f"media_probe:{asset.asset_id}")
+    elif asset.data_type == "SENSOR" and asset.mime_type.split(";")[0] in SENSOR_MIME:
+        c.queue.enqueue("sensor_parse", {"asset_id": asset.asset_id}, organization_id=asset.organization_id,
+                        dedupe_key=f"sensor_parse:{asset.asset_id}")
 
 
 def next_step(c: Container, payload: dict[str, Any], org: str | None) -> None:
@@ -363,3 +372,52 @@ def find_upload(db: Session, asset_id: str) -> Upload | None:
 
 def ffmpeg_available(c: Container) -> bool:
     return bool(shutil.which(c.settings.ffmpeg_path)) and bool(shutil.which(c.settings.ffprobe_path))
+
+
+def sensor_parse(c: Container, asset_id: str) -> str:
+    """Sensor_File_Parser (07번 요구사항 5). 원본 파일은 그대로 두고 결과·행별 사유를 기록한다."""
+    from app.db.models import Device, SensorParseRun
+    from app.ports.notifier import Notification
+    from app.services.observations import current_mapping, ingest_items, parse_rows
+
+    with c.sessionmaker.begin() as db:
+        asset = db.get(Asset, asset_id)
+        if asset is None or asset.data_type != "SENSOR" or not asset.has_binary or not asset.storage_key:
+            return "SKIPPED"
+        device = db.get(Device, asset.source_system_id)
+        assert device is not None
+        mapping = current_mapping(db, device.device_id)
+        prev = db.execute(select(SensorParseRun).where(SensorParseRun.asset_id == asset_id)
+                          .order_by(SensorParseRun.run_id.desc()).limit(1)).scalar_one_or_none()
+        run = SensorParseRun(asset_id=asset_id, organization_id=asset.organization_id,
+                             mapping_version=mapping.version if mapping else None, status="FAILED",
+                             row_errors=[], created_at=c.clock.now())
+        if mapping is None:
+            run.row_errors = [{"row": 0, "reason": "MAPPING_NOT_FOUND"}]
+        elif asset.byte_size > c.settings.sensor_file_max_bytes:
+            run.row_errors = [{"row": 0, "reason": "FILE_TOO_LARGE"}]
+        else:
+            content = c.storage.get_object(c.settings.buckets[asset.storage_zone or "RAW"], asset.storage_key)
+            parsed = parse_rows(content, mapping.mapping)
+            fmt = (mapping.mapping.get("timestamp") or {}).get("format")
+            res = ingest_items(c, db, organization_id=asset.organization_id, device=device, items=parsed.items,
+                               session_id=asset.session_id, clock_offset_ms=None, source_asset_id=asset_id,
+                               time_format=fmt)
+            rejected_rows = [{"row": parsed.row_of_item[r["index"]], "reason": r["reason"]}
+                             for r in res.results if r["status"] == "REJECTED"]
+            run.accepted, run.duplicates, run.rejected = res.accepted, res.duplicates, res.rejected
+            run.row_errors = (parsed.row_errors + rejected_rows)[:1000]
+            stored = res.accepted + res.duplicates
+            run.status = "FAILED" if stored == 0 else ("PARTIAL" if run.row_errors else "OK")
+        if prev is not None:  # 매핑을 고쳐 다시 파싱하면 이전 결과와의 차이를 남긴다 (요구사항 5.4)
+            run.diff_from_previous = {
+                "previous_run_id": prev.run_id, "previous_mapping_version": prev.mapping_version,
+                "accepted": (run.accepted or 0) - prev.accepted, "rejected": (run.rejected or 0) - prev.rejected,
+                "row_errors": len(run.row_errors) - len(prev.row_errors or [])}
+        db.add(run)
+        status, org = run.status, asset.organization_id
+    if status == "FAILED":  # 원본은 유지하고 기관 담당자에게 알린다 (요구사항 5.3)
+        c.notifier.send(Notification(kind="sensor_parse.failed", organization_id=org, subject="센서 파일 파싱 실패",
+                                     body=f"자산 {asset_id}: 매핑 프로필과 파일 형식을 확인하세요",
+                                     data={"asset_id": asset_id}))
+    return "OK"

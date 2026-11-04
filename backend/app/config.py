@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     job_lease_reap_interval_s: int = 60
     integrity_sample_size: int = 20
 
+    # 센서·관측값 (07번, 정책값)
+    observation_batch_max: int = 5000
+    observation_future_tolerance_s: int = 600
+    clock_offset_warn_ms: int = 2000
+    sensor_file_max_bytes: int = 512 * 1024 * 1024
+
     # 운영
     log_level: str = "INFO"
     readiness_timeout_s: float = 2.0

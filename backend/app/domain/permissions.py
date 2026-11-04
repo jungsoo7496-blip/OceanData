@@ -55,6 +55,14 @@ PERMISSIONS: dict[str, Rule] = {
     "asset:write": Rule(PROVIDER),
     "asset:reprocess": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),
     "webhook:manage": Rule(frozenset({"ORG_ADMIN"}), scope="webhook:manage"),
+    # 07 센서·이벤트
+    "observation:write": Rule(PROVIDER, scope="observation:write"),
+    "observation:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
+    "observation:correct": Rule(frozenset({"ORG_ADMIN"})),
+    "mapping:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="agent:policy"),
+    "mapping:write": Rule(frozenset({"ORG_ADMIN", "PLATFORM_OPERATOR"})),
+    "event:write": Rule(PROVIDER, scope="event:write"),
+    "event:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
 }
 
 

@@ -151,7 +151,7 @@ def get_receipt(asset_id: str, request: Request, db: Session = Depends(get_db), 
 
 class ReprocessRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    steps: list[Literal["META", "PROXY", "THUMBNAIL"]] = Field(min_length=1)
+    steps: list[Literal["META", "PROXY", "THUMBNAIL", "SENSOR_PARSE"]] = Field(min_length=1)
     reason: str = Field(min_length=2, max_length=500)
 
 
@@ -166,14 +166,20 @@ def reprocess_asset(asset_id: str, body: ReprocessRequest, request: Request, db:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/steps", "code": "unique",
                                                         "message": "단계가 중복되었습니다"}])
     a = load_scoped(db, c, request, Asset, asset_id, p)
-    if not a.has_binary or a.data_type != "VIDEO" or a.variant not in ("ORIGINAL", "CLIP"):
+    sensor = body.steps == ["SENSOR_PARSE"]
+    if "SENSOR_PARSE" in body.steps and not sensor:
+        raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/steps", "code": "mixed",
+                                                        "message": "SENSOR_PARSE는 단독으로 요청합니다"}])
+    if sensor and (a.data_type != "SENSOR" or not a.has_binary):
+        raise ProblemError("CONFLICT", detail="센서 파일 자산만 다시 파싱합니다")
+    if not sensor and (not a.has_binary or a.data_type != "VIDEO" or a.variant not in ("ORIGINAL", "CLIP")):
         raise ProblemError("CONFLICT", detail="바이너리가 있는 원 영상 자산만 재처리합니다")
     if a.ingest_status == "FAILED":  # 실패 직전 단계로 (domain.md 5장: FAILED → 이전 단계, PLATFORM_OPERATOR)
         back = (a.ingest_context or {}).get("failed_from", "REGISTERED")
         a.ingest_status = states.transition("ingest_status", "FAILED", back, p.roles)
     elif a.ingest_status not in ("REGISTERED", "PROXIED", "READY_PRIVATE"):
         raise ProblemError("CONFLICT", detail=f"{a.ingest_status} 상태에서는 재처리할 수 없습니다")
-    order = [s for s in ("META", "PROXY", "THUMBNAIL") if s in body.steps]
+    order = [s for s in ("META", "PROXY", "THUMBNAIL", "SENSOR_PARSE") if s in body.steps]
     jobs = [JOB_FOR_STEP[s] for s in order]
     run = new_ulid()
     db.flush()

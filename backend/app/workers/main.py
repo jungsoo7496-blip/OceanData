@@ -64,6 +64,7 @@ def _pipeline_step(name: str) -> Callable[[Container, Job], Any]:
         from app.services import pipeline
 
         fn = {"media_probe": lambda: pipeline.media_probe(c, job.payload["asset_id"]),
+              "sensor_parse": lambda: pipeline.sensor_parse(c, job.payload["asset_id"]),
               "make_proxy": lambda: pipeline.make_proxy(c, job.payload["asset_id"], job.job_id),
               "make_thumbnail": lambda: pipeline.make_thumbnail(c, job.payload["asset_id"], job.job_id)}[name]
         result = fn()
@@ -87,6 +88,7 @@ register("noop", lambda c, job: None)
 register("integrity_verify", _integrity_verify, _asset_failed)  # 04번
 for _step in ("media_probe", "make_proxy", "make_thumbnail"):  # 05번
     register(_step, _pipeline_step(_step), _asset_failed)
+register("sensor_parse", _pipeline_step("sensor_parse"))  # 07번 (실패해도 원본 자산 상태는 그대로)
 
 
 def run_once(c: Container, worker_id: str) -> bool:

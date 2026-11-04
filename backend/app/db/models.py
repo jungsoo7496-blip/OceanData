@@ -9,6 +9,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -471,4 +472,95 @@ class ModelRegistryEntry(Base):
     weights_uri: Mapped[str] = mapped_column(String(400))
     training_data_terms: Mapped[str | None] = mapped_column(Text)
     approved_by: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
+# ---- 07 센서·이벤트
+
+
+class ObservationMapping(Base):
+    """원천 장비별 관측값 매핑 프로필 버전 (07번 요구사항 4)."""
+
+    __tablename__ = "observation_mappings"
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), index=True)
+    mapping: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
+class ObservationCorrection(Base):
+    """관측값 정정 이력 (07번 요구사항 3.2). 이전 값을 보존한다."""
+
+    __tablename__ = "observation_corrections"
+    correction_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    organization_id: Mapped[str] = mapped_column(ID, index=True)
+    source_system_id: Mapped[str] = mapped_column(ID)
+    metric: Mapped[str] = mapped_column(String(80))
+    observed_at: Mapped[datetime] = mapped_column(TS)
+    depth_m: Mapped[float | None] = mapped_column(Float)
+    channel: Mapped[str | None] = mapped_column(String(32))
+    old_value: Mapped[float | None] = mapped_column(Float)
+    old_quality_flag: Mapped[str] = mapped_column(String(20))
+    new_value: Mapped[float | None] = mapped_column(Float)
+    new_quality_flag: Mapped[str] = mapped_column(String(20))
+    reason: Mapped[str] = mapped_column(Text)
+    corrected_by: Mapped[str] = mapped_column(String(64))
+    corrected_at: Mapped[datetime] = mapped_column(TS)
+
+
+class Event(Base):
+    """실증 이벤트 (07번 요구사항 7)."""
+
+    __tablename__ = "events"
+    __table_args__ = (
+        Index("uq_events_source_event", "organization_id", "source_system_id", "source_event_id", unique=True,
+              postgresql_where=text("source_event_id IS NOT NULL")),
+        Index("ix_events_session_time", "organization_id", "session_id", "started_at"),
+    )
+    event_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"))
+    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.session_id"))
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.project_id"))
+    source_system_id: Mapped[str | None] = mapped_column(ForeignKey("devices.device_id"))
+    event_code: Mapped[str] = mapped_column(String(80))
+    started_at: Mapped[datetime] = mapped_column(TS)
+    ended_at: Mapped[datetime | None] = mapped_column(TS)
+    timestamp_quality: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    location: Mapped[dict[str, Any] | None] = mapped_column(Geometry())
+    severity: Mapped[str | None] = mapped_column(String(10))
+    source: Mapped[str] = mapped_column(String(10))
+    model_ref: Mapped[str | None] = mapped_column(String(128))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    human_verified: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    verified_by: Mapped[str | None] = mapped_column(ID)
+    verified_at: Mapped[datetime | None] = mapped_column(TS)
+    source_event_id: Mapped[str | None] = mapped_column(String(128))
+    note: Mapped[str | None] = mapped_column(Text)
+    schema_version: Mapped[str] = mapped_column(String(20))
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
+class EventAsset(Base):
+    __tablename__ = "event_assets"
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.event_id"), primary_key=True)
+    asset_id: Mapped[str] = mapped_column(ForeignKey("assets.asset_id"), primary_key=True)
+
+
+class SensorParseRun(Base):
+    """센서 파일 파싱 결과 (07번 요구사항 5.3, 5.4). 행 번호별 사유와 이전 결과와의 차이."""
+
+    __tablename__ = "sensor_parse_runs"
+    run_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    asset_id: Mapped[str] = mapped_column(ForeignKey("assets.asset_id"), index=True)
+    organization_id: Mapped[str] = mapped_column(ID)
+    mapping_version: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(10))  # OK / PARTIAL / FAILED
+    accepted: Mapped[int] = mapped_column(Integer, server_default="0")
+    duplicates: Mapped[int] = mapped_column(Integer, server_default="0")
+    rejected: Mapped[int] = mapped_column(Integer, server_default="0")
+    row_errors: Mapped[list[Any]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    diff_from_previous: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(TS)

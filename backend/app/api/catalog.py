@@ -65,6 +65,13 @@ def validate_contract(body: ValidateRequest, _: Principal = Depends(require("con
 
 
 # ---- 장비 정책 (에이전트가 주기적으로 받는다)
+def _mapping_version(db: Session, device_id: str) -> str | None:
+    from app.services.observations import current_mapping
+
+    m = current_mapping(db, device_id)
+    return f"m{m.version}" if m else None
+
+
 def default_policy(db: Session, collector: Device) -> dict:
     sources = db.execute(select(Device).where(Device.collector_device_id == collector.device_id,
                                               Device.organization_id == collector.organization_id,
@@ -75,7 +82,8 @@ def default_policy(db: Session, collector: Device) -> dict:
         "sources": [{"device_id": d.device_id, "project_id": d.project_id, "collection_mode": d.collection_mode,
                      "local_copy_policy": d.local_copy_policy, "local_retention_days": d.local_retention_days,
                      "allowed_data_roles": ["CORE"], "expected_interval_s": d.expected_interval_s,
-                     "source_timezone": d.source_timezone, "observation_mapping_version": None}
+                     "source_timezone": d.source_timezone,
+                     "observation_mapping_version": _mapping_version(db, d.device_id)}
                     for d in sources if d.project_id],
         "watch_rules": [],
         "timezone": "UTC",
@@ -94,7 +102,12 @@ def get_device_policy(device_id: str, request: Request, db: Session = Depends(ge
         raise ProblemError("NOT_FOUND", detail="정책은 수집기 단위로 배포합니다")
     stored = db.execute(select(DevicePolicy).where(DevicePolicy.device_id == device.device_id)
                         .order_by(DevicePolicy.version.desc()).limit(1)).scalar_one_or_none()
-    return stored.policy if stored else default_policy(db, device)
+    if stored is None:
+        return default_policy(db, device)
+    policy = dict(stored.policy)  # 저장된 정책에도 현재 매핑 버전을 채운다
+    policy["sources"] = [{**src, "observation_mapping_version": _mapping_version(db, src["device_id"])
+                          or src.get("observation_mapping_version")} for src in policy.get("sources", [])]
+    return policy
 
 
 # ---- 계보

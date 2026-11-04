@@ -547,10 +547,9 @@ class IntegrityVerifier:
                 quota.settle(asset.organization_id, reserved, to="used", actual=size)
             if asset.data_type != "VIDEO":  # 프록시가 필요 없는 유형 (05번이 영상 프록시를 만든다)
                 asset.ingest_status = states.transition("ingest_status", "REGISTERED", "READY_PRIVATE", {"SERVICE"})
-            else:  # 영상: 메타 추출 → 프록시 → 썸네일 (05번)
-                from app.services.pipeline import schedule_after_register
+            from app.services.pipeline import schedule_after_register
 
-                schedule_after_register(self.c, asset)
+            schedule_after_register(self.c, asset)  # 영상 처리(05번)·센서 파일 파싱(07번)
             return asset.ingest_status
 
     def _quarantine(self, db: Session, asset: Asset, reason: str, bucket: str, key: str) -> None:

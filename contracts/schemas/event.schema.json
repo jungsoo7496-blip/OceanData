@@ -2,7 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "실증 이벤트 v1.0 (POST /v1/events 요청 본문)",
   "description": "회차·장비·시간 구간에 붙는 사건 기록 (07번). event_code는 공통 상위분류(contracts/codes/event-categories.json) + 선택적 기관 하위코드. 모델이 만든 이벤트는 사람이 확인하기 전까지 human_verified=false. 서버 응답(EventRecord)은 $defs/event_body를 확장해 쓴다.",
-  "allOf": [{ "$ref": "#/$defs/event_body" }],
+  "allOf": [
+    { "$ref": "#/$defs/event_body" },
+    {
+      "description": "요청: 모델 결과는 생성 시점에 확인됨으로 올 수 없다 (사람 확인은 PATCH로). 응답 EventRecord에는 적용하지 않는다",
+      "if": { "required": ["source"], "properties": { "source": { "const": "MODEL" } } },
+      "then": { "properties": { "human_verified": { "const": false } } }
+    }
+  ],
   "unevaluatedProperties": false,
   "$defs": {
     "event_body": {
@@ -30,7 +37,7 @@
         {
           "description": "모델 결과는 생성 시점에 확인됨으로 올 수 없다",
           "if": { "properties": { "source": { "const": "MODEL" } } },
-          "then": { "required": ["model_ref", "confidence"], "properties": { "human_verified": { "const": false } } }
+          "then": { "required": ["model_ref", "confidence"] }
         },
         {
           "description": "장비·규칙이 만든 이벤트는 장비를 밝힌다",
