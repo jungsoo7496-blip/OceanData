@@ -64,6 +64,19 @@ class Settings(BaseSettings):
     quarantine_retention_days: int = 30
     rate_limit_per_minute: int = 600
 
+    # 처리 파이프라인 (05번). FFmpeg는 별도 프로세스, 하드웨어 인코더는 GPU_ENABLED일 때만
+    ffmpeg_path: str = "ffmpeg"
+    ffprobe_path: str = "ffprobe"
+    ffmpeg_timeout_s: int = 3600
+    proxy_short_side: int = 480
+    proxy_max_bitrate: str = "1M"
+    proxy_hw_encoder: str = "h264_nvenc"
+    thumbnail_interval_s: float = 10.0
+    thumbnail_max_frames: int = 20
+    worker_resource_classes: CsvList = Field(default_factory=lambda: ["CPU"])
+    job_lease_reap_interval_s: int = 60
+    integrity_sample_size: int = 20
+
     # 운영
     log_level: str = "INFO"
     readiness_timeout_s: float = 2.0
@@ -72,6 +85,7 @@ class Settings(BaseSettings):
     idempotency_retention_s: int = 86400
 
     @field_validator("processing_steps", "report_formats", "external_sources", "idp_mfa_acr_values",
+                     "worker_resource_classes",
                      mode="before")
     @classmethod
     def _split_csv(cls, v: object) -> object:

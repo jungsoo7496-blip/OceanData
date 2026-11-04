@@ -53,6 +53,7 @@ PERMISSIONS: dict[str, Rule] = {
     "asset:read": Rule(PROVIDER | {"PROGRAM_VIEWER", "PLATFORM_OPERATOR"}, scope="asset:read"),
     "asset:receipt": Rule(PROVIDER, scope="upload:write"),
     "asset:write": Rule(PROVIDER),
+    "asset:reprocess": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),
     "webhook:manage": Rule(frozenset({"ORG_ADMIN"}), scope="webhook:manage"),
 }
 

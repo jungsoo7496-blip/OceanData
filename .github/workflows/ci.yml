@@ -40,6 +40,7 @@ jobs:
           docker run -d --name pg -p 5432:5432 -e POSTGRES_USER=marine_owner -e POSTGRES_PASSWORD=ci-owner \
             -e POSTGRES_DB=marine -e APP_DB_PASSWORD=ci-app marine-postgres:ci
           for i in $(seq 1 60); do docker exec pg pg_isready -U marine_owner -d marine && break; sleep 1; done
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: pip install -e "backend[dev]"
       - name: 린트·타입·정적 보안
         working-directory: backend

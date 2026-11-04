@@ -8,7 +8,7 @@ TEST_DATABASE_URL ?= postgresql+pg8000://marine_owner:change-me-owner@127.0.0.1:
 
 .PHONY: venv up down logs migrate seed verify-audit sample-video test test-unit test-integration test-acceptance \
         lint typecheck security license-check secrets-check web-check contracts-check traceability \
-        traceability-write ci agent-build agent-test
+        traceability-write ci agent-build agent-test bench verify-integrity
 
 venv:
 	cd backend && uv venv -q .venv && uv pip install -q -p .venv -e ".[dev]" -r ../tools/requirements.txt
@@ -82,3 +82,9 @@ agent-build:
 
 agent-test:
 	cd agent && go vet ./... && go test -race ./...
+
+bench:
+	cd backend && .venv/bin/python -m app.bench --out ../var/bench.json
+
+verify-integrity:
+	$(COMPOSE) run --rm migrate python -m app.cli verify-integrity

@@ -19,6 +19,8 @@ def main(argv: list[str] | None = None) -> int:
     sp = sub.add_parser("set-policy", help="수집기 정책 등록 (device-policy.schema.json 검증, 새 버전으로 저장)")
     sp.add_argument("device_id")
     sp.add_argument("policy_file")
+    vi = sub.add_parser("verify-integrity", help="무결성 로그 체인·표본 객체 해시 검증 (05번 요구사항 5.3)")
+    vi.add_argument("--sample", type=int, default=None)
     ec = sub.add_parser("enrollment-code", help="운영자 대리 등록 코드 발급 (감사 기록, 화면은 09번)")
     ec.add_argument("device_id")
     args = parser.parse_args(argv)
@@ -42,6 +44,19 @@ def main(argv: list[str] | None = None) -> int:
         return _set_policy(c, args.device_id, args.policy_file)
     if args.cmd == "enrollment-code":
         return _enrollment_code(c, args.device_id)
+    if args.cmd == "verify-integrity":
+        from app.services.integrity import anchor_previous_days, verify_integrity
+
+        anchor_previous_days(c)
+        rep = verify_integrity(c, args.sample)
+        print(f"체인 {rep.checked_entries}건 확인, 표본 {rep.sampled}건 재계산")
+        if rep.broken_at_seq is not None:
+            print(f"체인 끊김: seq={rep.broken_at_seq}", file=sys.stderr)
+        for a in rep.mismatched_assets:
+            print(f"해시 불일치: {a}", file=sys.stderr)
+        for a in rep.missing_objects:
+            print(f"객체 없음: {a}", file=sys.stderr)
+        return 0 if rep.ok else 1
     if args.cmd == "verify-audit":
         report = c.audit.verify_chain()
         if report.ok:

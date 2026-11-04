@@ -127,8 +127,23 @@ class JobRow(Base):
     last_error_code: Mapped[str | None] = mapped_column(String(60))
     organization_id: Mapped[str | None] = mapped_column(ID)
     dedupe_key: Mapped[str | None] = mapped_column(String(200))
+    asset_id: Mapped[str | None] = mapped_column(ID, index=True)  # 05: 대상 자산
+    resource_class: Mapped[str] = mapped_column(String(10), server_default="CPU")  # CPU / GPU
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TS)  # 임대 만료 (요구사항 1.3)
     created_at: Mapped[datetime] = mapped_column(TS)
     updated_at: Mapped[datetime] = mapped_column(TS)
+
+
+class JobPolicy(Base):
+    """작업 유형별 정책 (05번 요구사항 6, HW-3: 수치는 표에서)."""
+
+    __tablename__ = "job_policies"
+    job_type: Mapped[str] = mapped_column(String(60), primary_key=True)
+    priority: Mapped[int] = mapped_column(Integer)
+    resource_class: Mapped[str] = mapped_column(String(10), server_default="CPU")
+    gpu_fallback: Mapped[str] = mapped_column(String(10), server_default="CPU")  # GPU 없을 때 CPU / WAIT
+    max_attempts: Mapped[int] = mapped_column(Integer, server_default="5")
+    lease_s: Mapped[int] = mapped_column(Integer, server_default="600")
 
 
 # ---- 02 인증·테넌트·감사
@@ -429,3 +444,31 @@ class AgentStatus(Base):
     queue_items: Mapped[int] = mapped_column(Integer)
     queue_bytes: Mapped[int] = mapped_column(BigInteger)
     heartbeat: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+
+# ---- 05 처리 파이프라인
+
+
+class IntegrityAnchor(Base):
+    """무결성 로그 일 단위 앵커 (05번 요구사항 5.2)."""
+
+    __tablename__ = "integrity_anchors"
+    day: Mapped[datetime] = mapped_column(DateTime(timezone=False), primary_key=True)
+    last_seq: Mapped[int] = mapped_column(BigInteger)
+    entry_count: Mapped[int] = mapped_column(Integer)
+    anchor_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
+class ModelRegistryEntry(Base):
+    """Model_Registry (05번 요구사항 8.3): 이름·버전·sha256·라이선스가 기록된 모델만 로드한다."""
+
+    __tablename__ = "model_registry"
+    name: Mapped[str] = mapped_column(String(120), primary_key=True)
+    version: Mapped[str] = mapped_column(String(60), primary_key=True)
+    sha256: Mapped[str] = mapped_column(String(64))
+    license: Mapped[str | None] = mapped_column(String(60))
+    weights_uri: Mapped[str] = mapped_column(String(400))
+    training_data_terms: Mapped[str | None] = mapped_column(Text)
+    approved_by: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)

@@ -14,7 +14,6 @@ from sqlalchemy import select, text
 
 from app.db.models import Asset, Device, OrgQuota, Upload
 from app.seed import DEV_A_CAMERA, DEV_A_COLLECTOR, DEV_A_SENSOR, DEV_B_CAMERA, ORG_A, PRJ_A, SES_A
-from app.workers.main import run_once
 from tests.contract.openapi_contract import assert_matches_contract as check
 
 pytestmark = pytest.mark.integration
@@ -68,8 +67,12 @@ def upload_all(ctx, m: dict, data: bytes, headers: dict) -> dict:
 
 
 def drain(ctx) -> None:
-    while run_once(ctx.c, "test-worker"):
-        pass
+    """04번 시험: 무결성 검증 작업만 처리한다 (영상 처리 파이프라인은 test_pipeline.py)."""
+    from app.services.ingest import IntegrityVerifier
+
+    while (job := ctx.c.queue.claim(["integrity_verify"], "test-worker")) is not None:
+        IntegrityVerifier(ctx.c).verify(job.payload["asset_id"])
+        ctx.c.queue.complete(job.job_id)
 
 
 def quota(ctx) -> OrgQuota:

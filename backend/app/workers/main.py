@@ -1,4 +1,9 @@
-"""Worker — 작업 큐를 처리한다. 작업 유형별 핸들러는 05번 스펙부터 HANDLERS에 등록한다."""
+"""Worker — 작업 큐를 처리한다.
+
+- 작업 유형은 `register()`로 등록한다. 다른 스펙(07 센서 파싱, 14 비식별 등)도 같은 방식으로 더한다 (05번 요구사항 2.4)
+- 실패는 지수 백오프로 최대 시도(job_policies.max_attempts)까지 재시도하고, 다 쓰면 FAILED (요구사항 7.1)
+- 주기 정리: 임대 만료 작업 회수(1.3), 만료 업로드 세션 정리(04번 3.3), 무결성 로그 일 단위 앵커(5.2)
+"""
 
 from __future__ import annotations
 
@@ -8,6 +13,7 @@ import signal
 import socket
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from prometheus_client import start_http_server
@@ -22,27 +28,99 @@ log = logging.getLogger("worker")
 
 
 class RetryableError(Exception):
-    def __init__(self, code: str, retry_in_s: float = 30.0) -> None:
+    def __init__(self, code: str, retry_in_s: float | None = None) -> None:
         super().__init__(code)
         self.code, self.retry_in_s = code, retry_in_s
 
 
-Handler = Callable[[Container, Job], None]
+@dataclass(frozen=True)
+class Handler:
+    fn: Callable[[Container, Job], Any]
+    # 재시도를 다 썼을 때 호출 (자산 FAILED 처리 등)
+    on_exhausted: Callable[[Container, Job, str], None] | None = None
+
+
+HANDLERS: dict[str, Handler] = {}
+
+
+def register(job_type: str, fn: Callable[[Container, Job], Any],
+             on_exhausted: Callable[[Container, Job, str], None] | None = None) -> None:
+    HANDLERS[job_type] = Handler(fn, on_exhausted)
+
+
+def backoff_s(attempt: int, base: float = 15.0, cap: float = 3600.0) -> float:
+    return min(cap, base * (2 ** max(0, attempt - 1)))
+
+
+# ---- 기본 작업 유형
 def _integrity_verify(c: Container, job: Job) -> None:
     from app.services.ingest import IntegrityVerifier
 
     IntegrityVerifier(c).verify(job.payload["asset_id"])
 
 
-HANDLERS: dict[str, Handler] = {
-    "noop": lambda c, job: None,  # 동작 확인용
-    "integrity_verify": _integrity_verify,  # 04번 무결성 검증·격리
-    # "make_proxy": 05번 처리 파이프라인에서 등록한다 (그때까지 영상 자산은 REGISTERED에 머문다)
-}
+def _pipeline_step(name: str) -> Callable[[Container, Job], Any]:
+    def run(c: Container, job: Job) -> Any:
+        from app.services import pipeline
+
+        fn = {"media_probe": lambda: pipeline.media_probe(c, job.payload["asset_id"]),
+              "make_proxy": lambda: pipeline.make_proxy(c, job.payload["asset_id"], job.job_id),
+              "make_thumbnail": lambda: pipeline.make_thumbnail(c, job.payload["asset_id"], job.job_id)}[name]
+        result = fn()
+        if result == "FAILED":
+            raise RetryableError(f"{name.upper()}_FAILED")
+        if result == "OK":
+            pipeline.next_step(c, job.payload, job.organization_id)
+        return result
+
+    return run
+
+
+def _asset_failed(c: Container, job: Job, code: str) -> None:
+    from app.services.pipeline import mark_failed
+
+    if job.payload.get("asset_id"):
+        mark_failed(c, job.payload["asset_id"], code)
+
+
+register("noop", lambda c, job: None)
+register("integrity_verify", _integrity_verify, _asset_failed)  # 04번
+for _step in ("media_probe", "make_proxy", "make_thumbnail"):  # 05번
+    register(_step, _pipeline_step(_step), _asset_failed)
+
+
+def run_once(c: Container, worker_id: str) -> bool:
+    classes = tuple(c.settings.worker_resource_classes)
+    job = c.queue.claim(list(HANDLERS), worker_id, classes)
+    if job is None:
+        return False
+    handler = HANDLERS[job.job_type]
+    start = time.perf_counter()
+    try:
+        handler.fn(c, job)
+    except Exception as exc:  # noqa: BLE001 - 모든 실패는 재시도 대상, 최대 시도 후 FAILED
+        code = exc.code if isinstance(exc, RetryableError) else "INTERNAL"
+        delay = exc.retry_in_s if isinstance(exc, RetryableError) and exc.retry_in_s else backoff_s(job.attempts)
+        JOB_FAILURES.labels(job.job_type, code).inc()
+        retried = c.queue.fail(job.job_id, code, delay)
+        if isinstance(exc, RetryableError):
+            log.warning("job_retry" if retried else "job_failed", extra={"job_id": job.job_id,
+                                                                         "job_type": job.job_type, "error_code": code})
+        else:
+            log.error("job_retry" if retried else "job_failed", exc_info=exc,
+                      extra={"job_id": job.job_id, "job_type": job.job_type})
+        if not retried and handler.on_exhausted is not None:
+            handler.on_exhausted(c, job, code)
+    else:
+        c.queue.complete(job.job_id)
+        JOBS_DONE.labels(job.job_type).inc()
+    finally:
+        JOB_DURATION.labels(job.job_type).observe(time.perf_counter() - start)
+    return True
 
 
 def sweep(c: Container) -> int:
-    """주기 정리 작업 (만료 업로드 세션). 여러 워커가 돌아도 SKIP LOCKED로 겹치지 않는다."""
+    """주기 정리: 만료 업로드 세션. 여러 워커가 돌아도 SKIP LOCKED로 겹치지 않는다."""
     from app.services.ingest import IngestService
 
     with c.sessionmaker.begin() as db:
@@ -52,27 +130,13 @@ def sweep(c: Container) -> int:
     return n
 
 
-def run_once(c: Container, worker_id: str) -> bool:
-    job = c.queue.claim(list(HANDLERS), worker_id)
-    if job is None:
-        return False
-    start = time.perf_counter()
-    try:
-        HANDLERS[job.job_type](c, job)
-    except RetryableError as exc:
-        JOB_FAILURES.labels(job.job_type, exc.code).inc()
-        c.queue.fail(job.job_id, exc.code, exc.retry_in_s)
-        log.warning("job_retry", extra={"job_id": job.job_id, "job_type": job.job_type, "error_code": exc.code})
-    except Exception as exc:  # noqa: BLE001 - 처리되지 않은 예외는 재시도하지 않는 실패로 기록
-        JOB_FAILURES.labels(job.job_type, "INTERNAL").inc()
-        c.queue.fail(job.job_id, "INTERNAL", None)
-        log.error("job_failed", exc_info=exc, extra={"job_id": job.job_id, "job_type": job.job_type})
-    else:
-        c.queue.complete(job.job_id)
-        JOBS_DONE.labels(job.job_type).inc()
-    finally:
-        JOB_DURATION.labels(job.job_type).observe(time.perf_counter() - start)
-    return True
+def maintenance(c: Container) -> None:
+    from app.services.integrity import anchor_previous_days
+
+    reaped = c.queue.reap_expired_leases()
+    if reaped:
+        log.warning("job_leases_reaped", extra={"count": reaped})
+    anchor_previous_days(c)
 
 
 def main() -> None:
@@ -88,19 +152,27 @@ def main() -> None:
 
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
-    log.info("worker_started", extra={"worker_id": worker_id, "job_types": sorted(HANDLERS)})
-    last_depth = last_sweep = 0.0
+    log.info("worker_started", extra={"worker_id": worker_id, "job_types": sorted(HANDLERS),
+                                      "resource_classes": settings.worker_resource_classes})
+    last_depth = last_sweep = last_maint = 0.0
     while not stopping["flag"]:
-        if time.monotonic() - last_sweep > 300:
-            try:
-                sweep(c)
-            except Exception as exc:  # noqa: BLE001 - 정리 실패가 작업 처리를 막지 않게
-                log.error("sweep_failed", exc_info=exc)
-            last_sweep = time.monotonic()
-        if time.monotonic() - last_depth > 10:
+        now = time.monotonic()
+        for interval, fn, name in ((300, lambda: sweep(c), "sweep"),
+                                   (settings.job_lease_reap_interval_s, lambda: maintenance(c), "maintenance")):
+            last = last_sweep if name == "sweep" else last_maint
+            if now - last > interval:
+                try:
+                    fn()
+                except Exception as exc:  # noqa: BLE001 - 정리 실패가 작업 처리를 막지 않게
+                    log.error(f"{name}_failed", exc_info=exc)
+                if name == "sweep":
+                    last_sweep = now
+                else:
+                    last_maint = now
+        if now - last_depth > 10:
             for jt, n in c.queue.depth_by_type().items():
                 JOBS_QUEUED.labels(jt).set(n)
-            last_depth = time.monotonic()
+            last_depth = now
         if not run_once(c, worker_id):
             time.sleep(settings.worker_poll_interval_s)
     log.info("worker_stopped")

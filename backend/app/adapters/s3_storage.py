@@ -82,6 +82,11 @@ class S3Storage:
             body.close()
         self.client.delete_object(Bucket=src_bucket, Key=src_key)  # type: ignore[attr-defined]
 
+    def upload_file(self, bucket: str, key: str, path: str, content_type: str | None = None) -> None:
+        """로컬 파일을 PUT 또는 멀티파트로 올린다 (파생 자산)."""
+        extra = {"ContentType": content_type} if content_type else None
+        self.client.upload_file(path, bucket, key, ExtraArgs=extra)  # type: ignore[attr-defined]
+
     def head_object(self, bucket: str, key: str) -> ObjectInfo | None:
         try:
             r = self.client.head_object(Bucket=bucket, Key=key)  # type: ignore[attr-defined]

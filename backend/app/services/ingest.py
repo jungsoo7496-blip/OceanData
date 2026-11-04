@@ -441,7 +441,7 @@ class IngestService:
         up.status = "RECEIVED"
         self.db.flush()
         self.c.queue.enqueue("integrity_verify", {"asset_id": asset.asset_id, "upload_id": up.upload_id},
-                             priority=10, organization_id=asset.organization_id,
+                             organization_id=asset.organization_id,
                              dedupe_key=f"integrity_verify:{asset.asset_id}:{up.upload_id}")
         return self.upload_status(up)
 
@@ -542,14 +542,15 @@ class IntegrityVerifier:
             asset.ingest_status = states.transition("ingest_status", "VALIDATING", "REGISTERED", {"SERVICE"})
             asset.quality_status, asset.quality_reasons = evaluate(IngestService._fields(asset))
             asset.updated_at = self.c.clock.now()
-            self._integrity_log(db, asset)
+            append_integrity(db, asset, self.c.clock.now())
             if not revalidate:  # 재검증은 위에서 격리 사용량을 사용량으로 옮겼다
                 quota.settle(asset.organization_id, reserved, to="used", actual=size)
             if asset.data_type != "VIDEO":  # 프록시가 필요 없는 유형 (05번이 영상 프록시를 만든다)
                 asset.ingest_status = states.transition("ingest_status", "REGISTERED", "READY_PRIVATE", {"SERVICE"})
-            else:
-                self.c.queue.enqueue("make_proxy", {"asset_id": asset.asset_id}, organization_id=asset.organization_id,
-                                     dedupe_key=f"make_proxy:{asset.asset_id}")
+            else:  # 영상: 메타 추출 → 프록시 → 썸네일 (05번)
+                from app.services.pipeline import schedule_after_register
+
+                schedule_after_register(self.c, asset)
             return asset.ingest_status
 
     def _quarantine(self, db: Session, asset: Asset, reason: str, bucket: str, key: str) -> None:
@@ -571,15 +572,23 @@ class IntegrityVerifier:
                                           subject="업로드 자산 격리", body=f"자산 {asset.asset_id}: {reason}",
                                           data={"asset_id": asset.asset_id, "reason": reason, "uploader": uploader}))
 
-    def _integrity_log(self, db: Session, asset: Asset) -> None:
-        db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _INTEGRITY_LOCK})
-        prev = db.execute(text("SELECT entry_hash FROM integrity_log ORDER BY seq DESC LIMIT 1")).scalar() or GENESIS
-        registered_at = self.c.clock.now().replace(microsecond=0)
-        payload = f"{prev}|{asset.asset_id}|{asset.checksum_sha256}|{asset.byte_size}|{iso(registered_at)}"
-        db.add(IntegrityLogEntry(asset_id=asset.asset_id, checksum_sha256=asset.checksum_sha256,
-                                 byte_size=asset.byte_size, registered_at=registered_at, prev_hash=prev,
-                                 entry_hash=hashlib.sha256(payload.encode()).hexdigest()))
-        db.flush()
+
+def integrity_payload(prev: str, asset_id: str, sha: str, size: int, registered_at: datetime) -> str:
+    return hashlib.sha256(f"{prev}|{asset_id}|{sha}|{size}|{iso(registered_at)}".encode()).hexdigest()
+
+
+def append_integrity(db: Session, asset: Asset, now: datetime) -> IntegrityLogEntry:
+    """무결성 로그 해시 체인에 추가 (04번 4.6, 05번 5.1: 등록·파생 자산을 같은 체인으로)."""
+    db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _INTEGRITY_LOCK})
+    prev = db.execute(text("SELECT entry_hash FROM integrity_log ORDER BY seq DESC LIMIT 1")).scalar() or GENESIS
+    registered_at = now.replace(microsecond=0)
+    entry = IntegrityLogEntry(asset_id=asset.asset_id, checksum_sha256=asset.checksum_sha256,
+                              byte_size=asset.byte_size, registered_at=registered_at, prev_hash=prev,
+                              entry_hash=integrity_payload(prev, asset.asset_id, asset.checksum_sha256,
+                                                           asset.byte_size, registered_at))
+    db.add(entry)
+    db.flush()
+    return entry
 
 
 def receipt(db: Session, asset: Asset) -> dict[str, Any] | None:
