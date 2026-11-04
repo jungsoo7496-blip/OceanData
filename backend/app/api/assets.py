@@ -57,14 +57,15 @@ def asset_view(a: Asset, p: Principal) -> dict[str, Any]:
 @router.get("/v1/assets")
 def list_assets(request: Request, session_id: str | None = None, source_system_id: str | None = None,
                 data_type: str | None = None, ingest_status: str | None = None, quality_status: str | None = None,
-                sharing_scope: str | None = None, variant: str | None = None, captured_from: datetime | None = None,
+                sharing_scope: str | None = None, variant: str | None = None, share_status: str | None = None,
+                captured_from: datetime | None = None,
                 captured_to: datetime | None = None, db: Session = Depends(get_db),
                 p: Principal = Depends(require("asset:read")), page: dict = Depends(page_params)) -> dict:
     stmt = scoped_select(Asset, p)
     for col, val in ((Asset.session_id, session_id), (Asset.source_system_id, source_system_id),
                      (Asset.data_type, data_type), (Asset.ingest_status, ingest_status),
                      (Asset.quality_status, quality_status), (Asset.sharing_scope, sharing_scope),
-                     (Asset.variant, variant)):
+                     (Asset.variant, variant), (Asset.share_status, share_status)):
         if val is not None:
             stmt = stmt.where(col == val)
     if captured_from is not None:
@@ -106,10 +107,15 @@ def patch_asset(asset_id: str, body: AssetPatch, request: Request, db: Session =
         if not body.reason:
             raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/reason", "code": "required",
                                                             "message": "data_role을 바꾸려면 사유가 필요합니다"}])
-        if body.data_role == "CORE" and a.sharing_scope not in ("PRIVATE", "PROGRAM_REVIEW"):
-            raise ProblemError("RULE_VIOLATION", detail="CORE는 L1을 넘을 수 없습니다. 먼저 공유 등급을 내리세요",
-                               unmet_conditions=[{"condition": "sharing_scope ∈ {PRIVATE, PROGRAM_REVIEW}",
-                                                  "actual": a.sharing_scope}])
+        if body.data_role == "CORE":  # 13번 요구사항 2.2: L1 이하로 내리고 하향 처리 (자신과 파생본)
+            from app.services import sharing
+
+            for x in [a, *sharing.descendants(db, a.asset_id)]:
+                if x.sharing_scope not in ("PRIVATE", "PROGRAM_REVIEW"):
+                    sharing.downgrade(c, db, x, "PROGRAM_REVIEW", "REVOKE_NOW", p.principal_id,
+                                      f"data_role CORE 변경: {body.reason}")
+                if x.share_status != "NONE" and x is a:
+                    x.share_status = states.transition("share_status", x.share_status, "NONE", p.roles)
         c.audit.record("DATA_ROLE_CHANGED", principal=p, organization_id=a.organization_id, target_type="Asset",
                        target_id=a.asset_id, reason=body.reason, source_ip=client_ip(request),
                        details={"from": a.data_role, "to": body.data_role})

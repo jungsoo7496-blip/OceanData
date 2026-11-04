@@ -1188,6 +1188,9 @@ paths:
         - name: quality_status
           in: query
           schema: {$ref: './schemas/common.schema.json#/$defs/quality_status'}
+        - name: share_status
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/share_status'}
         - name: sharing_scope
           in: query
           schema: {$ref: './schemas/common.schema.json#/$defs/sharing_scope'}
@@ -1327,6 +1330,24 @@ paths:
   /v1/assets/{asset_id}/share-requests:
     parameters:
       - {$ref: '#/components/parameters/AssetId'}
+    get:
+      tags: [sharing]
+      operationId: listShareRequests
+      summary: 이 자산의 공유 등급 변경 이력
+      x-freeze: G4
+      x-status: draft
+      responses:
+        '200':
+          description: 신청 목록 (오래된 것부터)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/ShareRequest'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
     post:
       tags: [sharing]
       operationId: createShareRequest
@@ -1357,6 +1378,166 @@ paths:
               examples:
                 rule_violation:
                   externalValue: ./examples/problem.rule-violation.json
+
+  /v1/share-candidates:
+    post:
+      tags: [sharing]
+      operationId: markShareCandidates
+      summary: 자산·실증회차를 공유 후보로 지정 (ORG_ADMIN·ORG_MEMBER). BYPRODUCT 원본만 CANDIDATE, 나머지는 제외 목록
+      x-freeze: G4
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                asset_ids: {type: array, maxItems: 1000, uniqueItems: true, items: {$ref: './schemas/common.schema.json#/$defs/asset_id'}}
+                session_id: {$ref: './schemas/common.schema.json#/$defs/session_id'}
+      responses:
+        '200':
+          description: 지정 결과 (CORE 등은 제외 목록과 사유)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [candidates, excluded]
+                properties:
+                  candidates: {type: array, items: {$ref: './schemas/common.schema.json#/$defs/asset_id'}}
+                  excluded:
+                    type: array
+                    items:
+                      type: object
+                      required: [asset_id, reason]
+                      properties:
+                        asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+                        reason: {type: string, description: 'CORE / NOT_ORIGINAL / STATUS_<현재 상태>'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/assets/{asset_id}/share-review:
+    parameters:
+      - {$ref: '#/components/parameters/AssetId'}
+    get:
+      tags: [sharing]
+      operationId: getShareReview
+      summary: 원본의 공유 심사 상태와 이력
+      x-freeze: G4
+      x-status: draft
+      responses:
+        '200':
+          description: 심사 상태
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ShareReview'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    post:
+      tags: [sharing]
+      operationId: actOnShareReview
+      summary: 심사 단계 처리 (domain.md 5장 share_status 표의 주체만). 법률 검토 통과는 legal_basis_ref, 반려는 사유 필수
+      x-freeze: G4
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [action]
+              properties:
+                action: {enum: [START_LEGAL_REVIEW, PASS_LEGAL_REVIEW, APPROVE, REQUEST_REPROCESS, REJECT, RESUBMIT, WITHDRAW]}
+                reason: {type: string, maxLength: 1000}
+                legal_basis_ref: {type: string, maxLength: 200}
+                existing_grant_handling: {enum: [REVOKE_NOW, KEEP_UNTIL_EXPIRY], description: WITHDRAW 때 파생본 권한 처리}
+      responses:
+        '200':
+          description: 반영된 심사 상태
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ShareReview'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+
+  /v1/share-requests/{share_request_id}/decisions:
+    parameters:
+      - name: share_request_id
+        in: path
+        required: true
+        schema: {$ref: './schemas/common.schema.json#/$defs/share_request_id'}
+    post:
+      tags: [sharing]
+      operationId: decideShareRequest
+      summary: L3·L4 신청 운영자 결정 (결정 시점에 조건을 다시 평가)
+      x-freeze: G4
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AccessDecision'}
+      responses:
+        '200':
+          description: 결정된 신청
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ShareRequest'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+
+  /v1/assets/{asset_id}/classification:
+    parameters:
+      - {$ref: '#/components/parameters/AssetId'}
+    patch:
+      tags: [sharing]
+      operationId: classifyAsset
+      summary: 운영자의 민감도·개인정보 비해당 지정 (근거 점검 기록 참조 필수, 감사)
+      x-freeze: G4
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [basis_ref, reason]
+              minProperties: 3
+              properties:
+                sensitivity_class: {$ref: './schemas/common.schema.json#/$defs/sensitivity_class'}
+                privacy_status: {const: NOT_APPLICABLE}
+                basis_ref: {type: string, minLength: 2, maxLength: 200, description: 점검 기록 참조}
+                reason: {type: string, minLength: 2, maxLength: 1000}
+      responses:
+        '200':
+          description: 갱신된 분류
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [asset_id, sensitivity_class, privacy_status]
+                properties:
+                  asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+                  sensitivity_class: {$ref: './schemas/common.schema.json#/$defs/sensitivity_class'}
+                  privacy_status: {$ref: './schemas/common.schema.json#/$defs/privacy_status'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
 
   /v1/observations:
     get:
@@ -2213,6 +2394,31 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
 
   /v1/datasets:
+    post:
+      tags: [datasets]
+      operationId: createDataset
+      summary: 데이터셋 만들기 (PLATFORM_OPERATOR). 버전은 따로 추가
+      x-freeze: G4
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [title]
+              properties:
+                title: {type: string, minLength: 1, maxLength: 200}
+      responses:
+        '201':
+          description: 데이터셋
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Dataset'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
     get:
       tags: [datasets]
       operationId: listDatasets
@@ -2257,7 +2463,8 @@ paths:
     post:
       tags: [datasets]
       operationId: createDatasetVersion
-      summary: 승인 자산으로 데이터셋 버전 생성 (PLATFORM_OPERATOR, 수정 불가)
+      summary: 승인 자산으로 데이터셋 버전 생성 (PLATFORM_OPERATOR, 수정 불가). DATASET 존 사본·매니페스트(sha256)
+      description: 항목 1000개까지 요청 안에서 만든다. 더 큰 묶음은 작업 큐로 옮길 예정 (13번 design.md).
       x-freeze: G4
       parameters:
         - {$ref: '#/components/parameters/IdempotencyKey'}
@@ -2267,18 +2474,169 @@ paths:
           application/json:
             schema: {$ref: '#/components/schemas/DatasetVersionCreate'}
       responses:
-        '202':
-          description: 생성 작업 접수. 완료되면 매니페스트를 조회할 수 있다
+        '201':
+          description: 만든 버전과 매니페스트
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/JobAccepted'}
+              schema:
+                type: object
+                required: [dataset_version_id, version, scope, manifest_sha256, manifest]
+                properties:
+                  dataset_version_id: {$ref: './schemas/common.schema.json#/$defs/dataset_version_id'}
+                  version: {type: string}
+                  scope: {$ref: './schemas/common.schema.json#/$defs/sharing_scope'}
+                  manifest_sha256: {$ref: './schemas/common.schema.json#/$defs/sha256'}
+                  manifest: {$ref: './schemas/dataset-version-manifest.schema.json'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '422': {$ref: '#/components/responses/Unprocessable'}
 
+  /v1/datasets/{dataset_id}/publish:
+    parameters:
+      - {$ref: '#/components/parameters/DatasetId'}
+    post:
+      tags: [datasets]
+      operationId: publishDataset
+      summary: 카탈로그 게시 (PLATFORM_OPERATOR). 최신 버전 데이터 카드 필수 항목이 비면 거부
+      x-freeze: G5
+      x-status: draft
+      responses:
+        '200':
+          description: 게시된 데이터셋
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Dataset'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+
+  /v1/grants:
+    get:
+      tags: [datasets]
+      operationId: listGrants
+      summary: 이용 권한 (이용기관은 자기 것, 제공기관은 자기 자산이 든 것, 운영자는 전체)
+      x-freeze: G5
+      x-status: draft
+      responses:
+        '200':
+          description: 권한 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/Grant'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /v1/grants/{grant_id}/revoke:
+    parameters:
+      - name: grant_id
+        in: path
+        required: true
+        schema: {$ref: './schemas/common.schema.json#/$defs/grant_id'}
+    post:
+      tags: [datasets]
+      operationId: revokeGrant
+      summary: 이용 권한 철회 (제공기관 ORG_ADMIN·운영자). 즉시 새 URL 발급 중지, 이미 받은 파일은 회수되지 않음을 통지
+      x-freeze: G5
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties:
+                reason: {type: string, minLength: 2, maxLength: 1000}
+      responses:
+        '200':
+          description: 철회된 권한
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Grant'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/grants/{grant_id}/destruction-confirmation:
+    parameters:
+      - name: grant_id
+        in: path
+        required: true
+        schema: {$ref: './schemas/common.schema.json#/$defs/grant_id'}
+    post:
+      tags: [datasets]
+      operationId: confirmDestruction
+      summary: 철회·만료 뒤 이용기관의 파기 확인 제출
+      x-freeze: G5
+      x-status: draft
+      responses:
+        '200':
+          description: 기록된 권한
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Grant'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/usage-history:
+    get:
+      tags: [datasets]
+      operationId: getUsageHistory
+      summary: 제공기관 이용 이력 — 자기 자산이 든 데이터셋의 신청·결정·다운로드 (이용기관 이름 포함)
+      x-freeze: G5
+      x-status: draft
+      responses:
+        '200':
+          description: 이력
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [kind, at, dataset_version_id]
+                      properties:
+                        kind: {enum: [REQUESTED, DECIDED, GRANTED, DOWNLOAD_ISSUED, REVOKED, EXPIRED]}
+                        at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+                        dataset_version_id: {$ref: './schemas/common.schema.json#/$defs/dataset_version_id'}
+                        access_request_id: {$ref: './schemas/common.schema.json#/$defs/access_request_id'}
+                        consumer_organization: {type: string}
+                        purpose: {$ref: './schemas/common.schema.json#/$defs/purpose'}
+                        detail: {type: string}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
   /v1/access-requests:
+    get:
+      tags: [datasets]
+      operationId: listAccessRequests
+      summary: 이용 신청 (이용기관은 자기 신청, 제공기관은 결정할 신청, 운영자는 전체)
+      x-freeze: G5
+      x-status: draft
+      responses:
+        '200':
+          description: 신청 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/AccessRequest'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
     post:
       tags: [datasets]
       operationId: createAccessRequest
@@ -3559,9 +3917,50 @@ components:
       properties:
         share_request_id: {$ref: './schemas/common.schema.json#/$defs/share_request_id'}
         asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+        from_scope: {$ref: './schemas/common.schema.json#/$defs/sharing_scope'}
         target_scope: {$ref: './schemas/common.schema.json#/$defs/sharing_scope'}
-        state: {enum: [APPLIED, IN_REVIEW]}
+        state: {enum: [APPLIED, IN_REVIEW, DENIED], description: IN_REVIEW=운영자 승인 대기(L3·L4)}
         share_status: {$ref: './schemas/common.schema.json#/$defs/share_status'}
+        reason: {type: string}
+        existing_grant_handling: {enum: [REVOKE_NOW, KEEP_UNTIL_EXPIRY, null]}
+        requested_by: {type: string}
+        requested_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        decided_by: {type: [string, 'null']}
+        decided_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+        decision_reason: {type: [string, 'null']}
+
+    ShareReview:
+      type: object
+      required: [asset_id, share_status, events]
+      properties:
+        asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+        share_status: {$ref: './schemas/common.schema.json#/$defs/share_status'}
+        legal_basis_ref: {type: [string, 'null']}
+        max_scope: {$ref: './schemas/common.schema.json#/$defs/sharing_scope', description: 지금 조건으로 올릴 수 있는 가장 높은 등급(파생본 기준 안내)}
+        derived:
+          type: array
+          items:
+            type: object
+            required: [asset_id, variant, share_status, sharing_scope]
+            properties:
+              asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+              variant: {type: string}
+              share_status: {$ref: './schemas/common.schema.json#/$defs/share_status'}
+              review_result: {type: [string, 'null']}
+              privacy_status: {type: string}
+              sharing_scope: {$ref: './schemas/common.schema.json#/$defs/sharing_scope'}
+        events:
+          type: array
+          items:
+            type: object
+            required: [from_status, to_status, actor, at]
+            properties:
+              from_status: {type: string}
+              to_status: {type: string}
+              actor: {type: string}
+              reason: {type: [string, 'null']}
+              legal_basis_ref: {type: [string, 'null']}
+              at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
 
     ObservationRecord:
       type: object
@@ -3711,6 +4110,8 @@ components:
       properties:
         dataset_id: {$ref: './schemas/common.schema.json#/$defs/dataset_id'}
         title: {type: string}
+        published: {type: boolean}
+        published_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
         versions:
           type: array
           items:
@@ -3728,7 +4129,7 @@ components:
       required: [version, item_asset_ids, data_card]
       properties:
         version: {type: string, pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'}
-        item_asset_ids: {type: array, minItems: 1, uniqueItems: true, items: {$ref: './schemas/common.schema.json#/$defs/asset_id'}}
+        item_asset_ids: {type: array, minItems: 1, maxItems: 1000, uniqueItems: true, items: {$ref: './schemas/common.schema.json#/$defs/asset_id'}}
         data_card: {$ref: './schemas/dataset-version-manifest.schema.json#/properties/data_card'}
 
     JobAccepted:
@@ -3749,7 +4150,25 @@ components:
         pending_provider_approvals: {type: integer, minimum: 0}
         grant_id: {$ref: './schemas/common.schema.json#/$defs/grant_id'}
         grant_expires_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        grant_status: {$ref: './schemas/common.schema.json#/$defs/grant_status'}
+        deadline_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime', description: 이때까지 결정이 없으면 거부}
         created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+
+    Grant:
+      type: object
+      required: [grant_id, dataset_version_id, status, starts_at, expires_at]
+      properties:
+        grant_id: {$ref: './schemas/common.schema.json#/$defs/grant_id'}
+        access_request_id: {$ref: './schemas/common.schema.json#/$defs/access_request_id'}
+        dataset_version_id: {$ref: './schemas/common.schema.json#/$defs/dataset_version_id'}
+        organization_id: {$ref: './schemas/common.schema.json#/$defs/organization_id'}
+        status: {$ref: './schemas/common.schema.json#/$defs/grant_status'}
+        starts_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        expires_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        revoked_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+        revoke_reason: {type: [string, 'null']}
+        destruction_confirmed_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+        notice: {type: string, description: 철회 시 '이미 받은 파일은 회수되지 않음' 안내}
 
     AccessDecision:
       type: object
@@ -3786,3 +4205,12 @@ components:
               byte_size: {type: integer, minimum: 0}
               checksum_sha256: {$ref: './schemas/common.schema.json#/$defs/sha256'}
         manifest: {$ref: './schemas/dataset-version-manifest.schema.json'}
+        recipient:
+          type: object
+          description: 받는 쪽 식별 정보 (파일 묶음의 RECIPIENT_MANIFEST.json에도 들어간다)
+          properties:
+            distribution_id: {$ref: './schemas/common.schema.json#/$defs/distribution_id'}
+            grant_id: {$ref: './schemas/common.schema.json#/$defs/grant_id'}
+            organization_id: {$ref: './schemas/common.schema.json#/$defs/organization_id'}
+            requested_by: {type: string}
+            issued_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}

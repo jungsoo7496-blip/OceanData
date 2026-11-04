@@ -6,6 +6,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, ApiError, post, type Asset, type Device, type Me, type Page, type Session } from '../lib/api'
 import { bytes, kst, QUARANTINE_LABEL, SCOPE_LABEL, STATUS_LABEL } from '../lib/format'
 import { explain } from '../lib/problems'
+import { ShareCard } from './Sharing'
 
 // 촬영시각 미상은 업로드 시각과 구분해 표시한다 (요구사항 6.3)
 export function CaptureTime({ a }: { a: Asset }) {
@@ -122,6 +123,7 @@ export function AssetDetail({ me }: { me: Me }) {
           <Typography.Paragraph type="secondary">구간 클립 내보내기는 준비 중입니다 (09번 요구사항 7.2).</Typography.Paragraph>
         </Card>
       )}
+      {(isOrg || me.roles.includes('PLATFORM_OPERATOR')) && <ShareCard asset={a} me={me} />}
       <Card title="계보">
         <Table size="small" rowKey="asset_id" pagination={false}
           dataSource={[...(lineage.data?.ancestors ?? []).map((x) => ({ ...x, dir: '원 자산' })), ...(lineage.data?.descendants ?? []).map((x) => ({ ...x, dir: '파생' }))]}

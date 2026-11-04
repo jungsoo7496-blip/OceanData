@@ -11,6 +11,7 @@ import { Dashboard } from './pages/Dashboard'
 import { Devices } from './pages/Devices'
 import { Monitoring } from './pages/Monitoring'
 import { ReportDetail, Reports, SessionRecords } from './pages/Reports'
+import { Catalog, ProviderAccess, SharingConsole } from './pages/Sharing'
 import { OperatorConsole } from './pages/Operator'
 import { ProgramBoard } from './pages/Program'
 import { Sessions } from './pages/Sessions'
@@ -22,6 +23,7 @@ export function homeFor(roles: string[]): string {
   if (roles.some((r) => ORG.includes(r))) return '/workspace'
   if (roles.includes('PLATFORM_OPERATOR')) return '/operator'
   if (roles.includes('PROGRAM_VIEWER')) return '/program'
+  if (roles.includes('CONSUMER')) return '/catalog'
   return '/forbidden'
 }
 
@@ -34,8 +36,10 @@ function menuFor(roles: string[]) {
     add('/assets', '자산')
     add('/sessions', '실증회차')
     add('/reports', '보고서')
+    add('/access', '이용 신청')
     add('/devices', '장비')
   }
+  if (roles.includes('CONSUMER')) add('/catalog', '데이터셋 카탈로그')
   if (roles.includes('PROGRAM_VIEWER')) {
     add('/program', '관리기관 보드')
     add('/reports', '제출된 보고서')
@@ -43,6 +47,7 @@ function menuFor(roles: string[]) {
   if (roles.includes('PLATFORM_OPERATOR')) {
     add('/operator', '운영 콘솔')
     add('/monitoring', '수집 모니터링')
+    add('/sharing', '공유·데이터셋')
   }
   return items
 }
@@ -96,6 +101,9 @@ function Shell({ me }: { me: Me }) {
           <Route path="/operator" element={<OperatorConsole />} />
           <Route path="/monitoring" element={<Monitoring />} />
           <Route path="/reports" element={<Reports me={me} />} />
+          <Route path="/access" element={<ProviderAccess me={me} />} />
+          <Route path="/sharing" element={<SharingConsole />} />
+          <Route path="/catalog" element={<Catalog />} />
           <Route path="/reports/:reportId" element={<ReportDetail me={me} />} />
           <Route path="/sessions/:sessionId/records" element={<SessionRecords me={me} />} />
           <Route path="*" element={<Result status="403" title="접근할 수 없는 화면입니다" />} />

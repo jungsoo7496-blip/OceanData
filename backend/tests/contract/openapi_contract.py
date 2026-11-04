@@ -42,8 +42,8 @@ def response_schema_ref(method: str, path_template: str, status: int, content_ty
     if "$ref" in resp:
         pointer = resp["$ref"]
         resp = spec["components"]["responses"][pointer.rsplit("/", 1)[1]]
-    ctype = "application/problem+json" if content_type.startswith("application/problem+json") else \
-        "application/json"
+    ctype = next((t for t in ("application/problem+json", "application/ld+json") if content_type.startswith(t)),
+                 "application/json")
     assert ctype in resp.get("content", {}), f"{method} {path_template} {status}: {ctype} 없음"
     return f"{BASE}openapi.yaml{pointer}/content/{_escape(ctype)}/schema"
 

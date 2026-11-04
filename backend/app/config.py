@@ -87,6 +87,9 @@ class Settings(BaseSettings):
     clock_offset_warn_ms: int = 2000
     sensor_file_max_bytes: int = 512 * 1024 * 1024
 
+    # 공유·배포 (13번)
+    access_decision_days: int = 14  # 이용 신청 응답 기한, 지나면 거부 (요구사항 8.3)
+
     # 수집 모니터링·알림 (11번). 메일 서버가 없으면 알림은 로그로만 남는다
     smtp_host: str | None = None
     smtp_port: int = 25

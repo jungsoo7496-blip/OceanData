@@ -844,3 +844,143 @@ class ReportVersion(Base):
     submitted_at: Mapped[datetime | None] = mapped_column(TS)
     created_by: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(TS)
+
+
+# ---- 13 공유 등급·데이터셋·배포
+
+
+class ShareRequest(Base):
+    """공유 등급 변경 신청 (13번 요구사항 3, 10). 상향은 Sharing_Rules, 하향은 언제든."""
+
+    __tablename__ = "share_requests"
+    share_request_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ID, index=True)
+    asset_id: Mapped[str] = mapped_column(ForeignKey("assets.asset_id"), index=True)
+    from_scope: Mapped[str] = mapped_column(String(30))
+    target_scope: Mapped[str] = mapped_column(String(30))
+    state: Mapped[str] = mapped_column(String(12))  # APPLIED / IN_REVIEW / DENIED
+    reason: Mapped[str] = mapped_column(Text)
+    existing_grant_handling: Mapped[str | None] = mapped_column(String(20))
+    requested_by: Mapped[str] = mapped_column(String(64))
+    requested_at: Mapped[datetime] = mapped_column(TS)
+    decided_by: Mapped[str | None] = mapped_column(String(64))
+    decided_at: Mapped[datetime | None] = mapped_column(TS)
+    decision_reason: Mapped[str | None] = mapped_column(Text)
+
+
+class ShareReviewEvent(Base):
+    """공유 심사 이력 (원본 단위 share_status 전이, 13번 요구사항 4)."""
+
+    __tablename__ = "share_review_events"
+    event_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    asset_id: Mapped[str] = mapped_column(ForeignKey("assets.asset_id"), index=True)
+    organization_id: Mapped[str] = mapped_column(ID)
+    from_status: Mapped[str] = mapped_column(String(20))
+    to_status: Mapped[str] = mapped_column(String(20))
+    actor: Mapped[str] = mapped_column(String(64))
+    reason: Mapped[str | None] = mapped_column(Text)
+    legal_basis_ref: Mapped[str | None] = mapped_column(String(200))
+    at: Mapped[datetime] = mapped_column(TS)
+
+
+class Dataset(Base):
+    __tablename__ = "datasets"
+    dataset_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    title: Mapped[str] = mapped_column(String(200))
+    published: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    published_at: Mapped[datetime | None] = mapped_column(TS)
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
+class DatasetVersion(Base):
+    """데이터셋 버전 (13번 요구사항 5). 만든 뒤 바꾸지 않는다 — 변경은 새 버전."""
+
+    __tablename__ = "dataset_versions"
+    __table_args__ = (UniqueConstraint("dataset_id", "version", name="dataset_version"),)
+    dataset_version_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(ForeignKey("datasets.dataset_id"), index=True)
+    version: Mapped[str] = mapped_column(String(20))
+    provider_organization_ids: Mapped[list[str]] = mapped_column(ARRAY(String(30)))
+    item_count: Mapped[int] = mapped_column(Integer)
+    total_bytes: Mapped[int] = mapped_column(BigInteger)
+    data_card: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    manifest: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    manifest_key: Mapped[str] = mapped_column(String(400))
+    manifest_sha256: Mapped[str] = mapped_column(String(64))
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
+class DatasetVersionItem(Base):
+    __tablename__ = "dataset_version_items"
+    dataset_version_id: Mapped[str] = mapped_column(ForeignKey("dataset_versions.dataset_version_id"),
+                                                    primary_key=True)
+    asset_id: Mapped[str] = mapped_column(ForeignKey("assets.asset_id"), primary_key=True, index=True)
+    organization_id: Mapped[str] = mapped_column(ID)
+    path: Mapped[str] = mapped_column(String(512))
+    object_key: Mapped[str] = mapped_column(String(400))
+    byte_size: Mapped[int] = mapped_column(BigInteger)
+    checksum_sha256: Mapped[str] = mapped_column(String(64))
+
+
+class AccessRequest(Base):
+    """이용 신청 (13번 요구사항 8). status는 grant_status 표 (domain.md 5장)."""
+
+    __tablename__ = "access_requests"
+    access_request_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    dataset_version_id: Mapped[str] = mapped_column(ForeignKey("dataset_versions.dataset_version_id"), index=True)
+    organization_id: Mapped[str] = mapped_column(ID, index=True)  # 신청 기관 (CONSUMER)
+    requested_by: Mapped[str] = mapped_column(String(64))
+    purpose: Mapped[str] = mapped_column(String(40))
+    purpose_detail: Mapped[str] = mapped_column(Text)
+    period_start: Mapped[datetime] = mapped_column(TS)
+    period_end: Mapped[datetime] = mapped_column(TS)
+    security_measures: Mapped[str] = mapped_column(Text)
+    agreement_version: Mapped[str | None] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(20))
+    deadline_at: Mapped[datetime] = mapped_column(TS)
+    created_at: Mapped[datetime] = mapped_column(TS)
+    updated_at: Mapped[datetime] = mapped_column(TS)
+
+
+class AccessDecision(Base):
+    """기관별 결정 (제공기관 ORG_ADMIN, 운영자). 기관마다 한 번."""
+
+    __tablename__ = "access_decisions"
+    access_request_id: Mapped[str] = mapped_column(ForeignKey("access_requests.access_request_id"), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    role: Mapped[str] = mapped_column(String(20))  # PROVIDER / OPERATOR
+    decision: Mapped[str] = mapped_column(String(10))
+    reason: Mapped[str] = mapped_column(Text)
+    decided_by: Mapped[str] = mapped_column(String(64))
+    decided_at: Mapped[datetime] = mapped_column(TS)
+
+
+class Grant(Base):
+    """기한부 이용 권한 (13번 요구사항 8.4, 10). 데이터셋 버전 하나에만."""
+
+    __tablename__ = "grants"
+    grant_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    access_request_id: Mapped[str] = mapped_column(ForeignKey("access_requests.access_request_id"), unique=True)
+    dataset_version_id: Mapped[str] = mapped_column(ForeignKey("dataset_versions.dataset_version_id"), index=True)
+    organization_id: Mapped[str] = mapped_column(ID, index=True)  # 이용 기관
+    status: Mapped[str] = mapped_column(String(20))  # GRANTED / EXPIRED / REVOKED
+    starts_at: Mapped[datetime] = mapped_column(TS)
+    expires_at: Mapped[datetime] = mapped_column(TS)
+    revoked_at: Mapped[datetime | None] = mapped_column(TS)
+    revoked_by: Mapped[str | None] = mapped_column(String(64))
+    revoke_reason: Mapped[str | None] = mapped_column(Text)
+    destruction_confirmed_at: Mapped[datetime | None] = mapped_column(TS)
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
+class Distribution(Base):
+    __tablename__ = "distributions"
+    distribution_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    grant_id: Mapped[str] = mapped_column(ForeignKey("grants.grant_id"), index=True)
+    organization_id: Mapped[str] = mapped_column(ID)
+    requested_by: Mapped[str] = mapped_column(String(64))
+    file_count: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[datetime] = mapped_column(TS)
+    created_at: Mapped[datetime] = mapped_column(TS)

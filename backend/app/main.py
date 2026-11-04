@@ -11,10 +11,12 @@ from app.api import (
     auth,
     catalog,
     context,
+    datasets,
     lifecycle,
     monitoring,
     observations,
     reports,
+    sharing,
     system,
     uploads,
 )
@@ -46,6 +48,8 @@ def create_app(c: Container | None = None) -> FastAPI:
     app.include_router(lifecycle.router)
     app.include_router(monitoring.router)
     app.include_router(reports.router)
+    app.include_router(sharing.router)
+    app.include_router(datasets.router)
     return app
 
 

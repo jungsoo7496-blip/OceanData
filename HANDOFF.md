@@ -1,7 +1,7 @@
 # 인수인계 (클라우드 → 로컬)
 
 이 파일은 클라우드 세션에서 만든 작업을 로컬에서 이어가기 위한 안내다. 작업이 진행될 때마다 갱신한다.
-최종 갱신: 2026-11-04 (10번 증빙·보고서까지)
+최종 갱신: 2026-11-04 (13번 공유·데이터셋까지)
 
 ## 1. 지금 상태 한눈에
 | 스펙 | 상태 | 남은 것 (자세히는 각 tasks.md) |
@@ -18,9 +18,10 @@
 | 09 포털 | 핵심 화면 완료 | 온보딩 마법사, 회차 타임라인, 클립 내보내기, 운영 콘솔 편집, 접근성 CI |
 | 11 수집 모니터링 | 핵심 완료 | 감시 규칙 13종·장애 기록·메일/웹훅 알림·정기 점검·하드웨어 모의 신호·T07 완료. Open API 실패 신호원(12번), 운영 메신저, 실제 하드웨어 어댑터 남음 |
 | 10 증빙·보고서 | 핵심 완료 | 회차 기록 버전·증빙 승인·지표 4종·양식·보고서 초안/승인/제출·PDF·XLSX·HWPX·근거 손상·역추적·T11 완료. 실제 관리기관 양식(T11-f), 정답 데이터로 검증 필요 해제(14번) 남음 |
-| 12~17 | 시작 전 | 다음 추천: 13(공유·데이터셋) → 12(Open API) → 14(비식별·태깅) |
+| 13 공유·데이터셋 | 핵심 완료 | 공유 규칙(속성 기반 T08)·우회 가드·후보·심사·등급 변경·데이터셋 버전·카탈로그·이용 신청·Grant·배포·철회·이용 이력·DCAT·T15 완료. 비식별 작업 처리(14번), 약정 API(03번), 썸네일 샘플 남음 |
+| 12, 14~17 | 시작 전 | 다음 추천: 14(비식별·태깅) → 12(Open API) → 17(수용·릴리스) |
 
-**시험:** 백엔드 149건(단위·통합·계약·수용 T01·T07·T11) + 에이전트(Go) 8개 패키지 통과 (MQTT 시험은 MQTT_TEST_BROKER 필요) (`cd backend && pytest`).
+**시험:** 백엔드 165건(단위·속성 기반·통합·계약·수용 T01·T07·T08·T11·T15) + 에이전트(Go) 8개 패키지 통과 (MQTT 시험은 MQTT_TEST_BROKER 필요) (`cd backend && pytest`).
 수집 시험은 moto S3 서버와 실제 SeaweedFS(`TEST_S3_ENDPOINT`) 양쪽에서 통과.
 **개발 환경:** `make up` 7개 서비스 healthy. 실제 Keycloak 로그인 → 업로드 생성 → localhost:8333 사전 서명 URL로 파트 전송 → 워커 무결성 검증 → READY_PRIVATE → 영수증까지 확인.
 
@@ -47,7 +48,7 @@ make test-acceptance          # T01 수용시험
 로컬 저장소에서 `claude`를 실행하고 이렇게 시작하면 된다.
 
 ```
-HANDOFF.md, AGENTS.md, .kiro/steering/*.md를 읽고 13-sharing-governance를 이어서 진행해줘.
+HANDOFF.md, AGENTS.md, .kiro/steering/*.md를 읽고 14-deidentification-tagging을 이어서 진행해줘.
 requirements.md를 기준으로 design.md와 tasks.md를 먼저 쓰고, 계약(contracts/)부터 고친 다음 구현해.
 ```
 
@@ -99,10 +100,12 @@ tools/         validate_contracts.py, check_traceability.py, check_licenses.py, 
 - ADR-0015 관측값 매핑 프로필 형식
 - ADR-0016 웹 포털 의존성 (Uppy ARIA 알려진 문제)
 - ADR-0017 수집 경보 상태·장애 자동 해결·ACK 시 재알림 중지·알림 수신 주소(`users.contact_email`)
+- ADR-0019 공유 조건은 순수 함수 하나 + ORM 상향 가드, 데이터셋 항목 표·버전 등급은 현재 항목 등급으로
 - ADR-0018 보고서 내보내기: PDF(WeasyPrint)·XLSX(openpyxl)·HWPX(양식 XML 치환), Pillow·Pyphen 예외 승인 대기
 
 ## 7. 알아 둘 점
 - 감사 로그(audit_log)는 트리거로 수정·삭제가 막혀 있다. 개발 DB를 비우려면 `make down` 후 볼륨 삭제(`docker compose ... down -v`).
 - 통합 시험은 `TEST_DATABASE_URL`의 DB 서버에 임시 DB를 만들고 끝나면 지운다. `make up`의 postgres(5432)를 쓰면 된다.
+- 공유 시험 흐름(개발): 약정 `python -m app.cli agreement <기관ID> --reference 합성 --purposes AI_TRAINING`, 비식별 작업 대신 `python -m app.cli share-processed <원본ID>`(14번 전까지).
 - 알림 메일 확인: `.env`에 `SMTP_HOST=mailpit` 후 `docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile ops up -d mailpit`, 받은 메일은 http://localhost:8025. 워커가 `WATCH_EVAL_INTERVAL_S`마다 감시 규칙을 평가한다. 수동 평가: `python -m app.cli watch`, 모의 하드웨어 신호: `python -m app.cli hardware-signal --status CRITICAL`.
 - `.github/workflows/ci.yml`은 GitHub에 push하면 돈다. 클라우드 세션에서는 아직 GitHub Actions 결과를 확인하지 못했다.

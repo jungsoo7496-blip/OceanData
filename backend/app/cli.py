@@ -28,6 +28,14 @@ def main(argv: list[str] | None = None) -> int:
     vi.add_argument("--sample", type=int, default=None)
     ec = sub.add_parser("enrollment-code", help="운영자 대리 등록 코드 발급 (감사 기록, 화면은 09번)")
     ec.add_argument("device_id")
+    ag = sub.add_parser("agreement", help="기관 약정 기록 (13번 공유 조건 '2단 약정 유효'용, 운영자. API는 03번)")
+    ag.add_argument("organization_id")
+    ag.add_argument("--tier", default="TIER2", choices=["TIER1", "TIER2"])
+    ag.add_argument("--reference", required=True)
+    ag.add_argument("--valid-until", default=None)
+    ag.add_argument("--purposes", default="", help="쉼표로 구분한 purpose 코드")
+    sp2 = sub.add_parser("share-processed", help="공유 심사 PROCESSING → QUALITY_REVIEW (14번 대신, 개발용)")
+    sp2.add_argument("asset_id")
     sub.add_parser("watch", help="감시 규칙을 한 번 평가하고 열린 경보를 출력 (11번, 워커가 주기적으로 한다)")
     hw = sub.add_parser("hardware-signal", help="모의 하드웨어 신호 넣기 (11번 요구사항 7.2, 실제 어댑터 전 시험용)")
     hw.add_argument("--host", default="storage-01")
@@ -84,6 +92,35 @@ def main(argv: list[str] | None = None) -> int:
         for a in rep.missing_objects:
             print(f"객체 없음: {a}", file=sys.stderr)
         return 0 if rep.ok else 1
+    if args.cmd == "agreement":
+        from app.db.models import Agreement
+        from app.domain.ids import new_id
+        from app.domain.normalize import parse_rfc3339
+
+        now = c.clock.now()
+        with c.sessionmaker.begin() as db:
+            row = Agreement(agreement_id=new_id("agreement"), organization_id=args.organization_id, tier=args.tier,
+                            reference=args.reference, valid_from=now,
+                            valid_until=parse_rfc3339(args.valid_until) if args.valid_until else None,
+                            allowed_purposes=[x for x in args.purposes.split(",") if x], status="ACTIVE",
+                            created_by="cli", created_at=now)
+            db.add(row)
+        c.audit.record("AGREEMENT_RECORDED", actor_kind="SYSTEM", actor_id="cli", organization_id=args.organization_id,
+                       target_type="Agreement", target_id=row.agreement_id, details={"tier": args.tier})
+        print(row.agreement_id)
+        return 0
+    if args.cmd == "share-processed":
+        from app.db.models import Asset
+        from app.services import sharing
+
+        with c.sessionmaker.begin() as db:
+            target = db.get(Asset, args.asset_id, with_for_update=True)
+            if target is None:
+                print("자산이 없습니다", file=sys.stderr)
+                return 1
+            sharing.mark_processed(c, db, target)
+        print(f"{args.asset_id}: QUALITY_REVIEW")
+        return 0
     if args.cmd == "watch":
         from app.services import monitoring
 

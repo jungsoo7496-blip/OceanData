@@ -146,6 +146,13 @@ def maintenance(c: Container) -> None:
         {"executed": [x.certificate_id for x in retention.execute_expired(c, db, c.clock.now())]}
         if c.settings.retention_auto_execute else retention.dry_run(db, c.clock.now())))
     retention.run_daily(c, "quota_reconcile", lambda db: {"diffs": retention.reconcile(c, db)})
+    # 이용 신청 응답 기한·권한 만료 (13번 요구사항 8.3, 10.1)
+    from app.services import datasets
+
+    with c.sessionmaker.begin() as db:
+        changed = datasets.expire(c, db)
+        if any(changed.values()):
+            log.info("grants_expired", extra=changed)
     # 하루 한 번: 기한 지난 정기 점검 알림 (11번 요구사항 6.3)
     from app.services import inspections
 

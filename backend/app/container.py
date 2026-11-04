@@ -16,6 +16,7 @@ from app.adapters.system_clock import SystemClock
 from app.config import Settings
 from app.db.session import make_engine, make_sessionmaker
 from app.ports import ClockPort, IdentityPort, NotifierPort, QueuePort, StoragePort
+from app.services import sharing as _sharing_guard  # noqa: F401 - 공유 등급 우회 방지 가드 등록 (13번)
 from app.services.audit import AuditLogger
 from app.services.auth import Authenticator
 from app.services.tokens import MachineTokenIssuer
