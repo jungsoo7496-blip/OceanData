@@ -13,6 +13,7 @@ from app.context import organization_id_var
 from app.domain import permissions
 from app.domain.principal import Principal
 from app.errors import ProblemError
+from app.ratelimit import Limiter
 from app.services.auth import AuthFailed
 from app.services.tenant import NotFoundInScope, get_scoped
 
@@ -64,6 +65,8 @@ def get_principal(request: Request, db: Session = Depends(get_db), c: Container 
         raise ProblemError("UNAUTHENTICATED", headers={"WWW-Authenticate": "Bearer"}) from None
     organization_id_var.set(principal.organization_id)
     request.state.principal = principal
+    limiter = request.app.state.__dict__.setdefault("limiter", Limiter(c.settings.rate_limit_per_minute))
+    limiter.check(f"{principal.kind}:{principal.principal_id}")  # 클라이언트별 분당 요청 수 (04번 요구사항 9)
     return principal
 
 

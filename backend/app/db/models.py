@@ -278,6 +278,7 @@ class Asset(Base):
     env_context: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     tags: Mapped[list[Any] | None] = mapped_column(JSONB)
     ext: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    ingest_context: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # 내부용(감시 규칙·로컬 ID·좌표 변환 이력)
     storage_zone: Mapped[str | None] = mapped_column(String(20))
     storage_key: Mapped[str | None] = mapped_column(String(400))
     embedding: Mapped[Any | None] = mapped_column(Vector(), deferred=True)
@@ -358,3 +359,57 @@ class QualityRuleSet(Base):
     active: Mapped[bool] = mapped_column(Boolean, server_default="false")
     created_by: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(TS)
+
+
+# ---- 04 수집
+
+
+class Upload(Base):
+    """업로드 세션 (전송 작업 단위, 실증회차와 다르다)."""
+
+    __tablename__ = "uploads"
+    upload_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), index=True)
+    # 받은 것 없이 취소·만료된 새 자산 기록은 지우고 업로드 기록만 남긴다
+    asset_id: Mapped[str | None] = mapped_column(ForeignKey("assets.asset_id", ondelete="SET NULL"), index=True)
+    source_system_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"))
+    created_by: Mapped[str] = mapped_column(String(64))
+    bucket: Mapped[str] = mapped_column(String(120))
+    object_key: Mapped[str] = mapped_column(String(400))
+    s3_upload_id: Mapped[str] = mapped_column(String(400))
+    part_size: Mapped[int] = mapped_column(BigInteger)
+    part_count: Mapped[int] = mapped_column(Integer)
+    declared_size: Mapped[int] = mapped_column(BigInteger)
+    reserved_bytes: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(String(20))  # UPLOADING / RECEIVED / ABORTED / EXPIRED
+    asset_was_metadata_only: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    error_code: Mapped[str | None] = mapped_column(String(60))
+    expires_at: Mapped[datetime] = mapped_column(TS, index=True)
+    created_at: Mapped[datetime] = mapped_column(TS)
+    updated_at: Mapped[datetime] = mapped_column(TS)
+
+
+class OrgQuota(Base):
+    """기관 사용량 (domain.md 9장): 사용량 = 등록 객체 + 격리 + 진행 중 예약 + 신청 백업."""
+
+    __tablename__ = "org_quotas"
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), primary_key=True)
+    quota_bytes: Mapped[int] = mapped_column(BigInteger)
+    used_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    quarantine_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    reserved_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    backup_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    updated_at: Mapped[datetime] = mapped_column(TS)
+
+
+class IntegrityLogEntry(Base):
+    """무결성 로그 (04번 요구사항 4.6). 추가 전용 해시 체인."""
+
+    __tablename__ = "integrity_log"
+    seq: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    asset_id: Mapped[str] = mapped_column(ForeignKey("assets.asset_id"), unique=True)
+    checksum_sha256: Mapped[str] = mapped_column(String(64))
+    byte_size: Mapped[int] = mapped_column(BigInteger)
+    registered_at: Mapped[datetime] = mapped_column(TS)
+    prev_hash: Mapped[str] = mapped_column(String(64))
+    entry_hash: Mapped[str] = mapped_column(String(64))

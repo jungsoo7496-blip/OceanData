@@ -28,8 +28,16 @@ class RetryableError(Exception):
 
 
 Handler = Callable[[Container, Job], None]
+def _integrity_verify(c: Container, job: Job) -> None:
+    from app.services.ingest import IntegrityVerifier
+
+    IntegrityVerifier(c).verify(job.payload["asset_id"])
+
+
 HANDLERS: dict[str, Handler] = {
     "noop": lambda c, job: None,  # 동작 확인용
+    "integrity_verify": _integrity_verify,  # 04번 무결성 검증·격리
+    # "make_proxy": 05번 처리 파이프라인에서 등록한다 (그때까지 영상 자산은 REGISTERED에 머문다)
 }
 
 

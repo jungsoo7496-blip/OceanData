@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import secrets
-import time
-from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from typing import Annotated, Literal
 
@@ -16,37 +14,21 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import client_ip, container, get_db, load_scoped, page_params, require
 from app.api.pagination import paginate
-from app.api.timefmt import iso
 from app.container import Container
 from app.db.models import ApiKey, AuditLog, Device, DeviceCredential, EnrollmentCode
 from app.domain.ids import new_id
 from app.domain.principal import DEVICE_SCOPES, Principal
 from app.errors import ProblemError
+from app.ratelimit import Limiter
 from app.services.tokens import hash_secret, new_secret, verify_secret
+from app.timefmt import iso
 
 router = APIRouter()
 
 
 
 
-# ---- 호출 제한 (개발 단계 FastAPI 미들웨어 대체, tech.md 2장). 운영은 게이트웨이에서.
-class _Limiter:
-    def __init__(self, limit: int, window_s: float) -> None:
-        self.limit, self.window_s = limit, window_s
-        self.hits: dict[str, deque[float]] = defaultdict(deque)
-
-    def check(self, key: str) -> None:
-        now = time.monotonic()
-        q = self.hits[key]
-        while q and now - q[0] > self.window_s:
-            q.popleft()
-        if len(q) >= self.limit:
-            retry = int(self.window_s - (now - q[0])) + 1
-            raise ProblemError("RATE_LIMITED", headers={"Retry-After": str(retry)})
-        q.append(now)
-
-
-_auth_limiter = _Limiter(limit=30, window_s=60)
+_auth_limiter = Limiter(limit=30, window_s=60)  # 토큰·등록 엔드포인트 (무차별 대입 방지)
 
 
 # ---- 토큰 교환

@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import client_ip, container, get_db, load_scoped, page_params, require
 from app.api.pagination import paginate
-from app.api.timefmt import iso
 from app.container import Container
 from app.db.models import Device, Project, SessionDevice, TrialSession
 from app.domain.ids import new_id
@@ -22,6 +21,7 @@ from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services.idempotency import run_idempotent
 from app.services.tenant import scoped_select
+from app.timefmt import iso
 
 router = APIRouter(tags=["context"])
 ID_PATTERN = r"^[a-z]{3}_[0-9A-HJKMNP-TV-Z]{26}$"

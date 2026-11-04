@@ -50,9 +50,19 @@ class Settings(BaseSettings):
     report_formats: CsvList = Field(default_factory=list)
     external_sources: CsvList = Field(default_factory=list)
 
-    # 사전 서명 URL 유효시간 (security.md)
+    # 사전 서명 URL 유효시간 (security.md). URL 호스트는 클라이언트가 접근하는 주소여야 한다
+    s3_public_endpoint_url: str | None = None
     presign_upload_ttl_s: int = 900
     presign_download_ttl_s: int = 300
+
+    # 업로드·쿼터·보존 (HW-3: 수치는 설정값)
+    upload_part_size: int = 64 * 1024 * 1024
+    upload_session_ttl_s: int = 7 * 86400
+    max_part_urls_per_response: int = 1000
+    default_org_quota_bytes: int = 10 * 1024**4
+    default_retention_days: int = 3650
+    quarantine_retention_days: int = 30
+    rate_limit_per_minute: int = 600
 
     # 운영
     log_level: str = "INFO"

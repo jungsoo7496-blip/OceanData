@@ -16,11 +16,20 @@ log = logging.getLogger(__name__)
 
 
 class S3Storage:
-    def __init__(self, settings: Settings, client: object | None = None) -> None:
+    def __init__(self, settings: Settings, client: object | None = None,
+                 presign_client: object | None = None) -> None:
         self.settings = settings
-        self.client = client or boto3.client(
+        self.client = client or self._make_client(settings, settings.s3_endpoint_url)
+        # 사전 서명은 클라이언트가 접근하는 주소로 서명해야 한다 (컨테이너 내부 주소와 다를 수 있다)
+        self.presigner = presign_client or (
+            self._make_client(settings, settings.s3_public_endpoint_url)
+            if settings.s3_public_endpoint_url else self.client)
+
+    @staticmethod
+    def _make_client(settings: Settings, endpoint: str) -> object:
+        return boto3.client(
             "s3",
-            endpoint_url=settings.s3_endpoint_url,
+            endpoint_url=endpoint,
             region_name=settings.s3_region,
             aws_access_key_id=settings.s3_access_key_id.get_secret_value(),
             aws_secret_access_key=settings.s3_secret_access_key.get_secret_value(),
@@ -57,6 +66,22 @@ class S3Storage:
     def get_object(self, bucket: str, key: str) -> bytes:
         return self.client.get_object(Bucket=bucket, Key=key)["Body"].read()  # type: ignore[attr-defined]
 
+    def iter_object(self, bucket: str, key: str, chunk_size: int = 8 * 1024 * 1024) -> Iterator[bytes]:
+        body = self.client.get_object(Bucket=bucket, Key=key)["Body"]  # type: ignore[attr-defined]
+        try:
+            yield from body.iter_chunks(chunk_size)
+        finally:
+            body.close()
+
+    def move_object(self, src_bucket: str, src_key: str, dst_bucket: str, dst_key: str) -> None:
+        """GET 스트림 → PUT/멀티파트 (CopyObject는 공통 기능 목록 밖이라 쓰지 않는다, HW-1)."""
+        body = self.client.get_object(Bucket=src_bucket, Key=src_key)["Body"]  # type: ignore[attr-defined]
+        try:
+            self.client.upload_fileobj(body, dst_bucket, dst_key)  # type: ignore[attr-defined]
+        finally:
+            body.close()
+        self.client.delete_object(Bucket=src_bucket, Key=src_key)  # type: ignore[attr-defined]
+
     def head_object(self, bucket: str, key: str) -> ObjectInfo | None:
         try:
             r = self.client.head_object(Bucket=bucket, Key=key)  # type: ignore[attr-defined]
@@ -89,7 +114,7 @@ class S3Storage:
 
     def presign_upload_part(self, bucket: str, key: str, upload_id: str, part_number: int,
                             expires_s: int) -> str:
-        return str(self.client.generate_presigned_url(  # type: ignore[attr-defined]
+        return str(self.presigner.generate_presigned_url(  # type: ignore[attr-defined]
             "upload_part",
             Params={"Bucket": bucket, "Key": key, "UploadId": upload_id, "PartNumber": part_number},
             ExpiresIn=expires_s,
@@ -123,9 +148,10 @@ class S3Storage:
         params: dict = {"Bucket": bucket, "Key": key}
         if content_type:
             params["ContentType"] = content_type
-        return str(self.client.generate_presigned_url("put_object", Params=params, ExpiresIn=expires_s))  # type: ignore[attr-defined]
+        return str(self.presigner.generate_presigned_url(  # type: ignore[attr-defined]
+            "put_object", Params=params, ExpiresIn=expires_s))
 
     def presign_get(self, bucket: str, key: str, expires_s: int) -> str:
-        return str(self.client.generate_presigned_url(  # type: ignore[attr-defined]
+        return str(self.presigner.generate_presigned_url(  # type: ignore[attr-defined]
             "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=expires_s
         ))

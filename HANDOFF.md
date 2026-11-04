@@ -1,20 +1,21 @@
 # 인수인계 (클라우드 → 로컬)
 
 이 파일은 클라우드 세션에서 만든 작업을 로컬에서 이어가기 위한 안내다. 작업이 진행될 때마다 갱신한다.
-최종 갱신: 2026-11-04
+최종 갱신: 2026-11-04 (04번 핵심까지)
 
 ## 1. 지금 상태 한눈에
-| 스펙 | 상태 | 비고 |
+| 스펙 | 상태 | 남은 것 (자세히는 각 tasks.md) |
 |---|---|---|
-| 기준선 | 완료 | kiro-pack v0.2 그대로 + GPT v0.07 오픈소스 검토서(참고) |
-| 01 개발 기반 | 거의 완료 | 남은 것: `make up` 실패 경로 자동 시험, golangci-lint(06번과 함께) |
-| 02 인증·테넌트 | 핵심 완료 | 남은 것: Keycloak MFA 단계 인증 설정, 긴급 열람(요구사항 8), 구성원 관리(요구사항 9) |
-| 03~17 | 시작 전 | 다음은 03 → 04 순서 |
+| 기준선 | 완료 | kiro-pack v0.2 + GPT v0.07 오픈소스 검토서(참고) |
+| 01 개발 기반 | 거의 완료 | `make up` 실패 경로 자동 시험, golangci-lint(06번과 함께) |
+| 02 인증·테넌트 | 핵심 완료 | Keycloak MFA 단계 인증, 긴급 열람(요구사항 8), 구성원 관리(요구사항 9) |
+| 03 메타데이터 표준 | 핵심 완료 | 타입 생성, 기관 하위코드 추가 API, 품질 재평가 명령, 약정·연계 카드 등록 API |
+| 04 수집 API | 핵심 완료 | 웹훅, 하트비트·health, 버려진 세션 정리 작업, 악성코드 검사 어댑터, 예제 클라이언트·Schemathesis, 10GB 시험 |
+| 05~17 | 시작 전 | 다음은 05(처리 파이프라인: make_proxy 작업 핸들러부터) 또는 06(Go 에이전트) |
 
-각 스펙의 완료/남은 작업은 `.kiro/specs/NN-*/tasks.md`에 체크박스로 있다.
-
-**시험:** 단위 9 · 통합 14 · 계약 2 · T01 수용시험 15 = 40건 통과 (`cd backend && pytest`)
-**개발 환경:** `make up`으로 7개 서비스 전부 healthy 확인, 실제 Keycloak 토큰으로 `/v1/me`·`/v1/sessions` 확인
+**시험:** 91건 통과 (`cd backend && pytest`) — 단위 52, 통합·계약 24, T01 수용 15.
+수집 시험은 moto S3 서버와 실제 SeaweedFS(`TEST_S3_ENDPOINT`) 양쪽에서 통과.
+**개발 환경:** `make up` 7개 서비스 healthy. 실제 Keycloak 로그인 → 업로드 생성 → localhost:8333 사전 서명 URL로 파트 전송 → 워커 무결성 검증 → READY_PRIVATE → 영수증까지 확인.
 
 ## 2. 로컬에서 시작하기
 필요한 것: Docker(Compose v2), Python 3.12+, [uv](https://docs.astral.sh/uv/), Node 22, (06번부터) Go
@@ -48,9 +49,12 @@ Kiro를 쓸 경우: Specs 패널에서 03번을 열고 README의 "Kiro에 줄 �
 ## 4. 구조 요약
 ```
 backend/app/
-  api/        system.py(헬스·기능), auth.py(토큰·등록·API 키·감사·me), context.py(사업·회차·장비), deps.py(인증·권한·범위)
-  domain/     ids.py, principal.py, permissions.py(Permission_Table), errors.py   ← 프레임워크 import 금지(시험으로 검사)
-  services/   auth.py, tokens.py, tenant.py(Tenant_Guard), audit.py(해시 체인), idempotency.py, contracts.py
+  api/        system.py(헬스·기능), auth.py(토큰·등록·API 키·감사·me), context.py(사업·회차·장비),
+              catalog.py(스키마·코드·사전 검증·정책·계보), uploads.py, assets.py, deps.py(인증·권한·범위)
+  domain/     ids, principal, permissions(Permission_Table), states(상태 전이 표), metadata(기본값·variant 규칙),
+              normalize(촬영시각·위치·단위), quality, errors   ← 프레임워크 import 금지(시험으로 검사)
+  services/   auth, tokens, tenant(Tenant_Guard), audit(해시 체인), idempotency, contracts(검증기·번들),
+              ingest(업로드·무결성 검증·격리·쿼터·영수증)
   ports/      8개 포트 / adapters/ S3·PgQueue·Keycloak·Notifier·Clock
   db/         models.py, migrations/versions/0001_*.py
   workers/    main.py (HANDLERS에 작업 유형 등록)
@@ -69,6 +73,8 @@ tools/         validate_contracts.py, check_traceability.py, check_licenses.py, 
 ## 5. 사람이 결정해야 할 것
 | 항목 | 내용 | 위치 |
 |---|---|---|
+| C0 세션 취소 시 역전이 | 바이너리 없는 C0 자산에 연 업로드를 취소·만료하면 UPLOADING → READY_PRIVATE로 되돌린다. domain.md 5장 표에 없는 전이 | 04번 tasks "확인 필요" |
+| LineageEdge.relation | SAMPLE_FRAME 값이 없어 THUMBNAIL로 기록 중 | 04번 tasks "확인 필요" |
 | PSF-2.0 라이선스 예외 | typing_extensions·greenlet(FastAPI·SQLAlchemy 필수 의존성). 승인 전까지 검사는 경고만 | `docs/adr/0011-psf-license-exception.md` |
 | Keycloak MFA 방식 | OTP 로그인 시 `acr`/`amr` 클레임이 나오게 단계 인증을 설정할지 | `deploy/compose/keycloak/README.md` |
 | 구성원 초대 방식 | 플랫폼이 Keycloak 관리 API로 사용자를 만들지, IdP에서 만들고 연결만 할지 | 02번 tasks 12 |

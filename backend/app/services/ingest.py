@@ -1,0 +1,581 @@
+"""수집 유스케이스 (04번): 업로드 생성·재개·완료·취소, 무결성 검증, 격리, 영수증, 쿼터.
+
+바이너리는 API를 거치지 않고 사전 서명 URL로 스토리지에 직접 간다 (요구사항 1.2).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import math
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any
+
+from sqlalchemy import select, text
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session
+
+from app.container import Container
+from app.db.models import (
+    Asset,
+    AssetLineage,
+    Device,
+    IntegrityLogEntry,
+    OrgQuota,
+    Project,
+    SessionDevice,
+    TrialSession,
+    Upload,
+)
+from app.domain import metadata, states
+from app.domain.ids import new_id
+from app.domain.normalize import TimeRuleError, resolve_capture_time
+from app.domain.principal import Principal
+from app.domain.quality import evaluate
+from app.errors import ProblemError
+from app.ports.notifier import Notification
+from app.ports.storage import CompletedPart
+from app.services import contracts
+from app.services.tenant import NotFoundInScope, get_scoped
+from app.timefmt import iso
+
+log = logging.getLogger(__name__)
+GENESIS = "0" * 64
+EXT_KEYS = ("video_ext", "cctv_ext", "vessel_ext", "sensor_ext", "external_obs_ext", "annotation_ext", "evidence_ext")
+RELATION_FOR_VARIANT = {"PROXY": "PROXY", "CLIP": "CLIP", "SAMPLE_FRAME": "THUMBNAIL", "THUMBNAIL": "THUMBNAIL"}
+_INTEGRITY_LOCK = 7_202_612
+
+
+def zone_for(variant: str) -> str:
+    return "RAW" if variant == "ORIGINAL" else "PROCESSED"
+
+
+def object_key(a: Asset) -> str:
+    """{organization_id}/{project_id}/{session_id}/{source_system_id}/{asset_id}/{variant} (domain.md 9장)."""
+    return f"{a.organization_id}/{a.project_id}/{a.session_id or '_unassigned'}/{a.source_system_id}/" \
+           f"{a.asset_id}/{a.variant}"
+
+
+def actor_roles(p: Principal) -> frozenset[str]:
+    return frozenset({"DEVICE"}) if p.is_machine else p.roles
+
+
+# ---- 쿼터 (domain.md 9장)
+class Quota:
+    def __init__(self, c: Container, db: Session) -> None:
+        self.c, self.db = c, db
+
+    def _row(self, org: str) -> OrgQuota:
+        self.db.execute(insert(OrgQuota).values(
+            organization_id=org, quota_bytes=self.c.settings.default_org_quota_bytes, used_bytes=0,
+            quarantine_bytes=0, reserved_bytes=0, backup_bytes=0, updated_at=self.c.clock.now(),
+        ).on_conflict_do_nothing(index_elements=["organization_id"]))
+        # 행 잠금으로 동시 예약을 직렬화한다 (요구사항 1.5)
+        return self.db.execute(select(OrgQuota).where(OrgQuota.organization_id == org).with_for_update()) \
+            .scalar_one()
+
+    def reserve(self, org: str, nbytes: int) -> None:
+        q = self._row(org)
+        total = q.used_bytes + q.quarantine_bytes + q.reserved_bytes + q.backup_bytes
+        if total + nbytes > q.quota_bytes:
+            raise ProblemError("QUOTA_EXCEEDED", detail="기관 저장 쿼터를 넘습니다",
+                               extra={"quota_bytes": q.quota_bytes, "usage_bytes": total, "requested_bytes": nbytes})
+        q.reserved_bytes += nbytes
+        q.updated_at = self.c.clock.now()
+
+    def settle(self, org: str, reserved: int, *, to: str | None, actual: int | None = None) -> None:
+        """예약을 확정(used)·격리(quarantine)로 옮기거나(to=None이면) 해제한다."""
+        q = self._row(org)
+        q.reserved_bytes = max(0, q.reserved_bytes - reserved)
+        if to == "used":
+            q.used_bytes += actual if actual is not None else reserved
+        elif to == "quarantine":
+            q.quarantine_bytes += actual if actual is not None else reserved
+        q.updated_at = self.c.clock.now()
+
+
+@dataclass
+class Resolved:
+    device: Device
+    project_id: str
+    session_id: str | None
+
+
+class IngestService:
+    def __init__(self, c: Container, db: Session) -> None:
+        self.c, self.db = c, db
+        self.quota = Quota(c, db)
+
+    # ---------------------------------------------------------------- 생성
+    def _scoped(self, model: Any, ident: str, p: Principal) -> Any:
+        try:
+            return get_scoped(self.db, model, ident, p)
+        except NotFoundInScope as exc:
+            if exc.cross_org:
+                self.c.audit.record("CROSS_ORG_ACCESS_ATTEMPT", result="DENIED", principal=p,
+                                    organization_id=exc.owner_org, target_type=exc.model, target_id=ident)
+            raise ProblemError("NOT_FOUND", detail=f"{exc.model}를 찾을 수 없습니다") from None
+
+    def _resolve(self, p: Principal, m: dict[str, Any], capture_start: datetime | None) -> Resolved:
+        source_id = m["source_system_id"]
+        if p.kind == "DEVICE" and source_id not in p.mapped_source_ids:  # 매핑된 원천 장비만 (02번 요구사항 5.5)
+            self.c.audit.record("DEVICE_SCOPE_VIOLATION", result="DENIED", principal=p,
+                                organization_id=p.organization_id, target_type="Device", target_id=source_id)
+            raise ProblemError("NOT_FOUND", detail="원천 장비를 찾을 수 없습니다")
+        device: Device = self._scoped(Device, source_id, p)
+        if device.status == "REVOKED":
+            raise ProblemError("RULE_VIOLATION", detail="폐기된 장비입니다",
+                               unmet_conditions=[{"condition": "device.status=ACTIVE", "actual": device.status}])
+        session_id = None
+        session: TrialSession | None = None
+        if m.get("session_id"):
+            session = self._scoped(TrialSession, m["session_id"], p)
+        elif m.get("session_label"):
+            session = self.db.execute(select(TrialSession).where(
+                TrialSession.organization_id == p.organization_id, TrialSession.label == m["session_label"])) \
+                .scalar_one_or_none()
+        elif capture_start is not None:
+            # 회차 추출 규칙: 장비가 연결된 회차 중 촬영시각을 포함하는 회차가 정확히 하나면 그것 (요구사항 6.1)
+            cands = self.db.execute(
+                select(TrialSession).join(SessionDevice, SessionDevice.session_id == TrialSession.session_id)
+                .where(SessionDevice.device_id == device.device_id, TrialSession.starts_at <= capture_start,
+                       (TrialSession.ends_at.is_(None)) | (TrialSession.ends_at >= capture_start))).scalars().all()
+            session = cands[0] if len(cands) == 1 else None
+        if session is not None:
+            session_id = session.session_id
+        project_id = m.get("project_id") or (session.project_id if session else None) or device.project_id
+        if not project_id:
+            raise ProblemError("RULE_VIOLATION", detail="실증사업을 정할 수 없습니다",
+                               unmet_conditions=[{"condition": "project_id 또는 장비의 사업", "actual": None}])
+        self._scoped(Project, project_id, p)
+        if session is not None and session.project_id != project_id:
+            raise ProblemError("RULE_VIOLATION", detail="회차가 다른 실증사업에 속합니다",
+                               unmet_conditions=[{"condition": "session.project_id=project_id",
+                                                  "actual": session.project_id}])
+        return Resolved(device, project_id, session_id)
+
+    def _validate_manifest(self, m: Any) -> None:
+        problems, version_rejected = contracts.validate_document("upload-manifest", m)
+        if version_rejected:
+            raise ProblemError("UNSUPPORTED_SCHEMA_VERSION", detail=problems[0].message)
+        errors = [p for p in problems if p.severity == "ERROR"]
+        if errors:
+            raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": p.pointer, "code": p.code,
+                                                            "message": p.message} for p in errors])
+
+    def _location(self, m: dict[str, Any]) -> tuple[dict | None, dict | None]:
+        """EPSG:4326이 아닌 원래 좌표는 PostGIS로 변환하고 변환 이력을 남긴다 (03번 요구사항 6.3)."""
+        if m.get("location") is not None or not m.get("source_location"):
+            return m.get("location"), None
+        src = m["source_location"]
+        srid = int(src["crs"].split(":")[1])
+        try:
+            g = self.db.execute(text("SELECT ST_AsGeoJSON(ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON(:g), :s), 4326))"),
+                                {"g": json.dumps(src["geometry"]), "s": srid}).scalar_one()
+        except Exception:  # noqa: BLE001 - 잘못된 좌표계·형식은 입력 오류
+            self.db.rollback()
+            raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/source_location", "code": "transform_failed",
+                                                            "message": "좌표계를 변환할 수 없습니다"}]) from None
+        return json.loads(g), {"from_crs": src["crs"], "to_crs": "EPSG:4326", "method": "ST_Transform"}
+
+    def create_upload(self, p: Principal, m: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        self._validate_manifest(m)
+        now = self.c.clock.now()
+        try:
+            cap = resolve_capture_time(m.get("capture_start_at"), m.get("capture_end_at"), m.get("timestamp_quality"),
+                                       m.get("original_timestamps"))
+        except TimeRuleError as exc:
+            raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/capture_start_at", "code": "time_rule",
+                                                            "message": str(exc)}]) from None
+        r = self._resolve(p, m, cap.capture_start_at)
+        f = m["file"]
+        dtype, variant = m["data_type"], m["variant"]
+        mode = r.device.collection_mode
+
+        existing = self.db.execute(select(Asset).where(
+            Asset.organization_id == p.organization_id, Asset.source_system_id == r.device.device_id,
+            Asset.checksum_sha256 == f["checksum_sha256"]).with_for_update()).scalar_one_or_none()
+        if existing is not None and existing.has_binary:
+            active = self.db.execute(select(Upload).where(Upload.asset_id == existing.asset_id,
+                                                          Upload.status == "UPLOADING")).scalar_one_or_none()
+            if active is not None and active.expires_at > now:  # 같은 파일의 진행 중 세션을 다시 돌려준다
+                return 201, self._created_view(active, existing)
+            return 200, {"status": "ALREADY_REGISTERED", "asset_id": existing.asset_id}
+
+        if mode == "C0_METADATA_ONLY":
+            return self._register_metadata_only(p, m, r, cap, existing)
+        if not metadata.variant_allowed(mode, dtype, variant):
+            allowed = sorted(metadata.MEDIA_VARIANTS_BY_MODE[mode]) if dtype in metadata.MEDIA_TYPES else ["ORIGINAL"]
+            raise ProblemError("RULE_VIOLATION", detail=f"{mode} 장비는 이 variant를 보낼 수 없습니다",
+                               unmet_conditions=[{"condition": f"variant ∈ {{{', '.join(allowed)}}}",
+                                                  "actual": variant}], extra={"allowed_variants": allowed})
+
+        location, transform = self._location(m)
+        if existing is not None:  # 바이너리 없는 C0 자산 → 같은 asset_id로 세션을 연다 (요구사항 2.4)
+            asset = existing
+            asset.ingest_status = states.transition("ingest_status", asset.ingest_status, "UPLOADING", actor_roles(p))
+            asset.variant, asset.has_binary, asset.updated_at = variant, True, now
+            was_c0 = True
+        else:
+            asset = self._new_asset(p, m, r, cap, location, transform, has_binary=True,
+                                    status=states.transition("ingest_status", None, "UPLOADING", actor_roles(p)))
+            was_c0 = False
+        size = int(f["byte_size"])
+        self.quota.reserve(p.organization_id, size)
+        part_size = max(self.c.settings.upload_part_size, math.ceil(size / 10000) if size else 1)
+        part_count = max(1, math.ceil(size / part_size))
+        zone = zone_for(variant)
+        bucket = self.c.settings.buckets[zone]
+        key = object_key(asset)
+        try:
+            s3_upload_id = self.c.storage.create_multipart_upload(bucket, key, f.get("mime_type"))
+        except Exception as exc:  # noqa: BLE001 - 스토리지 장애는 503으로 (요구사항 1.6)
+            log.warning("storage_unavailable", extra={"error_type": type(exc).__name__})
+            raise ProblemError("STORAGE_UNAVAILABLE", headers={"Retry-After": "30"}) from None
+        asset.storage_zone, asset.storage_key = zone, key
+        up = Upload(upload_id=new_id("upload"), organization_id=p.organization_id, asset_id=asset.asset_id,
+                    source_system_id=r.device.device_id, created_by=p.principal_id, bucket=bucket, object_key=key,
+                    s3_upload_id=s3_upload_id, part_size=part_size, part_count=part_count, declared_size=size,
+                    reserved_bytes=size, status="UPLOADING", asset_was_metadata_only=was_c0,
+                    expires_at=now + timedelta(seconds=self.c.settings.upload_session_ttl_s), created_at=now,
+                    updated_at=now)
+        self.db.add(up)
+        self.db.flush()
+        return 201, self._created_view(up, asset)
+
+    def _new_asset(self, p: Principal, m: dict[str, Any], r: Resolved, cap: Any, location: dict | None,
+                   transform: dict | None, *, has_binary: bool, status: str) -> Asset:
+        now = self.c.clock.now()
+        f = m["file"]
+        fields = metadata.apply_defaults({"data_role": m.get("data_role")},
+                                         device_collection_mode=r.device.collection_mode)
+        parent = None
+        if m.get("parent_ref", {}).get("checksum_sha256"):
+            parent = self.db.execute(select(Asset).where(
+                Asset.organization_id == p.organization_id, Asset.source_system_id == r.device.device_id,
+                Asset.checksum_sha256 == m["parent_ref"]["checksum_sha256"])).scalar_one_or_none()
+            if parent is not None:  # 파생본은 원 자산의 엄격한 값을 물려받는다 (domain.md 3장)
+                fields.update(metadata.inherit_strictest([
+                    {"data_role": fields["data_role"], "sensitivity_class": fields["sensitivity_class"]},
+                    {"data_role": parent.data_role, "sensitivity_class": parent.sensitivity_class}]))
+        kind = (m.get("client") or {}).get("kind", "API")
+        provenance: dict[str, Any] = {"ingest_channel": kind, "client_version": m["client"]["version"],
+                                      "original_filename": f["original_filename"]}
+        if f.get("original_relative_path"):
+            provenance["original_relative_path"] = f["original_relative_path"]
+        if cap.original_timestamps:
+            provenance["original_timestamps"] = cap.original_timestamps
+        if parent is not None:
+            provenance["parent_asset_ids"] = [parent.asset_id]
+            provenance["transform"] = RELATION_FOR_VARIANT.get(m["variant"], m["variant"])
+        asset = Asset(
+            asset_id=new_id("asset"), schema_version=m["schema_version"], organization_id=p.organization_id,
+            project_id=r.project_id, session_id=r.session_id, source_system_id=r.device.device_id,
+            data_type=m["data_type"], variant=m["variant"], capture_start_at=cap.capture_start_at,
+            capture_end_at=cap.capture_end_at, ingested_at=now, timestamp_quality=cap.timestamp_quality,
+            location=location, source_location=m.get("source_location"), area_code=m.get("area_code"),
+            location_precision="EXACT_RESTRICTED" if location else None, mime_type=f["mime_type"],
+            byte_size=int(f["byte_size"]), checksum_sha256=f["checksum_sha256"], has_binary=has_binary,
+            retention_policy_id="default", retention_until=now + timedelta(days=self.c.settings.default_retention_days),
+            quality_reasons=[], ingest_status=status, provenance=provenance,
+            ext={k: m[k] for k in EXT_KEYS if k in m},
+            ingest_context={k: v for k, v in {"watch_rule_id": m.get("watch_rule_id"),
+                                              "local_collection_id": (m.get("client") or {}).get("local_collection_id"),
+                                              "parent_ref": m.get("parent_ref"), "location_transform": transform,
+                                              "session_label": m.get("session_label"),
+                                              "uploaded_by": p.principal_id}.items() if v},
+            created_at=now, updated_at=now, **fields)
+        self.db.add(asset)
+        self.db.flush()
+        if parent is not None:
+            self.db.add(AssetLineage(child_asset_id=asset.asset_id, parent_asset_id=parent.asset_id,
+                                     relation=RELATION_FOR_VARIANT.get(m["variant"], "PROXY"),
+                                     tool_version=f"{kind} {m['client']['version']}", run_by=p.principal_id,
+                                     created_at=now))
+        return asset
+
+    def _register_metadata_only(self, p: Principal, m: dict[str, Any], r: Resolved, cap: Any,
+                                existing: Asset | None) -> tuple[int, dict[str, Any]]:
+        """C0: 바이너리 없이 메타데이터·현장 파일 크기·sha256만 등록 (요구사항 1.3)."""
+        if existing is not None:
+            return 200, {"status": "ALREADY_REGISTERED", "asset_id": existing.asset_id}
+        if m["variant"] != "ORIGINAL":
+            raise ProblemError("RULE_VIOLATION", detail="C0 장비는 원본 기록만 등록합니다",
+                               unmet_conditions=[{"condition": "variant=ORIGINAL", "actual": m["variant"]}])
+        if r.session_id is None:  # 회차 없는 자산은 등록 상태가 될 수 없다 (domain.md 8장)
+            raise ProblemError("RULE_VIOLATION", detail="메타데이터 전용 등록에는 실증회차가 필요합니다",
+                               unmet_conditions=[{"condition": "session_id 또는 session_label", "actual": None}])
+        location, transform = self._location(m)
+        asset = self._new_asset(p, m, r, cap, location, transform, has_binary=False,
+                                status=states.transition("ingest_status", None, "READY_PRIVATE", actor_roles(p)))
+        asset.quality_status, asset.quality_reasons = evaluate(self._fields(asset))
+        return 201, {"status": "METADATA_ONLY_REGISTERED", "asset_id": asset.asset_id}
+
+    @staticmethod
+    def _fields(a: Asset) -> dict[str, Any]:
+        return {"data_type": a.data_type, "mime_type": a.mime_type, "byte_size": a.byte_size,
+                "checksum_sha256": a.checksum_sha256, "timestamp_quality": a.timestamp_quality}
+
+    def _part_urls(self, up: Upload, numbers: list[int]) -> list[dict[str, Any]]:
+        ttl = self.c.settings.presign_upload_ttl_s
+        exp = iso(self.c.clock.now() + timedelta(seconds=ttl))
+        limit = self.c.settings.max_part_urls_per_response
+        return [{"part_number": n, "url": self.c.storage.presign_upload_part(up.bucket, up.object_key,
+                                                                              up.s3_upload_id, n, ttl),
+                 "expires_at": exp} for n in numbers[:limit]]
+
+    def _created_view(self, up: Upload, asset: Asset) -> dict[str, Any]:
+        return {"status": "UPLOAD_CREATED", "upload_id": up.upload_id, "asset_id": asset.asset_id,
+                "part_size": up.part_size, "part_count": up.part_count,
+                "parts": self._part_urls(up, list(range(1, up.part_count + 1))), "expires_at": iso(up.expires_at)}
+
+    # ---------------------------------------------------------------- 조회·재개·취소
+    def load_upload(self, p: Principal, upload_id: str) -> Upload:
+        up: Upload = self._scoped(Upload, upload_id, p)
+        if p.kind == "DEVICE" and up.source_system_id not in p.mapped_source_ids:
+            raise ProblemError("NOT_FOUND")
+        return up
+
+    def _expire_if_needed(self, up: Upload) -> None:
+        if up.status == "UPLOADING" and up.expires_at <= self.c.clock.now():
+            self._release(up, "EXPIRED")
+            self.db.commit()  # 410을 돌려주기 전에 정리를 확정한다 (요구사항 3.3)
+            raise ProblemError("GONE", detail="업로드 세션이 만료되었습니다")
+        if up.status in ("EXPIRED", "ABORTED"):
+            raise ProblemError("GONE", detail="만료되었거나 취소된 업로드입니다")
+
+    def _release(self, up: Upload, final: str) -> None:
+        try:
+            self.c.storage.abort_multipart_upload(up.bucket, up.object_key, up.s3_upload_id)
+        except Exception as exc:  # noqa: BLE001 - 이미 정리된 멀티파트일 수 있다
+            log.warning("abort_multipart_failed", extra={"error_type": type(exc).__name__})
+        self.quota.settle(up.organization_id, up.reserved_bytes, to=None)
+        up.status, up.reserved_bytes, up.updated_at = final, 0, self.c.clock.now()
+        asset = self.db.get(Asset, up.asset_id) if up.asset_id else None
+        if asset is not None and asset.ingest_status == "UPLOADING":
+            if up.asset_was_metadata_only:
+                # 바이너리 없는 C0 자산으로 되돌린다 (domain.md 5장 표에 없는 역전이 — 확인 필요, tasks 참고)
+                asset.ingest_status, asset.has_binary, asset.variant = "READY_PRIVATE", False, "ORIGINAL"
+            else:
+                # 받은 것이 없는 새 자산 기록은 지운다. 같은 파일을 다시 올릴 수 있게 한다
+                self.db.delete(asset)
+        self.db.flush()
+
+    def upload_status(self, up: Upload) -> dict[str, Any]:
+        asset = self.db.get(Asset, up.asset_id) if up.asset_id else None
+        done: list[CompletedPart] = []
+        if up.status == "UPLOADING" and up.expires_at > self.c.clock.now():
+            try:
+                done = self.c.storage.list_parts(up.bucket, up.object_key, up.s3_upload_id)
+            except Exception:  # noqa: BLE001
+                done = []
+        out: dict[str, Any] = {
+            "upload_id": up.upload_id,
+            "ingest_status": asset.ingest_status if asset else "FAILED",
+            "parts_completed": up.part_count if up.status == "RECEIVED" else len(done),
+            "part_count": up.part_count, "error_code": up.error_code, "expires_at": iso(up.expires_at),
+            "created_at": iso(up.created_at),
+        }
+        if up.asset_id:
+            out["asset_id"] = up.asset_id
+        if up.status == "RECEIVED":
+            out["bytes_received"] = asset.byte_size if asset else up.declared_size
+        if asset is not None and asset.quarantine_reason:
+            out["quarantine_reason"] = asset.quarantine_reason
+        return out
+
+    def list_parts(self, up: Upload) -> dict[str, Any]:
+        self._expire_if_needed(up)
+        if up.status != "UPLOADING":
+            raise ProblemError("CONFLICT", detail="이미 완료된 업로드입니다")
+        try:
+            done = self.c.storage.list_parts(up.bucket, up.object_key, up.s3_upload_id)
+        except Exception:  # noqa: BLE001
+            raise ProblemError("STORAGE_UNAVAILABLE", headers={"Retry-After": "30"}) from None
+        got = {p.part_number for p in done}
+        pending = [n for n in range(1, up.part_count + 1) if n not in got]
+        sizes = {p.part_number: p for p in done}
+        return {"upload_id": up.upload_id, "part_size": up.part_size, "part_count": up.part_count,
+                "completed_parts": [{"part_number": n, "etag": sizes[n].etag,
+                                     "size": min(up.part_size, up.declared_size - (n - 1) * up.part_size)}
+                                    for n in sorted(got)],
+                "pending_parts": self._part_urls(up, pending), "expires_at": iso(up.expires_at)}
+
+    def abort(self, up: Upload) -> None:
+        if up.status != "UPLOADING":
+            raise ProblemError("CONFLICT", detail="진행 중인 업로드만 취소할 수 있습니다")
+        self._release(up, "ABORTED")
+
+    def complete(self, p: Principal, up: Upload, parts: list[dict[str, Any]]) -> dict[str, Any]:
+        self._expire_if_needed(up)
+        if up.status == "RECEIVED":
+            return self.upload_status(up)  # 같은 완료 요청 재시도
+        if up.status != "UPLOADING":
+            raise ProblemError("CONFLICT", detail="진행 중인 업로드가 아닙니다")
+        numbers = sorted(int(x["part_number"]) for x in parts)
+        if numbers != list(range(1, up.part_count + 1)):
+            raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/parts", "code": "incomplete_parts",
+                                                            "message": f"파트 1~{up.part_count}이 모두 필요합니다"}])
+        try:
+            self.c.storage.complete_multipart_upload(up.bucket, up.object_key, up.s3_upload_id,
+                                                     [CompletedPart(int(x["part_number"]), x["etag"]) for x in parts])
+        except Exception as exc:  # noqa: BLE001 - 잘못된 ETag·누락 파트
+            log.warning("complete_multipart_failed", extra={"error_type": type(exc).__name__})
+            raise ProblemError("CONFLICT", detail="파트 목록이 저장소와 맞지 않습니다 (GET .../parts로 확인)") from None
+        asset = self.db.get(Asset, up.asset_id)
+        assert asset is not None
+        asset.ingest_status = states.transition("ingest_status", asset.ingest_status, "RECEIVED", actor_roles(p))
+        asset.updated_at = up.updated_at = self.c.clock.now()
+        up.status = "RECEIVED"
+        self.db.flush()
+        self.c.queue.enqueue("integrity_verify", {"asset_id": asset.asset_id, "upload_id": up.upload_id},
+                             priority=10, organization_id=asset.organization_id,
+                             dedupe_key=f"integrity_verify:{asset.asset_id}:{up.upload_id}")
+        return self.upload_status(up)
+
+
+# ---------------------------------------------------------------- 무결성 검증 (워커)
+MAGIC = [
+    (4, b"ftyp", "video/mp4"),
+    (0, b"\x1aE\xdf\xa3", "video/x-matroska"),
+    (0, b"\xff\xd8\xff", "image/jpeg"),
+    (0, b"\x89PNG\r\n\x1a\n", "image/png"),
+    (0, b"%PDF", "application/pdf"),
+    (0, b"PK\x03\x04", "application/zip"),
+    (0, b"RIFF", "riff"),
+]
+FAMILY = {"video/mp4": {"video/mp4", "video/quicktime"}, "video/x-matroska": {"video/x-matroska", "video/webm"},
+          "image/jpeg": {"image/jpeg"}, "image/png": {"image/png"}, "application/pdf": {"application/pdf"},
+          "application/zip": {"application/zip"}, "riff": {"video/x-msvideo", "audio/wav", "image/webp"},
+          "text": {"text/csv", "application/json", "text/plain", "application/x-ndjson", "application/geo+json"}}
+
+
+def sniff(head: bytes) -> str | None:
+    """내용(매직 바이트)으로 형식을 판별한다 (security.md: 신고 MIME을 믿지 않는다)."""
+    for offset, sig, mime in MAGIC:
+        if head[offset:offset + len(sig)] == sig:
+            return mime
+    try:
+        head.decode("utf-8")
+        return "text" if head and b"\x00" not in head else None
+    except UnicodeDecodeError:
+        # 잘린 다중 바이트 문자일 수 있다
+        try:
+            head[:-3].decode("utf-8")
+            return "text"
+        except UnicodeDecodeError:
+            return None
+
+
+def mime_matches(detected: str | None, declared: str) -> bool:
+    return detected is not None and declared.split(";")[0].strip().lower() in FAMILY.get(detected, {detected})
+
+
+class IntegrityVerifier:
+    def __init__(self, c: Container) -> None:
+        self.c = c
+
+    def verify(self, asset_id: str) -> str:
+        with self.c.sessionmaker.begin() as db:
+            asset = db.execute(select(Asset).where(Asset.asset_id == asset_id).with_for_update()).scalar_one()
+            revalidate = asset.ingest_status == "VALIDATING" and asset.storage_zone == "QUARANTINE"
+            if asset.ingest_status == "RECEIVED":
+                asset.ingest_status = states.transition("ingest_status", "RECEIVED", "VALIDATING", {"SERVICE"})
+            elif not revalidate:
+                return asset.ingest_status  # 이미 처리됨 (작업 재실행)
+            bucket, key = self.c.settings.buckets[asset.storage_zone or "RAW"], asset.storage_key or ""
+            up = db.execute(select(Upload).where(Upload.asset_id == asset_id, Upload.status == "RECEIVED")
+                            .order_by(Upload.created_at.desc()).limit(1)).scalar_one_or_none()
+        # 스트리밍으로 다시 계산한다 (요구사항 4.2)
+        h = hashlib.sha256()
+        size = 0
+        head = b""
+        for chunk in self.c.storage.iter_object(bucket, key):
+            if len(head) < 4096:
+                head += chunk[:4096 - len(head)]
+            h.update(chunk)
+            size += len(chunk)
+        digest = h.hexdigest()
+        with self.c.sessionmaker.begin() as db:
+            asset = db.execute(select(Asset).where(Asset.asset_id == asset_id).with_for_update()).scalar_one()
+            reason = None
+            if digest != asset.checksum_sha256 or size != asset.byte_size:
+                reason = "CHECKSUM_MISMATCH"
+            else:
+                detected = sniff(head)
+                if detected is None:
+                    reason = "UNSUPPORTED_FORMAT"
+                elif not mime_matches(detected, asset.mime_type):
+                    reason = "MIME_MISMATCH"
+                elif asset.session_id is None:
+                    reason = "UNKNOWN_SESSION"
+            quota = Quota(self.c, db)
+            reserved = 0 if revalidate or up is None else up.reserved_bytes
+            if up is not None and not revalidate:
+                db.get(Upload, up.upload_id).reserved_bytes = 0  # type: ignore[union-attr]
+            if reason:
+                self._quarantine(db, asset, reason, bucket, key)
+                if not revalidate:
+                    quota.settle(asset.organization_id, reserved, to="quarantine", actual=size)
+                return "QUARANTINED"
+            if revalidate:  # 격리 존에서 정식 위치로 되돌리고 격리 사용량을 사용량으로 옮긴다
+                asset.quarantine_reason = None
+                zone = zone_for(asset.variant)
+                new_key = object_key(asset)
+                self.c.storage.move_object(bucket, key, self.c.settings.buckets[zone], new_key)
+                asset.storage_zone, asset.storage_key = zone, new_key
+                q = quota._row(asset.organization_id)
+                q.quarantine_bytes = max(0, q.quarantine_bytes - size)
+                q.used_bytes += size
+            asset.ingest_status = states.transition("ingest_status", "VALIDATING", "REGISTERED", {"SERVICE"})
+            asset.quality_status, asset.quality_reasons = evaluate(IngestService._fields(asset))
+            asset.updated_at = self.c.clock.now()
+            self._integrity_log(db, asset)
+            if not revalidate:  # 재검증은 위에서 격리 사용량을 사용량으로 옮겼다
+                quota.settle(asset.organization_id, reserved, to="used", actual=size)
+            if asset.data_type != "VIDEO":  # 프록시가 필요 없는 유형 (05번이 영상 프록시를 만든다)
+                asset.ingest_status = states.transition("ingest_status", "REGISTERED", "READY_PRIVATE", {"SERVICE"})
+            else:
+                self.c.queue.enqueue("make_proxy", {"asset_id": asset.asset_id}, organization_id=asset.organization_id,
+                                     dedupe_key=f"make_proxy:{asset.asset_id}")
+            return asset.ingest_status
+
+    def _quarantine(self, db: Session, asset: Asset, reason: str, bucket: str, key: str) -> None:
+        asset.ingest_status = states.transition("ingest_status", asset.ingest_status, "QUARANTINED", {"SERVICE"})
+        asset.quarantine_reason = reason
+        asset.updated_at = self.c.clock.now()
+        qbucket = self.c.settings.buckets["QUARANTINE"]
+        try:
+            if asset.storage_zone != "QUARANTINE":
+                self.c.storage.move_object(bucket, key, qbucket, key)  # 격리 존으로 옮긴다 (요구사항 5.2)
+            asset.storage_zone = "QUARANTINE"
+        except Exception as exc:  # noqa: BLE001 - 이동 실패해도 상태는 격리로 둔다 (재시도는 08번 정리 작업)
+            log.error("quarantine_move_failed", extra={"asset_id": asset.asset_id, "error_type": type(exc).__name__})
+        if reason not in ("UNKNOWN_SESSION", "MISSING_REQUIRED_METADATA"):
+            # 손상·형식 오류는 기본 30일 뒤 삭제 (domain.md 9장). 회차 미상·메타 누락은 자동 삭제하지 않는다
+            asset.retention_until = self.c.clock.now() + timedelta(days=self.c.settings.quarantine_retention_days)
+        uploader = (asset.ingest_context or {}).get("uploaded_by")
+        self.c.notifier.send(Notification(kind="upload.quarantined", organization_id=asset.organization_id,
+                                          subject="업로드 자산 격리", body=f"자산 {asset.asset_id}: {reason}",
+                                          data={"asset_id": asset.asset_id, "reason": reason, "uploader": uploader}))
+
+    def _integrity_log(self, db: Session, asset: Asset) -> None:
+        db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _INTEGRITY_LOCK})
+        prev = db.execute(text("SELECT entry_hash FROM integrity_log ORDER BY seq DESC LIMIT 1")).scalar() or GENESIS
+        registered_at = self.c.clock.now().replace(microsecond=0)
+        payload = f"{prev}|{asset.asset_id}|{asset.checksum_sha256}|{asset.byte_size}|{iso(registered_at)}"
+        db.add(IntegrityLogEntry(asset_id=asset.asset_id, checksum_sha256=asset.checksum_sha256,
+                                 byte_size=asset.byte_size, registered_at=registered_at, prev_hash=prev,
+                                 entry_hash=hashlib.sha256(payload.encode()).hexdigest()))
+        db.flush()
+
+
+def receipt(db: Session, asset: Asset) -> dict[str, Any] | None:
+    e = db.execute(select(IntegrityLogEntry).where(IntegrityLogEntry.asset_id == asset.asset_id)).scalar_one_or_none()
+    if e is None:
+        return None
+    return {"asset_id": asset.asset_id, "checksum_sha256": e.checksum_sha256, "byte_size": e.byte_size,
+            "registered_at": iso(e.registered_at), "integrity_log_entry_id": str(e.seq),
+            "integrity_entry_hash": e.entry_hash}

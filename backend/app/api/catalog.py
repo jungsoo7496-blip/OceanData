@@ -9,13 +9,13 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.api.deps import container, get_db, load_scoped, require
-from app.api.timefmt import iso
 from app.container import Container
 from app.db.models import Asset, Device, DevicePolicy, OrgEventCode
 from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services import contracts
 from app.services.tenant import scope_filter
+from app.timefmt import iso
 
 router = APIRouter()
 

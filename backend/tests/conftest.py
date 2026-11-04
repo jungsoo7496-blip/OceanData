@@ -147,3 +147,45 @@ def utcnow() -> datetime:
 
 def in_future(**kw: float) -> str:
     return (utcnow() + timedelta(**kw)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# ---- 실제 S3 API가 필요한 시험 (04번): TEST_S3_ENDPOINT(SeaweedFS 등)가 있으면 그것, 없으면 moto 서버
+@pytest.fixture(scope="session")
+def s3_endpoint() -> Iterator[dict[str, str]]:
+    endpoint = os.environ.get("TEST_S3_ENDPOINT")
+    if endpoint:
+        yield {"url": endpoint, "key": os.environ.get("TEST_S3_ACCESS_KEY", "dev-access"),
+               "secret": os.environ.get("TEST_S3_SECRET_KEY", "change-me-s3")}
+        return
+    from moto.server import ThreadedMotoServer
+
+    server = ThreadedMotoServer(ip_address="127.0.0.1", port=0)
+    server.start()
+    host, port = server.get_host_and_port()
+    yield {"url": f"http://{host}:{port}", "key": "test-access", "secret": "test-secret-value"}
+    server.stop()
+
+
+@pytest.fixture()
+def ictx(db_url: str, engine: Engine, s3_endpoint: dict[str, str]) -> Iterator[Ctx]:
+    from fastapi.testclient import TestClient
+
+    from app.adapters.s3_storage import S3Storage
+    from app.container import build_container
+    from app.main import create_app
+    from app.seed import seed
+
+    suffix = secrets.token_hex(3)
+    settings = test_settings(
+        db_url, s3_endpoint_url=s3_endpoint["url"], s3_access_key_id=s3_endpoint["key"],
+        s3_secret_access_key=s3_endpoint["secret"], upload_part_size=5 * 1024 * 1024,
+        **{f"bucket_{z}": f"t{suffix}-{z}" for z in ("raw", "proc", "evidence", "datasets", "quarantine")})
+    storage = S3Storage(settings)
+    for b in settings.buckets.values():
+        storage.ensure_bucket(b)
+    container = build_container(settings, engine=engine, storage=storage, identity=StaticIdentity(),
+                                notifier=LogNotifier())
+    with container.sessionmaker.begin() as db:
+        seed(db)
+    with TestClient(create_app(container), raise_server_exceptions=False) as client:
+        yield Ctx(client, container)
