@@ -116,6 +116,10 @@ def ingest_items(c: Container, db: Session, *, organization_id: str, device: Dev
         stmt = insert(OBS).values(chunk).on_conflict_do_nothing(index_elements=list(KEY_COLS)) \
             .returning(OBS.c.metric, OBS.c.observed_at, OBS.c.depth_m, OBS.c.channel)
         inserted |= {(r[0], r[1], r[2], r[3]) for r in db.execute(stmt)}
+    if inserted:  # 장비별 마지막 관측 (11번 요구사항 1.3)
+        from app.services.monitoring import touch_observations
+
+        touch_observations(db, organization_id, device.device_id, max(k[1] for k in inserted), now, clock_offset_ms)
     for i, n in pending:
         if n.key() in inserted:
             res.add(i, "ACCEPTED")

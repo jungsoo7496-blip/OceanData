@@ -41,7 +41,7 @@ inclusion: always
 
 ## 3. 이름 규칙
 - DB 테이블·컬럼, API JSON 필드: `snake_case`
-- ID: 접두사 + ULID(대문자 Crockford Base32 26자) — `org_` 기관, `prj_` 실증사업, `ses_` 실증회차, `dev_` 장비, `ast_` 자산, `upl_` 업로드, `evt_` 실증 이벤트, `shr_` 공유 신청, `dst_` 데이터셋, `dsv_` 데이터셋 버전, `acr_` 이용 신청, `grt_` 이용 권한, `dlv_` 배포, `job_` 작업, `rec_` 회차 기록, `rpt_` 보고서, `whk_` 웹훅 구독, `key_` API 키, `usr_` 사용자, `aud_` 감사 로그, `agr_` 기관 약정, `icd_` 연계 카드, `brk_` 긴급 열람 승인, `dlc_` 삭제 증명
+- ID: 접두사 + ULID(대문자 Crockford Base32 26자) — `org_` 기관, `prj_` 실증사업, `ses_` 실증회차, `dev_` 장비, `ast_` 자산, `upl_` 업로드, `evt_` 실증 이벤트, `shr_` 공유 신청, `dst_` 데이터셋, `dsv_` 데이터셋 버전, `acr_` 이용 신청, `grt_` 이용 권한, `dlv_` 배포, `job_` 작업, `rec_` 회차 기록, `rpt_` 보고서, `whk_` 웹훅 구독, `key_` API 키, `usr_` 사용자, `aud_` 감사 로그, `agr_` 기관 약정, `icd_` 연계 카드, `brk_` 긴급 열람 승인, `dlc_` 삭제 증명, `inc_` 수집 장애, `isp_` 정기 점검
 - 새 엔터티는 세 글자 접두사 + ULID로 만들고 이 목록과 `contracts/schemas/common.schema.json`에 함께 추가한다.
 - `X-Request-Id`는 접두사 없는 ULID다.
 - 시각 필드는 `_at` 접미사, UTC 저장

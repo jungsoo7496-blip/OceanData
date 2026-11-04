@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from sqlalchemy import update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -59,8 +60,13 @@ def seed(db: Session) -> None:
     _upsert(db, Organization, [{"organization_id": o, "name": n, "org_type": ty, "status": "ACTIVE",
                                 "created_at": t} for o, n, ty in ORGS], ["organization_id"])
     _upsert(db, User, [{"user_id": u, "organization_id": o, "username": n, "roles": r, "idp_subject": s,
-                        "status": "ACTIVE", "created_at": t, "updated_at": t} for u, o, n, r, s in USERS],
+                        "status": "ACTIVE", "contact_email": f"{n}@example.invalid", "created_at": t, "updated_at": t}
+                       for u, o, n, r, s in USERS],
             ["user_id"])
+    # 0008 이전에 만든 개발 DB: 시험 계정의 비어 있는 알림 주소만 채운다 (이미 있는 값은 두고)
+    for u, _o, n, _r, _s in USERS:
+        db.execute(update(User).where(User.user_id == u, User.contact_email.is_(None))
+                   .values(contact_email=f"{n}@example.invalid"))
     _upsert(db, Project, [
         {"project_id": PRJ_A, "organization_id": ORG_A, "name": "A 자율운항 선박 실증", "status": "ACTIVE",
          "created_at": t},

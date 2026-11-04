@@ -33,3 +33,21 @@ export const QUARANTINE_LABEL: Record<string, string> = {
   UNKNOWN_SESSION: '회차 미상', UNSUPPORTED_FORMAT: '지원하지 않는 형식', CORRUPT_FILE: '손상 파일',
   MIME_MISMATCH: '형식 불일치', MALWARE_SUSPECTED: '악성코드 의심',
 }
+
+// 감시 규칙 (11번). 코드값은 API, 화면은 한국어
+export const RULE_LABEL: Record<string, string> = {
+  HEARTBEAT_MISSING: '하트비트 무응답', INGEST_LAG: '수집 지연', SESSION_NO_DATA: '실증 예정일 무수집',
+  VOLUME_DROP: '수집량 급감', UPLOAD_FAILURE_RATE: '업로드 실패율', PROCESSING_BACKLOG: '처리 대기',
+  QUARANTINE_SURGE: '격리 급증', STORAGE_FORECAST: '용량 예측', OPENAPI_FAILURE: 'Open API 실패',
+  OBSERVATION_LAG: '관측값 지연', CLOCK_OFFSET: '시계 오차', LOCAL_DISK_LOW: '현장 저장 부족', HARDWARE_SIGNAL: '하드웨어 경고',
+}
+
+export const SEVERITY_COLOR: Record<string, string> = { INFO: 'blue', WARNING: 'orange', CRITICAL: 'red' }
+
+export function duration(s: number | null | undefined): string {
+  if (s == null) return '-'
+  if (s < 60) return `${s}초`
+  if (s < 3600) return `${Math.floor(s / 60)}분`
+  if (s < 86400) return `${Math.floor(s / 3600)}시간 ${Math.floor((s % 3600) / 60)}분`
+  return `${Math.floor(s / 86400)}일 ${Math.floor((s % 86400) / 3600)}시간`
+}

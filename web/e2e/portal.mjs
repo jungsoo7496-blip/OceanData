@@ -1,6 +1,6 @@
 // 포털 E2E + 접근성 자동 검사 (09번 요구사항 8, 11.2). make up && make seed 후:
 //   cd web && node e2e/portal.mjs [기본 URL]
-// Keycloak 시험 계정 member-a로 로그인 → 대시보드 → CSV 업로드 → 같은 파일 재선택(이미 등록) → 자산 목록.
+// Keycloak 시험 계정 member-a로 로그인 → 대시보드(장비별 수집 상태·경보) → CSV 업로드 → 같은 파일 재선택(이미 등록) → 자산 목록.
 // axe(@axe-core/playwright, MPL-2.0)로 주요 화면의 심각(critical) 위반이 없는지 본다.
 import { AxeBuilder } from '@axe-core/playwright'
 import { mkdtempSync, writeFileSync } from 'node:fs'
@@ -36,6 +36,8 @@ try {
   await page.click('#kc-login')
   await page.waitForURL('**/workspace', { timeout: 30000 })
   await page.getByText('누적 실증회차').waitFor()
+  await page.getByText('장비별 수집 상태').waitFor()
+  await page.getByText(/^경보 \d+건$/).waitFor()  // 11번: 자기 기관 경보와 조치 안내
   let critical = await axe('대시보드')
   await page.getByRole('link', { name: '업로드' }).click()
   await page.locator('.ant-select').first().click()

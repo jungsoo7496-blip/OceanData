@@ -107,3 +107,23 @@ def test_T01_consumer_sees_no_provider_context(ctx) -> None:
     h = ctx.as_user(109)
     for path in ("/v1/projects", "/v1/devices", "/v1/sessions", f"/v1/sessions/{SES_A}"):
         assert ctx.client.get(path, headers=h).status_code == 403, path
+
+
+def test_T01_a_cross_org_incident_update_and_list(ctx) -> None:
+    """11번 장애 기록: 다른 기관 장애는 목록에 없고, 바꾸려 하면 404 + 감사."""
+    import dataclasses
+    from datetime import UTC, datetime
+
+    from app.adapters.system_clock import FixedClock
+    from app.services import monitoring
+
+    c = dataclasses.replace(ctx.c, clock=FixedClock(datetime.now(UTC)))
+    with c.sessionmaker.begin() as db:  # 시드의 진행 중 회차(B)에 자료가 없어 B 장애가 열린다
+        monitoring.evaluate(c, db)
+    b_items = ctx.client.get("/v1/incidents", headers=ctx.as_user(103)).json()["items"]
+    assert b_items and all(i["organization_id"] == ORG_B for i in b_items)
+    assert all(i["organization_id"] != ORG_B for i in
+               ctx.client.get("/v1/incidents", headers=ctx.as_user(101)).json()["items"])
+    r = ctx.client.patch(f"/v1/incidents/{b_items[0]['incident_id']}", json={"memo": "x"}, headers=ctx.as_user(101))
+    assert r.status_code == 404
+    assert "CROSS_ORG_ACCESS_ATTEMPT" in ctx.audit_actions()

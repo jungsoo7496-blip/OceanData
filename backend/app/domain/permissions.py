@@ -70,6 +70,15 @@ PERMISSIONS: dict[str, Rule] = {
     "mapping:write": Rule(frozenset({"ORG_ADMIN", "PLATFORM_OPERATOR"})),
     "event:write": Rule(PROVIDER, scope="event:write"),
     "event:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
+    # 11 수집 모니터링
+    "ingest_status:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
+    "incident:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
+    "incident:update": Rule(frozenset({"ORG_ADMIN", "PLATFORM_OPERATOR"})),
+    "watch_rule:read": Rule(frozenset({"PLATFORM_OPERATOR"})),
+    "watch_rule:update": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),
+    "hardware_signal:write": Rule(frozenset({"PLATFORM_OPERATOR"})),
+    "inspection:read": Rule(frozenset({"PLATFORM_OPERATOR"})),
+    "inspection:write": Rule(frozenset({"PLATFORM_OPERATOR"})),
 }
 
 

@@ -43,6 +43,8 @@ class User(Base):
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), index=True)
     idp_subject: Mapped[str] = mapped_column(String(128), unique=True)
     username: Mapped[str] = mapped_column(String(120))
+    # 알림 수신 주소 (11번 요구사항 3). 알림 외 용도로 쓰지 않고 알림 본문에도 넣지 않는다
+    contact_email: Mapped[str | None] = mapped_column(String(254))
     roles: Mapped[list[str]] = mapped_column(ARRAY(String(30)))
     status: Mapped[str] = mapped_column(String(20), server_default="ACTIVE")
     created_at: Mapped[datetime] = mapped_column(TS)
@@ -610,3 +612,111 @@ class DailyTask(Base):
     name: Mapped[str] = mapped_column(String(60), primary_key=True)
     last_run_on: Mapped[datetime] = mapped_column(DateTime(timezone=False))
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+# ---- 11 수집 모니터링
+
+
+class SourceActivity(Base):
+    """장비별 마지막 수신 (11번 요구사항 1). 등록·관측 저장 때 갱신해 큰 표를 훑지 않는다."""
+
+    __tablename__ = "source_activity"
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ID, index=True)
+    last_registered_at: Mapped[datetime | None] = mapped_column(TS)
+    last_observation_at: Mapped[datetime | None] = mapped_column(TS)
+    last_observation_received_at: Mapped[datetime | None] = mapped_column(TS)
+    last_clock_offset_ms: Mapped[int | None] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(TS)
+
+
+class WatchRule(Base):
+    """감시 규칙 정책 표 (11번 요구사항 2). 임계값은 params에, 코드 수정 없이 조정한다."""
+
+    __tablename__ = "watch_rules"
+    rule_code: Mapped[str] = mapped_column(String(40), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean)
+    severity: Mapped[str] = mapped_column(String(10))
+    params: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    notify_org: Mapped[bool] = mapped_column(Boolean)
+    notify_operator: Mapped[bool] = mapped_column(Boolean)
+    channels: Mapped[list[str]] = mapped_column(JSONB)
+    realert_interval_s: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(TS)
+    updated_by: Mapped[str | None] = mapped_column(String(64))
+
+
+class WatchAlert(Base):
+    """규칙 위반 상태. 규칙+대상 하나당 한 행 (alert_key). 위반이 이어지는 동안 active."""
+
+    __tablename__ = "watch_alerts"
+    alert_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    rule_code: Mapped[str] = mapped_column(String(40))
+    organization_id: Mapped[str | None] = mapped_column(ID, index=True)
+    device_id: Mapped[str | None] = mapped_column(ID)
+    session_id: Mapped[str | None] = mapped_column(ID)
+    active: Mapped[bool] = mapped_column(Boolean)
+    first_seen_at: Mapped[datetime] = mapped_column(TS)
+    last_seen_at: Mapped[datetime] = mapped_column(TS)
+    last_notified_at: Mapped[datetime | None] = mapped_column(TS)
+    cleared_at: Mapped[datetime | None] = mapped_column(TS)
+    incident_id: Mapped[str | None] = mapped_column(ID)
+    detail: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+
+class Incident(Base):
+    """경보에서 만든 장애 기록 (11번 요구사항 4)."""
+
+    __tablename__ = "incidents"
+    __table_args__ = (Index("ix_incidents_org_opened", "organization_id", "opened_at"),)
+    incident_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    alert_key: Mapped[str] = mapped_column(String(200), index=True)
+    rule_code: Mapped[str] = mapped_column(String(40))
+    severity: Mapped[str] = mapped_column(String(10))
+    status: Mapped[str] = mapped_column(String(20))  # OPEN / ACKNOWLEDGED / RESOLVED
+    organization_id: Mapped[str | None] = mapped_column(ID)
+    device_id: Mapped[str | None] = mapped_column(ID)
+    session_id: Mapped[str | None] = mapped_column(ID)
+    summary: Mapped[str] = mapped_column(Text)
+    guidance: Mapped[str] = mapped_column(Text)
+    opened_at: Mapped[datetime] = mapped_column(TS)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(TS)
+    resolved_at: Mapped[datetime | None] = mapped_column(TS)
+    resolved_by: Mapped[str | None] = mapped_column(String(64))
+    assignee: Mapped[str | None] = mapped_column(String(120))
+    memo: Mapped[str | None] = mapped_column(Text)
+
+
+class HardwareSignalState(Base):
+    """하드웨어 신호의 최신 상태 (11번 요구사항 7). 실제 수집 어댑터는 하드웨어 확정 후."""
+
+    __tablename__ = "hardware_signals"
+    host: Mapped[str] = mapped_column(String(120), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), primary_key=True)
+    component: Mapped[str] = mapped_column(String(120), primary_key=True)
+    value: Mapped[float | None] = mapped_column(Float)
+    unit: Mapped[str | None] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(10))
+    detail: Mapped[str | None] = mapped_column(String(500))
+    observed_at: Mapped[datetime] = mapped_column(TS)
+    received_at: Mapped[datetime] = mapped_column(TS)
+
+
+class Inspection(Base):
+    """정기 점검 수행 기록 (11번 요구사항 6)."""
+
+    __tablename__ = "inspections"
+    __table_args__ = (UniqueConstraint("cycle", "period_key", name="cycle_period"),)
+    inspection_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    cycle: Mapped[str] = mapped_column(String(10))
+    period_key: Mapped[str] = mapped_column(String(12))
+    status: Mapped[str] = mapped_column(String(12))
+    assignee: Mapped[str | None] = mapped_column(String(120))
+    due_at: Mapped[datetime] = mapped_column(TS)
+    note: Mapped[str | None] = mapped_column(Text)
+    items: Mapped[list[Any]] = mapped_column(JSONB)
+    evidence: Mapped[list[Any]] = mapped_column(JSONB)
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+    completed_at: Mapped[datetime | None] = mapped_column(TS)
+    completed_by: Mapped[str | None] = mapped_column(String(64))

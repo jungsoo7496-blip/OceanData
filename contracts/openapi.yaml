@@ -1159,7 +1159,7 @@ paths:
     get:
       tags: [status]
       operationId: getIngestStatus
-      summary: 자기 기관 장비별 수집 상태
+      summary: 자기 기관 장비별 수집 상태 (운영자는 전체). 기관 범위는 인증 정보로만 정한다
       x-freeze: G1
       responses:
         '200':
@@ -1168,6 +1168,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/IngestStatus'}
         '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
 
   /v1/quality-reports:
     get:
@@ -1367,6 +1368,350 @@ paths:
               schema: {$ref: '#/components/schemas/DeletionCertificate'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/incidents:
+    get:
+      tags: [status]
+      operationId: listIncidents
+      summary: 수집 장애 기록 (제공기관은 자기 기관, 운영자는 전체)
+      x-freeze: G1
+      x-status: draft
+      parameters:
+        - name: status
+          in: query
+          schema: {enum: [OPEN, ACKNOWLEDGED, RESOLVED]}
+        - name: device_id
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+        - name: from
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        - name: to
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: 장애 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/Incident'}}
+                  next_cursor: {type: [string, 'null']}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /v1/incidents/{incident_id}:
+    parameters:
+      - name: incident_id
+        in: path
+        required: true
+        schema: {$ref: './schemas/common.schema.json#/$defs/incident_id'}
+    patch:
+      tags: [status]
+      operationId: updateIncident
+      summary: 장애 확인·해결·담당자·메모 (ORG_ADMIN·운영자)
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                status: {enum: [ACKNOWLEDGED, RESOLVED]}
+                assignee: {type: string, maxLength: 120}
+                memo: {type: string, maxLength: 2000}
+      responses:
+        '200':
+          description: 갱신된 장애
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Incident'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/watch-rules:
+    get:
+      tags: [status]
+      operationId: listWatchRules
+      summary: 감시 규칙과 임계값 (운영자)
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 규칙 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/WatchRule'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /v1/watch-rules/{rule_code}:
+    parameters:
+      - name: rule_code
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/WatchRuleCode'}
+    patch:
+      tags: [status]
+      operationId: updateWatchRule
+      summary: 감시 규칙 조정 (운영자, 다중 인증). 코드 수정 없이 임계값·대상·심각도를 바꾼다
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                enabled: {type: boolean}
+                severity: {$ref: './schemas/common.schema.json#/$defs/event_severity'}
+                params: {type: object, description: "규칙별 임계값. 알 수 없는 키는 400"}
+                notify_org: {type: boolean}
+                notify_operator: {type: boolean}
+                channels: {type: array, uniqueItems: true, items: {enum: [EMAIL, WEBHOOK]}}
+                realert_interval_s: {type: integer, minimum: 60}
+      responses:
+        '200':
+          description: 갱신된 규칙
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WatchRule'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/hardware-signals:
+    post:
+      tags: [status]
+      operationId: postHardwareSignals
+      summary: 하드웨어 상태 신호 수신 (운영자). 실제 수집 어댑터는 하드웨어 확정 후
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [signals]
+              properties:
+                signals:
+                  type: array
+                  minItems: 1
+                  maxItems: 500
+                  items: {$ref: '#/components/schemas/HardwareSignal'}
+      responses:
+        '202':
+          description: 받은 신호 수
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accepted]
+                properties:
+                  accepted: {type: integer, minimum: 0}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /v1/inspections/templates:
+    get:
+      tags: [status]
+      operationId: listInspectionTemplates
+      summary: 주기별 정기 점검 항목 (운영자)
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 점검 항목
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/InspectionItemTemplate'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /v1/inspections:
+    get:
+      tags: [status]
+      operationId: listInspections
+      summary: 정기 점검 기록 (운영자)
+      x-freeze: G1
+      x-status: draft
+      parameters:
+        - name: cycle
+          in: query
+          schema: {$ref: '#/components/schemas/InspectionCycle'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: 점검 기록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/Inspection'}}
+                  next_cursor: {type: [string, 'null']}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      tags: [status]
+      operationId: createInspection
+      summary: 점검 수행 기록 시작. 자동 확인 항목은 서버가 채운다
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [cycle, period_key]
+              properties:
+                cycle: {$ref: '#/components/schemas/InspectionCycle'}
+                period_key: {type: string, pattern: '^[0-9]{4}(-[0-9]{2}(-[0-9]{2})?|-W[0-9]{2}|-Q[1-4])?$', description: '2026-11-04 / 2026-W45 / 2026-11 / 2026-Q4 / 2026'}
+                assignee: {type: string, maxLength: 120}
+      responses:
+        '201':
+          description: 만든 점검 기록
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Inspection'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/inspections/{inspection_id}:
+    parameters:
+      - name: inspection_id
+        in: path
+        required: true
+        schema: {$ref: './schemas/common.schema.json#/$defs/inspection_id'}
+    get:
+      tags: [status]
+      operationId: getInspection
+      summary: 점검 기록 상세
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 점검 기록
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Inspection'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [status]
+      operationId: updateInspection
+      summary: 항목 결과·특이사항 기록, 완료 처리
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [item_code, result]
+                    properties:
+                      item_code: {type: string}
+                      result: {$ref: '#/components/schemas/InspectionResult'}
+                      note: {type: string, maxLength: 2000}
+                note: {type: string, maxLength: 4000}
+                complete: {type: boolean, description: "true면 모든 항목에 결과가 있어야 한다"}
+      responses:
+        '200':
+          description: 갱신된 점검 기록
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Inspection'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/inspections/{inspection_id}/evidence:
+    parameters:
+      - name: inspection_id
+        in: path
+        required: true
+        schema: {$ref: './schemas/common.schema.json#/$defs/inspection_id'}
+    post:
+      tags: [status]
+      operationId: addInspectionEvidence
+      summary: 증빙 파일 등록 — 단기 업로드 URL을 받는다 (evidence 버킷)
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [filename, byte_size, checksum_sha256]
+              properties:
+                filename: {type: string, maxLength: 200}
+                byte_size: {type: integer, minimum: 1, maximum: 104857600}
+                checksum_sha256: {$ref: './schemas/common.schema.json#/$defs/sha256'}
+                item_code: {type: string}
+      responses:
+        '201':
+          description: 업로드 URL
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [evidence_id, upload_url, expires_at]
+                properties:
+                  evidence_id: {type: string}
+                  upload_url: {type: string, format: uri}
+                  expires_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
 
   /v1/webhooks/subscriptions:
     get:
@@ -2101,6 +2446,111 @@ components:
           oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]
           description: 독립 백업에 남은 사본이 백업 보존 주기가 끝나 사라지는 날짜 (요구사항 5.2). 백업 대상이 아니면 null
 
+    WatchRuleCode:
+      enum: [HEARTBEAT_MISSING, INGEST_LAG, SESSION_NO_DATA, VOLUME_DROP, UPLOAD_FAILURE_RATE, PROCESSING_BACKLOG, QUARANTINE_SURGE, STORAGE_FORECAST, OPENAPI_FAILURE, OBSERVATION_LAG, CLOCK_OFFSET, LOCAL_DISK_LOW, HARDWARE_SIGNAL]
+
+    WatchRule:
+      type: object
+      required: [rule_code, enabled, severity, params, notify_org, notify_operator, channels, realert_interval_s]
+      properties:
+        rule_code: {$ref: '#/components/schemas/WatchRuleCode'}
+        description: {type: string}
+        enabled: {type: boolean}
+        severity: {$ref: './schemas/common.schema.json#/$defs/event_severity'}
+        params: {type: object}
+        notify_org: {type: boolean, description: 제공기관 ORG_ADMIN에게 알림}
+        notify_operator: {type: boolean}
+        channels: {type: array, items: {enum: [EMAIL, WEBHOOK]}}
+        realert_interval_s: {type: integer, minimum: 60}
+        data_source_ready: {type: boolean, description: "false면 아직 신호원이 없어 평가하지 않는다 (12번 Open API, 15번 엣지)"}
+        updated_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+
+    HardwareSignal:
+      type: object
+      additionalProperties: false
+      required: [host, kind, status, observed_at]
+      properties:
+        host: {type: string, maxLength: 120}
+        kind: {enum: [DISK, SMART, TEMPERATURE, POWER, UPS, OTHER]}
+        component: {type: string, maxLength: 120, description: '예: /dev/sda, gpu0'}
+        value: {type: [number, 'null']}
+        unit: {type: [string, 'null'], maxLength: 32}
+        status: {enum: [OK, WARNING, CRITICAL]}
+        detail: {type: string, maxLength: 500}
+        observed_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+
+    InspectionCycle:
+      enum: [DAILY, WEEKLY, MONTHLY, QUARTERLY, YEARLY]
+
+    InspectionResult:
+      enum: [PASS, FAIL, NOT_APPLICABLE, AUTO_UNAVAILABLE]
+
+    InspectionItemTemplate:
+      type: object
+      required: [cycle, item_code, title, auto]
+      properties:
+        cycle: {$ref: '#/components/schemas/InspectionCycle'}
+        item_code: {type: string}
+        title: {type: string}
+        auto: {type: boolean, description: 서버가 결과를 자동으로 채우는 항목}
+
+    Inspection:
+      type: object
+      required: [inspection_id, cycle, period_key, status, due_at, items, evidence, created_at]
+      properties:
+        inspection_id: {$ref: './schemas/common.schema.json#/$defs/inspection_id'}
+        cycle: {$ref: '#/components/schemas/InspectionCycle'}
+        period_key: {type: string}
+        status: {enum: [IN_PROGRESS, COMPLETED]}
+        assignee: {type: [string, 'null']}
+        due_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        note: {type: [string, 'null']}
+        items:
+          type: array
+          items:
+            type: object
+            required: [item_code, title, auto]
+            properties:
+              item_code: {type: string}
+              title: {type: string}
+              auto: {type: boolean}
+              result: {oneOf: [{$ref: '#/components/schemas/InspectionResult'}, {type: 'null'}]}
+              note: {type: [string, 'null']}
+              auto_detail: {type: [object, 'null']}
+        evidence:
+          type: array
+          items:
+            type: object
+            required: [evidence_id, filename, byte_size, checksum_sha256]
+            properties:
+              evidence_id: {type: string}
+              item_code: {type: [string, 'null']}
+              filename: {type: string}
+              byte_size: {type: integer}
+              checksum_sha256: {$ref: './schemas/common.schema.json#/$defs/sha256'}
+        created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        completed_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+        completed_by: {type: [string, 'null']}
+
+    Incident:
+      type: object
+      required: [incident_id, rule_code, severity, status, opened_at, summary]
+      properties:
+        incident_id: {$ref: './schemas/common.schema.json#/$defs/incident_id'}
+        organization_id: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/organization_id'}, {type: 'null'}]}
+        device_id: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/device_id'}, {type: 'null'}]}
+        session_id: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/session_id'}, {type: 'null'}]}
+        rule_code: {$ref: '#/components/schemas/WatchRuleCode'}
+        severity: {$ref: './schemas/common.schema.json#/$defs/event_severity'}
+        status: {enum: [OPEN, ACKNOWLEDGED, RESOLVED]}
+        summary: {type: string}
+        guidance: {type: string, description: 조치 안내}
+        opened_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        acknowledged_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+        resolved_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+        assignee: {type: [string, 'null']}
+        memo: {type: [string, 'null']}
+
     Project:
       type: object
       required: [project_id, name, status]
@@ -2242,6 +2692,15 @@ components:
         last_observation_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
         expected_interval_s: {type: [integer, 'null']}
         lag_s: {type: [integer, 'null'], description: 현재 시각 − 마지막 정상 등록(관측값 장비는 마지막 관측) 시각}
+        organization_id: {$ref: './schemas/common.schema.json#/$defs/organization_id'}
+        name: {type: string}
+        kind: {enum: [COLLECTOR, SOURCE]}
+        heartbeat_lag_s: {type: [integer, 'null']}
+        observation_lag_s: {type: [integer, 'null'], description: "현재 시각 − 마지막 관측 시각 (관측값 장비만)"}
+        next_expected_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}], description: "마지막 수신 + 기대 수집 주기"}
+        clock_offset_ms: {type: [integer, 'null']}
+        policy_mismatch: {type: boolean, description: 하트비트의 적용 정책 버전이 서버 현재 버전과 다름}
+        disk_free_bytes: {type: [integer, 'null']}
 
     SchemaIndex:
       type: object
@@ -2511,6 +2970,17 @@ components:
       properties:
         generated_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
         devices: {type: array, items: {$ref: '#/components/schemas/AgentHealth'}}
+        open_incidents: {type: array, items: {$ref: '#/components/schemas/Incident'}, description: 열린 장애와 조치 안내}
+        top_failure_reasons:
+          type: array
+          description: 최근 24시간 실패 원인 상위 (격리 사유·업로드 오류·처리 오류)
+          items:
+            type: object
+            required: [source, code, count]
+            properties:
+              source: {enum: [QUARANTINE, UPLOAD, PROCESSING, AGENT]}
+              code: {type: string}
+              count: {type: integer, minimum: 1}
 
     QualityReport:
       type: object

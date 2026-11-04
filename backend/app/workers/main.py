@@ -146,6 +146,37 @@ def maintenance(c: Container) -> None:
         {"executed": [x.certificate_id for x in retention.execute_expired(c, db, c.clock.now())]}
         if c.settings.retention_auto_execute else retention.dry_run(db, c.clock.now())))
     retention.run_daily(c, "quota_reconcile", lambda db: {"diffs": retention.reconcile(c, db)})
+    # 하루 한 번: 기한 지난 정기 점검 알림 (11번 요구사항 6.3)
+    from app.services import inspections
+
+    retention.run_daily(c, "inspection_overdue",
+                        lambda db: {"overdue": inspections.notify_overdue(c, db, c.clock.now())})
+
+
+def watch(c: Container) -> Any:
+    """감시 규칙 평가 (11번). 워커가 여럿이어도 한 번에 하나만 평가한다."""
+    from sqlalchemy import text
+
+    from app.metrics import INCIDENTS_OPENED, INGEST_LAG, WATCH_ACTIVE, WATCH_EVALS
+    from app.services import monitoring
+
+    with c.sessionmaker.begin() as db:
+        if not db.execute(text("SELECT pg_try_advisory_xact_lock(hashtext('watch_rules'))")).scalar():
+            return None
+        res = monitoring.evaluate(c, db)
+    WATCH_EVALS.inc()
+    for code in monitoring.RULES:
+        WATCH_ACTIVE.labels(code).set(res.active_by_rule.get(code, 0))
+    for code in res.opened_rules:
+        INCIDENTS_OPENED.labels(code).inc()
+    INGEST_LAG.clear()
+    for h in res.health:
+        if h["lag_s"] is not None:
+            INGEST_LAG.labels(h["organization_id"], h["device_id"], h["kind"]).set(h["lag_s"])
+    if res.opened or res.resolved:
+        log.info("watch_evaluated", extra={"opened": len(res.opened), "resolved": len(res.resolved),
+                                           "reminded": len(res.reminded)})
+    return res
 
 
 def main() -> None:
@@ -163,21 +194,22 @@ def main() -> None:
     signal.signal(signal.SIGINT, _stop)
     log.info("worker_started", extra={"worker_id": worker_id, "job_types": sorted(HANDLERS),
                                       "resource_classes": settings.worker_resource_classes})
-    last_depth = last_sweep = last_maint = 0.0
+    last_depth = 0.0
+    periodic: list[tuple[float, Callable[[], Any], str]] = [
+        (300, lambda: sweep(c), "sweep"),
+        (settings.job_lease_reap_interval_s, lambda: maintenance(c), "maintenance"),
+        (settings.watch_eval_interval_s, lambda: watch(c), "watch"),  # 11번 감시 규칙
+    ]
+    last_run = {name: 0.0 for _, _, name in periodic}
     while not stopping["flag"]:
         now = time.monotonic()
-        for interval, fn, name in ((300, lambda: sweep(c), "sweep"),
-                                   (settings.job_lease_reap_interval_s, lambda: maintenance(c), "maintenance")):
-            last = last_sweep if name == "sweep" else last_maint
-            if now - last > interval:
+        for interval, fn, name in periodic:
+            if now - last_run[name] > interval:
                 try:
                     fn()
                 except Exception as exc:  # noqa: BLE001 - 정리 실패가 작업 처리를 막지 않게
                     log.error(f"{name}_failed", exc_info=exc)
-                if name == "sweep":
-                    last_sweep = now
-                else:
-                    last_maint = now
+                last_run[name] = now
         if now - last_depth > 10:
             for jt, n in c.queue.depth_by_type().items():
                 JOBS_QUEUED.labels(jt).set(n)

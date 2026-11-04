@@ -9,7 +9,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.adapters.keycloak_identity import KeycloakIdentity
-from app.adapters.notifier import LogNotifier
+from app.adapters.notifier import LogNotifier, SmtpNotifier
 from app.adapters.pg_queue import PgQueue
 from app.adapters.s3_storage import S3Storage
 from app.adapters.system_clock import SystemClock
@@ -48,7 +48,9 @@ def build_container(settings: Settings, **overrides: Any) -> Container:
         storage=overrides.get("storage") or S3Storage(settings),
         identity=identity,
         queue=overrides.get("queue") or PgQueue(engine, clock),
-        notifier=overrides.get("notifier") or LogNotifier(),
+        notifier=overrides.get("notifier") or (
+            SmtpNotifier(settings.smtp_host, settings.smtp_port, settings.mail_from) if settings.smtp_host
+            else LogNotifier()),
         audit=AuditLogger(engine, clock),
         machine_tokens=machine,
         authenticator=Authenticator(identity, machine, clock),

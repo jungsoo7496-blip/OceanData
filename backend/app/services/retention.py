@@ -67,9 +67,11 @@ def usage_view(q: OrgQuota) -> dict[str, Any]:
 
 
 def org_admins(db: Session, org: str) -> tuple[str, ...]:
-    rows = db.execute(select(User.username).where(User.organization_id == org, User.status == "ACTIVE",
-                                                  User.roles.any("ORG_ADMIN"))).scalars()  # type: ignore[arg-type]
-    return tuple(sorted(rows))
+    """ORG_ADMIN 알림 수신 주소 (주소가 등록된 사람만)."""
+    rows = db.execute(select(User.contact_email).where(
+        User.organization_id == org, User.status == "ACTIVE", User.contact_email.is_not(None),
+        User.roles.any("ORG_ADMIN"))).scalars()  # type: ignore[arg-type]
+    return tuple(sorted(r for r in rows if r))
 
 
 def check_quota_alerts(c: Container, db: Session, q: OrgQuota) -> None:

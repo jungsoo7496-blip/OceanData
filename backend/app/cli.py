@@ -28,6 +28,14 @@ def main(argv: list[str] | None = None) -> int:
     vi.add_argument("--sample", type=int, default=None)
     ec = sub.add_parser("enrollment-code", help="운영자 대리 등록 코드 발급 (감사 기록, 화면은 09번)")
     ec.add_argument("device_id")
+    sub.add_parser("watch", help="감시 규칙을 한 번 평가하고 열린 경보를 출력 (11번, 워커가 주기적으로 한다)")
+    hw = sub.add_parser("hardware-signal", help="모의 하드웨어 신호 넣기 (11번 요구사항 7.2, 실제 어댑터 전 시험용)")
+    hw.add_argument("--host", default="storage-01")
+    hw.add_argument("--kind", default="DISK", choices=["DISK", "SMART", "TEMPERATURE", "POWER", "UPS", "OTHER"])
+    hw.add_argument("--component", default="")
+    hw.add_argument("--status", default="WARNING", choices=["OK", "WARNING", "CRITICAL"])
+    hw.add_argument("--value", type=float, default=None)
+    hw.add_argument("--unit", default=None)
     args = parser.parse_args(argv)
 
     settings = get_settings()
@@ -76,6 +84,25 @@ def main(argv: list[str] | None = None) -> int:
         for a in rep.missing_objects:
             print(f"객체 없음: {a}", file=sys.stderr)
         return 0 if rep.ok else 1
+    if args.cmd == "watch":
+        from app.services import monitoring
+
+        with c.sessionmaker.begin() as db:
+            res = monitoring.evaluate(c, db)
+        print(f"새 경보 {len(res.opened)}건, 재알림 {len(res.reminded)}건, 해제 {len(res.resolved)}건")
+        for code, n in sorted(res.active_by_rule.items()):
+            print(f"  {code}: {n}")
+        return 0
+    if args.cmd == "hardware-signal":
+        from app.api.monitoring import Signal, store_signals
+        from app.timefmt import iso
+
+        sig = Signal(host=args.host, kind=args.kind, component=args.component or None, status=args.status,
+                     value=args.value, unit=args.unit, detail=None, observed_at=iso(c.clock.now()) or "")
+        with c.sessionmaker.begin() as db:
+            store_signals(db, [sig], c.clock.now())
+        print(f"신호 저장: {args.host} {args.kind} {args.status} (다음 감시 평가 때 반영)")
+        return 0
     if args.cmd == "verify-audit":
         report = c.audit.verify_chain()
         if report.ok:

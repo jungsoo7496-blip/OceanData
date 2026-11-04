@@ -20,3 +20,10 @@ PIPELINE_FRAMES = Counter("worker_frames_processed_total", "처리한 영상 프
                           ["job_type"], registry=WORKER_REGISTRY)
 PIPELINE_SECONDS = Counter("worker_frame_processing_seconds_total", "프레임 처리에 쓴 시간", ["job_type"],
                            registry=WORKER_REGISTRY)
+
+# 수집 모니터링 (11번 요구사항 8.1) — 워커가 규칙을 평가할 때 갱신
+INGEST_LAG = Gauge("ingest_lag_seconds", "장비별 수집 지연 (현재 − 마지막 정상 등록·관측)",
+                   ["organization_id", "device_id", "kind"], registry=WORKER_REGISTRY)
+WATCH_ACTIVE = Gauge("watch_alerts_active", "규칙별 활성 경보 수", ["rule_code"], registry=WORKER_REGISTRY)
+WATCH_EVALS = Counter("watch_evaluations_total", "감시 규칙 평가 횟수", registry=WORKER_REGISTRY)
+INCIDENTS_OPENED = Counter("incidents_opened_total", "규칙별 새 장애 기록 수", ["rule_code"], registry=WORKER_REGISTRY)

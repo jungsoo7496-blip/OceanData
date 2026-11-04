@@ -1,7 +1,7 @@
 # 인수인계 (클라우드 → 로컬)
 
 이 파일은 클라우드 세션에서 만든 작업을 로컬에서 이어가기 위한 안내다. 작업이 진행될 때마다 갱신한다.
-최종 갱신: 2026-11-04 (04번 핵심까지)
+최종 갱신: 2026-11-04 (11번 수집 모니터링까지)
 
 ## 1. 지금 상태 한눈에
 | 스펙 | 상태 | 남은 것 (자세히는 각 tasks.md) |
@@ -16,9 +16,10 @@
 | 07 센서·이벤트 | 핵심 완료 | 겹침 자산 조회 API, MQTT 계정 보안 저장, 하위코드 등록 API |
 | 08 저장·보존 | 일부 완료 | 보존·법적 보류·삭제 증명·쿼터 알림·사용량·일일 대조 완료. 백업·복원 시험(PoC 후)·Hot/Warm·용량 예측·SSE·월간 리포트 남음 |
 | 09 포털 | 핵심 화면 완료 | 온보딩 마법사, 회차 타임라인, 클립 내보내기, 운영 콘솔 편집, 접근성 CI |
-| 10~17 | 시작 전 | 다음 추천: 10(증빙·보고서) → 11(수집 모니터링) → 13(공유·데이터셋) |
+| 11 수집 모니터링 | 핵심 완료 | 감시 규칙 13종·장애 기록·메일/웹훅 알림·정기 점검·하드웨어 모의 신호·T07 완료. Open API 실패 신호원(12번), 운영 메신저, 실제 하드웨어 어댑터 남음 |
+| 10, 12~17 | 시작 전 | 다음 추천: 10(증빙·보고서) → 13(공유·데이터셋) → 12(Open API) |
 
-**시험:** 백엔드 120건 + 에이전트(Go) 8개 패키지 통과 (MQTT 시험은 MQTT_TEST_BROKER 필요) (`cd backend && pytest`) — 단위 52, 통합·계약 24, T01 수용 15.
+**시험:** 백엔드 145건(단위·통합·계약·수용 T01·T07) + 에이전트(Go) 8개 패키지 통과 (MQTT 시험은 MQTT_TEST_BROKER 필요) (`cd backend && pytest`).
 수집 시험은 moto S3 서버와 실제 SeaweedFS(`TEST_S3_ENDPOINT`) 양쪽에서 통과.
 **개발 환경:** `make up` 7개 서비스 healthy. 실제 Keycloak 로그인 → 업로드 생성 → localhost:8333 사전 서명 URL로 파트 전송 → 워커 무결성 검증 → READY_PRIVATE → 영수증까지 확인.
 
@@ -45,7 +46,7 @@ make test-acceptance          # T01 수용시험
 로컬 저장소에서 `claude`를 실행하고 이렇게 시작하면 된다.
 
 ```
-HANDOFF.md, AGENTS.md, .kiro/steering/*.md를 읽고 03-metadata-standard를 이어서 진행해줘.
+HANDOFF.md, AGENTS.md, .kiro/steering/*.md를 읽고 10-evidence-reports를 이어서 진행해줘.
 requirements.md를 기준으로 design.md와 tasks.md를 먼저 쓰고, 계약(contracts/)부터 고친 다음 구현해.
 ```
 
@@ -83,14 +84,21 @@ tools/         validate_contracts.py, check_traceability.py, check_licenses.py, 
 | PSF-2.0 라이선스 예외 | typing_extensions·greenlet(FastAPI·SQLAlchemy 필수 의존성). 승인 전까지 검사는 경고만 | `docs/adr/0011-psf-license-exception.md` |
 | Keycloak MFA 방식 | OTP 로그인 시 `acr`/`amr` 클레임이 나오게 단계 인증을 설정할지 | `deploy/compose/keycloak/README.md` |
 | 구성원 초대 방식 | 플랫폼이 Keycloak 관리 API로 사용자를 만들지, IdP에서 만들고 연결만 할지 | 02번 tasks 12 |
+| 감시 규칙 기본 임계값 | 하트비트 3배·최소 5분, 지연 3배, 회차 2시간 유예·48시간 창, 현장 디스크 10GiB 등은 초안. 시범 운영 후 조정 (`PATCH /v1/watch-rules`) | 11번 design.md |
+| 운영 메신저·알림 주소 | 알림은 메일(SMTP)+일반 웹훅만. 메신저 종류, 사용자 메일 주소를 IdP에서 가져올지 | ADR-0017, 11번 tasks 8 |
 | 기존 결정 대기 | 전자정부 프레임워크 요구 여부, 운영 스토리지, 배포 형태 등 | `.kiro/steering/tech.md` 5장 |
 
 ## 6. 이번에 내린 설계 결정 (ADR)
 - ADR-0011 PSF-2.0 예외 (승인 대기)
 - ADR-0012 PostgreSQL 드라이버 pg8000 (psycopg는 LGPL이라 허용 목록 밖)
 - ADR-0013 기기·API 키 토큰은 자체 발급 JWT, 폐기는 매 요청 DB 확인으로 즉시 반영
+- ADR-0014 작업 큐는 PostgreSQL SKIP LOCKED 자체 구현 (procrastinate는 psycopg LGPL)
+- ADR-0015 관측값 매핑 프로필 형식
+- ADR-0016 웹 포털 의존성 (Uppy ARIA 알려진 문제)
+- ADR-0017 수집 경보 상태·장애 자동 해결·ACK 시 재알림 중지·알림 수신 주소(`users.contact_email`)
 
 ## 7. 알아 둘 점
 - 감사 로그(audit_log)는 트리거로 수정·삭제가 막혀 있다. 개발 DB를 비우려면 `make down` 후 볼륨 삭제(`docker compose ... down -v`).
 - 통합 시험은 `TEST_DATABASE_URL`의 DB 서버에 임시 DB를 만들고 끝나면 지운다. `make up`의 postgres(5432)를 쓰면 된다.
+- 알림 메일 확인: `.env`에 `SMTP_HOST=mailpit` 후 `docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile ops up -d mailpit`, 받은 메일은 http://localhost:8025. 워커가 `WATCH_EVAL_INTERVAL_S`마다 감시 규칙을 평가한다. 수동 평가: `python -m app.cli watch`, 모의 하드웨어 신호: `python -m app.cli hardware-signal --status CRITICAL`.
 - `.github/workflows/ci.yml`은 GitHub에 push하면 돈다. 클라우드 세션에서는 아직 GitHub Actions 결과를 확인하지 못했다.

@@ -147,7 +147,7 @@ def test_quota_alerts_usage_and_reconcile(ictx) -> None:
                   "checksum_sha256": hashlib.sha256(data).hexdigest()}, "client": {"kind": "API", "version": "t"}}
     assert ictx.client.post("/v1/uploads", json=m, headers=ictx.as_user(102)).status_code == 201
     alerts = [n for n in ictx.c.notifier.sent if n.kind == "quota.threshold"]
-    assert [n.data["threshold"] for n in alerts] == [80] and alerts[0].recipients == ("admin-a",)
+    assert [n.data["threshold"] for n in alerts] == [80] and alerts[0].recipients == ("admin-a@example.invalid",)
     u = ictx.client.get("/v1/usage", headers=ictx.as_user(102))
     check(u, "GET", "/v1/usage")
     item = u.json()["items"][0]

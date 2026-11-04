@@ -1,25 +1,20 @@
-"""에이전트 하트비트·원격 상태 (04번 요구사항 11.2, 11.3). 지연 판정·경보 규칙은 11번 스펙."""
+"""에이전트 하트비트·원격 상태 (04번 요구사항 11.2, 11.3). 상태 판정은 services/monitoring (11번)."""
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from fastapi import APIRouter, Body, Depends, Request, Response
-from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.api.deps import container, get_db, load_scoped, require
 from app.container import Container
-from app.db.models import AgentStatus, Asset, Device, DevicePolicy, IntegrityLogEntry
+from app.db.models import AgentStatus, Device
 from app.domain.normalize import parse_rfc3339
 from app.domain.principal import Principal
 from app.errors import ProblemError
-from app.services import contracts
-from app.timefmt import iso
+from app.services import contracts, monitoring
 
 router = APIRouter(tags=["agents"])
-STALE_FACTOR = 3  # 하트비트 주기의 3배가 지나면 STALE (11번에서 정책값으로 옮긴다)
 
 
 @router.post("/v1/agents/heartbeat", status_code=204)
@@ -56,33 +51,9 @@ def get_agent_health(device_id: str, request: Request, db: Session = Depends(get
     device = load_scoped(db, c, request, Device, device_id, p)
     if device.kind != "COLLECTOR":
         raise ProblemError("NOT_FOUND", detail="원격 상태는 수집기 단위입니다")
-    now = c.clock.now()
-    st = db.get(AgentStatus, device.device_id)
-    policy = db.execute(select(DevicePolicy).where(DevicePolicy.device_id == device.device_id)
-                        .order_by(DevicePolicy.version.desc()).limit(1)).scalar_one_or_none()
-    current = (policy.policy if policy else {}).get("policy_version", "pv-0")
-    interval = int((policy.policy if policy else {}).get("heartbeat_interval_s", 60))
-    sources = select(Device.device_id).where((Device.collector_device_id == device.device_id) |
-                                             (Device.device_id == device.device_id))
-    last_registered: datetime | None = db.execute(
-        select(func.max(IntegrityLogEntry.registered_at)).join(Asset, Asset.asset_id == IntegrityLogEntry.asset_id)
-        .where(Asset.source_system_id.in_(sources))).scalar()
-    if st is None:
-        status = "NEVER_SEEN"
-    elif st.last_error_code:
-        status = "ERROR"
-    elif (now - st.last_heartbeat_at).total_seconds() > STALE_FACTOR * interval:
-        status = "STALE"
-    else:
-        status = "OK"
-    return {
-        "device_id": device.device_id, "status": status,
-        "last_heartbeat_at": iso(st.last_heartbeat_at) if st else None,
-        "last_success_at": iso(st.last_success_at) if st else None,
-        "queue_items": st.queue_items if st else 0, "queue_bytes": st.queue_bytes if st else 0,
-        "last_error_code": st.last_error_code if st else None,
-        "policy_version_applied": st.policy_version if st else None, "policy_version_current": current,
-        "open_alerts": 0, "last_registered_at": iso(last_registered), "last_observation_at": None,
-        "expected_interval_s": device.expected_interval_s,
-        "lag_s": int((now - last_registered).total_seconds()) if last_registered else None,
-    }
+    h = monitoring.device_health(db, [device], c.clock.now())[0]
+    keys = ("device_id", "status", "last_heartbeat_at", "last_success_at", "queue_items", "queue_bytes",
+            "last_error_code", "policy_version_applied", "policy_version_current", "open_alerts",
+            "last_registered_at", "last_observation_at", "expected_interval_s", "lag_s", "heartbeat_lag_s",
+            "clock_offset_ms", "policy_mismatch", "disk_free_bytes", "next_expected_at")
+    return {k: h[k] for k in keys}

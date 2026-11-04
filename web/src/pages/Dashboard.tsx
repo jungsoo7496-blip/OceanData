@@ -1,9 +1,11 @@
-// Workspace 대시보드 (09번 요구사항 2): 회차 수, 사용량·쿼터, 장비별 하트비트·마지막 수집, 최근 격리, 처리 대기.
-import { useQuery, useQueries } from '@tanstack/react-query'
+// Workspace 대시보드 (09번 요구사항 2, 11번 요구사항 5.2): 회차 수, 사용량·쿼터, 장비별 수집 상태, 경보·조치 안내,
+// 최근 격리, 처리 대기.
+import { useQuery } from '@tanstack/react-query'
 import { Badge, Card, Col, List, Progress, Row, Statistic, Table, Tag, Typography } from 'antd'
+import { IncidentTable } from '../components/Incidents'
 import { Link } from 'react-router-dom'
-import { api, type AgentHealth, type Asset, type Device, type Me, type OrgUsage, type Page, type Session } from '../lib/api'
-import { bytes, kst, QUARANTINE_LABEL } from '../lib/format'
+import { api, type AgentHealth, type Asset, type IngestStatus, type Me, type OrgUsage, type Page, type Session } from '../lib/api'
+import { bytes, duration, kst, QUARANTINE_LABEL } from '../lib/format'
 
 const HEALTH: Record<string, { status: 'success' | 'warning' | 'error' | 'default'; text: string }> = {
   OK: { status: 'success', text: '정상' },
@@ -15,7 +17,8 @@ const HEALTH: Record<string, { status: 'success' | 'warning' | 'error' | 'defaul
 export function Dashboard({ me }: { me: Me }) {
   const sessions = useQuery({ queryKey: ['sessions'], queryFn: () => api<Page<Session>>('/v1/sessions?limit=500') })
   const usage = useQuery({ queryKey: ['usage'], queryFn: () => api<{ items: OrgUsage[] }>('/v1/usage') })
-  const devices = useQuery({ queryKey: ['devices'], queryFn: () => api<Page<Device>>('/v1/devices?limit=500') })
+  const status = useQuery({ queryKey: ['ingest-status'], queryFn: () => api<IngestStatus>('/v1/ingest-status'),
+    refetchInterval: 60_000 })
   const quarantined = useQuery({
     queryKey: ['assets', 'QUARANTINED'],
     queryFn: () => api<Page<Asset>>('/v1/assets?ingest_status=QUARANTINED&limit=20'),
@@ -28,13 +31,8 @@ export function Dashboard({ me }: { me: Me }) {
       return lists.reduce((n, l) => n + l.items.length, 0)
     },
   })
-  const collectors = (devices.data?.items ?? []).filter((d) => d.kind === 'COLLECTOR')
-  const health = useQueries({
-    queries: collectors.map((d) => ({
-      queryKey: ['health', d.device_id],
-      queryFn: () => api<AgentHealth>(`/v1/agents/${d.device_id}/health`),
-    })),
-  })
+  const devices = status.data?.devices ?? []
+  const incidents = status.data?.open_incidents ?? []
   const u = usage.data?.items[0]
   return (
     <Row gutter={[16, 16]}>
@@ -48,22 +46,28 @@ export function Dashboard({ me }: { me: Me }) {
       </Col>
       <Col xs={24} md={6}><Card><Statistic title="처리 대기" value={pending.data ?? '-'} /></Card></Col>
       <Col xs={24} md={6}><Card><Statistic title="격리" value={quarantined.data?.items.length ?? '-'} /></Card></Col>
+      <Col span={24}>
+        <Card title={`경보 ${incidents.length}건`} extra={<Typography.Text type="secondary">행을 펼치면 조치 안내가 보입니다</Typography.Text>}>
+          <IncidentTable items={incidents} canEdit={me.roles.includes('ORG_ADMIN')} loading={status.isLoading} />
+        </Card>
+      </Col>
       <Col xs={24} lg={14}>
-        <Card title="수집기 상태">
-          <Table rowKey="device_id" size="small" pagination={false} dataSource={collectors}
+        <Card title="장비별 수집 상태">
+          <Table<AgentHealth> rowKey="device_id" size="small" pagination={false} dataSource={devices} loading={status.isLoading}
             columns={[
-              { title: '수집기', dataIndex: 'name' },
-              { title: '상태', key: 'h', render: (_, _d, i) => {
-                const h = health[i]?.data
-                const s = HEALTH[h?.status ?? 'NEVER_SEEN']
+              { title: '장비', key: 'n', render: (_, h) => <span>{h.name} <Typography.Text type="secondary">{h.kind === 'COLLECTOR' ? '수집기' : '원천'}</Typography.Text></span> },
+              { title: '상태', key: 'h', render: (_, h) => {
+                const s = HEALTH[h.status] ?? HEALTH.NEVER_SEEN
                 return <Badge status={s.status} text={s.text} />
               } },
-              { title: '마지막 하트비트', key: 'hb', render: (_, _d, i) => kst(health[i]?.data?.last_heartbeat_at) },
-              { title: '마지막 수집', key: 'reg', render: (_, _d, i) => kst(health[i]?.data?.last_registered_at) },
-              { title: '대기', key: 'q', render: (_, _d, i) => health[i]?.data?.queue_items ?? '-' },
+              { title: '마지막 하트비트', dataIndex: 'last_heartbeat_at', render: kst },
+              { title: '마지막 수신', key: 'reg', render: (_, h) => kst(h.last_observation_at ?? h.last_registered_at) },
+              { title: '지연', dataIndex: 'lag_s', render: duration },
+              { title: '대기', dataIndex: 'queue_items' },
+              { title: '경보', dataIndex: 'open_alerts', render: (n: number) => (n ? <Tag color="red">{n}</Tag> : '-') },
             ]} />
           <Typography.Paragraph type="secondary" style={{ marginTop: 8 }}>
-            수집 끊김 판정 규칙은 11번 수집 모니터링에서 정합니다.
+            수집 끊김 기준은 운영기관이 감시 규칙으로 정합니다 (기본: 하트비트 주기의 3배, 최소 5분).
           </Typography.Paragraph>
         </Card>
       </Col>

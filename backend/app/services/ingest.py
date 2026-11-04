@@ -598,6 +598,10 @@ def append_integrity(db: Session, asset: Asset, now: datetime) -> IntegrityLogEn
                               entry_hash=integrity_payload(prev, asset.asset_id, asset.checksum_sha256,
                                                            asset.byte_size, registered_at))
     db.add(entry)
+    if asset.variant == "ORIGINAL":  # 파생본 등록은 새 수신이 아니다 (11번 마지막 정상 등록)
+        from app.services.monitoring import touch_registered
+
+        touch_registered(db, asset.organization_id, asset.source_system_id, registered_at)
     db.flush()
     return entry
 

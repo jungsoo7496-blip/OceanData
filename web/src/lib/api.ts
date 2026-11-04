@@ -112,10 +112,45 @@ export interface Asset {
 export interface AgentHealth {
   device_id: string
   status: 'OK' | 'STALE' | 'ERROR' | 'NEVER_SEEN'
+  organization_id?: string
+  name?: string
+  kind?: 'COLLECTOR' | 'SOURCE'
   last_heartbeat_at: string | null
   last_registered_at: string | null
+  last_observation_at?: string | null
+  expected_interval_s?: number | null
+  lag_s?: number | null
+  heartbeat_lag_s?: number | null
   queue_items: number
+  queue_bytes?: number
   last_error_code: string | null
+  open_alerts?: number
+  policy_mismatch?: boolean
+  clock_offset_ms?: number | null
+}
+
+export interface Incident {
+  incident_id: string
+  organization_id: string | null
+  device_id: string | null
+  session_id: string | null
+  rule_code: string
+  severity: 'INFO' | 'WARNING' | 'CRITICAL'
+  status: 'OPEN' | 'ACKNOWLEDGED' | 'RESOLVED'
+  summary: string
+  guidance?: string
+  opened_at: string
+  acknowledged_at: string | null
+  resolved_at: string | null
+  assignee: string | null
+  memo: string | null
+}
+
+export interface IngestStatus {
+  generated_at: string
+  devices: AgentHealth[]
+  open_incidents: Incident[]
+  top_failure_reasons: { source: string; code: string; count: number }[]
 }
 
 export interface OrgUsage {

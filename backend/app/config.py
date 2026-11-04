@@ -87,6 +87,15 @@ class Settings(BaseSettings):
     clock_offset_warn_ms: int = 2000
     sensor_file_max_bytes: int = 512 * 1024 * 1024
 
+    # 수집 모니터링·알림 (11번). 메일 서버가 없으면 알림은 로그로만 남는다
+    smtp_host: str | None = None
+    smtp_port: int = 25
+    mail_from: str = "marine-platform@localhost"
+    alert_webhook_url: str | None = None  # 운영자 알림 웹훅 (메신저 연동은 결정 대기)
+    alert_webhook_secret: SecretStr | None = None  # 있으면 X-Signature(HMAC-SHA256)를 붙인다
+    watch_eval_interval_s: int = 60
+    ops_timezone: str = "Asia/Seoul"  # 정기 점검 기한 계산 기준
+
     # 운영
     log_level: str = "INFO"
     readiness_timeout_s: float = 2.0
