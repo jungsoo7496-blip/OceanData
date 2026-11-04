@@ -55,6 +55,12 @@ PERMISSIONS: dict[str, Rule] = {
     "asset:write": Rule(PROVIDER),
     "asset:reprocess": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),
     "webhook:manage": Rule(frozenset({"ORG_ADMIN"}), scope="webhook:manage"),
+    # 08 저장·보존
+    "usage:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
+    "retention:run": Rule(frozenset({"PLATFORM_OPERATOR"})),
+    "legal_hold:set": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),
+    "asset:delete": Rule(frozenset({"ORG_ADMIN"}), mfa=True),
+    "deletion_certificate:read": Rule(frozenset({"ORG_ADMIN", "PLATFORM_OPERATOR"})),
     # 07 센서·이벤트
     "observation:write": Rule(PROVIDER, scope="observation:write"),
     "observation:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),

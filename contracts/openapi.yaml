@@ -1194,6 +1194,151 @@ paths:
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
 
+  /v1/usage:
+    get:
+      tags: [status]
+      operationId: getUsage
+      summary: 기관 사용량 (항목별). 제공기관은 자기 기관, 운영자는 전체 기관
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 사용량
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/OrgUsage'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /v1/retention/dry-run:
+    post:
+      tags: [status]
+      operationId: retentionDryRun
+      summary: 보존 만료 삭제 대상 미리 보기 (PLATFORM_OPERATOR, 삭제하지 않음)
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: dry-run 결과
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RetentionDryRun'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /v1/assets/{asset_id}/legal-hold:
+    parameters:
+      - {$ref: '#/components/parameters/AssetId'}
+    post:
+      tags: [assets]
+      operationId: setLegalHold
+      summary: 법적 보류 설정·해제 (PLATFORM_OPERATOR, 다중 인증, 사유 필수, 감사)
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [hold, reason]
+              properties:
+                hold: {type: boolean}
+                reason: {type: string, minLength: 2, maxLength: 500}
+      responses:
+        '200':
+          description: 적용 결과
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [asset_id, legal_hold]
+                properties:
+                  asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+                  legal_hold: {type: boolean}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/assets/{asset_id}/deletion:
+    parameters:
+      - {$ref: '#/components/parameters/AssetId'}
+    post:
+      tags: [assets]
+      operationId: deleteAsset
+      summary: 자산 삭제 요청 (ORG_ADMIN, 다중 인증). 원본과 파생본의 활성 객체를 지우고 삭제 증명을 만든다
+      description: 법적 보류 중이면 409. 승인된 증빙·데이터셋이 인용하면 영향 목록과 함께 409를 주고, confirm_affected=true로 다시 요청해야 한다.
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DeletionRequest'}
+      responses:
+        '200':
+          description: 삭제 증명
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeletionCertificate'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/sessions/{session_id}/deletion:
+    parameters:
+      - {$ref: '#/components/parameters/SessionId'}
+    post:
+      tags: [context]
+      operationId: deleteSessionAssets
+      summary: 실증회차 단위 삭제 요청 (ORG_ADMIN, 다중 인증)
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DeletionRequest'}
+      responses:
+        '200':
+          description: 삭제 증명
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeletionCertificate'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/deletion-certificates/{certificate_id}:
+    parameters:
+      - name: certificate_id
+        in: path
+        required: true
+        schema: {$ref: './schemas/common.schema.json#/$defs/deletion_certificate_id'}
+    get:
+      tags: [assets]
+      operationId: getDeletionCertificate
+      summary: 삭제 증명 조회
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 삭제 증명
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeletionCertificate'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
   /v1/webhooks/subscriptions:
     get:
       tags: [webhooks]
@@ -1850,6 +1995,82 @@ components:
         value: {type: [number, 'null'], description: 정규화 단위 기준 새 값. null이면 결측으로 정정}
         quality_flag: {$ref: './schemas/common.schema.json#/$defs/observation_quality_flag'}
         reason: {type: string, minLength: 2, maxLength: 500}
+
+    OrgUsage:
+      type: object
+      required: [organization_id, quota_bytes, usage_bytes, usage_ratio, breakdown]
+      properties:
+        organization_id: {$ref: './schemas/common.schema.json#/$defs/organization_id'}
+        quota_bytes: {type: integer, minimum: 0}
+        usage_bytes: {type: integer, minimum: 0, description: 'stored + quarantine + reserved + backup (domain.md 9장)'}
+        usage_ratio: {type: number, minimum: 0}
+        breakdown:
+          type: object
+          required: [stored_bytes, quarantine_bytes, reserved_bytes, backup_bytes]
+          properties:
+            stored_bytes: {type: integer, minimum: 0, description: 'RAW + PROCESSED + EVIDENCE 등록 객체'}
+            quarantine_bytes: {type: integer, minimum: 0}
+            reserved_bytes: {type: integer, minimum: 0, description: 진행 중 업로드 예약량}
+            backup_bytes: {type: integer, minimum: 0, description: 기관이 신청한 백업 용량}
+
+    RetentionDryRun:
+      type: object
+      required: [generated_at, targets, total_count, total_bytes, excluded_legal_hold, warnings]
+      properties:
+        generated_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        targets:
+          type: array
+          items:
+            type: object
+            required: [target, count, bytes]
+            properties:
+              target: {type: string, description: 'RAW, PROXY, THUMBNAIL, CLIP, DEID, EVIDENCE, DATASET, QUARANTINE:<사유>'}
+              count: {type: integer, minimum: 0}
+              bytes: {type: integer, minimum: 0}
+        total_count: {type: integer, minimum: 0}
+        total_bytes: {type: integer, minimum: 0}
+        excluded_legal_hold: {type: integer, minimum: 0}
+        warnings:
+          type: array
+          items:
+            type: object
+            required: [asset_id, reason]
+            properties:
+              asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+              reason: {enum: [CITED_BY_APPROVED_EVIDENCE, IN_DATASET_VERSION]}
+
+    DeletionRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: {type: string, minLength: 2, maxLength: 500}
+        confirm_affected: {type: boolean, default: false, description: 영향 목록을 확인했다는 재확인}
+
+    DeletionCertificate:
+      type: object
+      required: [certificate_id, organization_id, scope, target_id, requested_by, deleted_at, objects, backup_copies_expire_at]
+      properties:
+        certificate_id: {$ref: './schemas/common.schema.json#/$defs/deletion_certificate_id'}
+        organization_id: {$ref: './schemas/common.schema.json#/$defs/organization_id'}
+        scope: {enum: [ASSET, SESSION, RETENTION]}
+        target_id: {type: string}
+        reason: {type: string}
+        requested_by: {type: string}
+        deleted_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        objects:
+          type: array
+          items:
+            type: object
+            required: [asset_id, object_key, checksum_sha256, byte_size]
+            properties:
+              asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+              object_key: {type: string}
+              checksum_sha256: {$ref: './schemas/common.schema.json#/$defs/sha256'}
+              byte_size: {type: integer, minimum: 0}
+        backup_copies_expire_at:
+          oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]
+          description: 독립 백업에 남은 사본이 백업 보존 주기가 끝나 사라지는 날짜 (요구사항 5.2). 백업 대상이 아니면 null
 
     Project:
       type: object

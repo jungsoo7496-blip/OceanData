@@ -23,7 +23,16 @@ class NotFoundInScope(Exception):
 
 
 def scope_filter(model: Any, principal: Principal, *, purpose: str = "metadata") -> ColumnElement[bool]:
-    """역할별 데이터 범위 표(domain.md 2장)를 SQL 조건으로 만든다. 표에 없는 경우는 거부(false)."""
+    """역할별 데이터 범위 표(domain.md 2장)를 SQL 조건으로 만든다. 표에 없는 경우는 거부(false).
+
+    삭제 표시된 자산(08번)은 누구에게도 보이지 않는다 (삭제 증명으로만 확인)."""
+    cond = _role_filter(model, principal, purpose)
+    if hasattr(model, "deleted_at"):
+        cond = and_(cond, model.deleted_at.is_(None))
+    return cond
+
+
+def _role_filter(model: Any, principal: Principal, purpose: str) -> ColumnElement[bool]:
     org_col = model.organization_id
     if principal.kind in ("DEVICE", "API_KEY") or principal.has_role("ORG_ADMIN", "ORG_MEMBER"):
         return org_col == principal.organization_id

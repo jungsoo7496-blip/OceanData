@@ -176,7 +176,9 @@ def quarantine_corrupt(c: Container, asset_id: str) -> str:
         asset.ingest_status = states.transition("ingest_status", asset.ingest_status, "QUARANTINED", {"SERVICE"})
         asset.quarantine_reason = "CORRUPT_FILE"
         asset.quality_status, asset.quality_reasons = "FAILED", ["not_playable"]
-        asset.retention_until = c.clock.now() + timedelta(days=c.settings.quarantine_retention_days)
+        from app.services.retention import apply_retention
+
+        apply_retention(db, asset, c.clock.now())
         asset.updated_at = c.clock.now()
         bucket, key = c.settings.buckets[asset.storage_zone or "RAW"], asset.storage_key or ""
         size = asset.byte_size
@@ -214,7 +216,8 @@ def create_derived(c: Container, db: Session, parent: Asset, path: str, *, varia
     now = c.clock.now()
     existing = db.execute(select(Asset).where(Asset.organization_id == parent.organization_id,
                                               Asset.source_system_id == parent.source_system_id,
-                                              Asset.checksum_sha256 == sha)).scalar_one_or_none()
+                                              Asset.checksum_sha256 == sha, Asset.deleted_at.is_(None))) \
+        .scalar_one_or_none()
     if existing is not None:  # 같은 결과가 이미 있으면 계보만 확인한다 (재실행 멱등)
         return existing
     child = Asset(
@@ -235,6 +238,9 @@ def create_derived(c: Container, db: Session, parent: Asset, path: str, *, varia
         ext={}, created_at=now, updated_at=now)
     child.storage_zone = zone_for(variant)
     child.storage_key = object_key(child)
+    from app.services.retention import apply_retention
+
+    apply_retention(db, child, now)  # 파생본 보존 정책 (08번)
     c.storage.upload_file(c.settings.buckets[child.storage_zone], child.storage_key, path, mime)
     db.add(child)
     db.flush()

@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     job_lease_reap_interval_s: int = 60
     integrity_sample_size: int = 20
 
+    # 저장·보존 (08번)
+    backup_retention_days: int = 90
+    retention_auto_execute: bool = False  # 기본은 운영자가 dry-run을 보고 실행 (요구사항 3.6)
+
     # 센서·관측값 (07번, 정책값)
     observation_batch_max: int = 5000
     observation_future_tolerance_s: int = 600

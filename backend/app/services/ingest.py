@@ -84,6 +84,9 @@ class Quota:
                                extra={"quota_bytes": q.quota_bytes, "usage_bytes": total, "requested_bytes": nbytes})
         q.reserved_bytes += nbytes
         q.updated_at = self.c.clock.now()
+        from app.services.retention import check_quota_alerts
+
+        check_quota_alerts(self.c, self.db, q)  # 80·90·100% 알림 (08번 요구사항 2.4)
 
     def settle(self, org: str, reserved: int, *, to: str | None, actual: int | None = None) -> None:
         """예약을 확정(used)·격리(quarantine)로 옮기거나(to=None이면) 해제한다."""
@@ -94,6 +97,9 @@ class Quota:
         elif to == "quarantine":
             q.quarantine_bytes += actual if actual is not None else reserved
         q.updated_at = self.c.clock.now()
+        from app.services.retention import check_quota_alerts
+
+        check_quota_alerts(self.c, self.db, q)
 
 
 @dataclass
@@ -196,7 +202,8 @@ class IngestService:
 
         existing = self.db.execute(select(Asset).where(
             Asset.organization_id == p.organization_id, Asset.source_system_id == r.device.device_id,
-            Asset.checksum_sha256 == f["checksum_sha256"]).with_for_update()).scalar_one_or_none()
+            Asset.checksum_sha256 == f["checksum_sha256"], Asset.deleted_at.is_(None)).with_for_update()) \
+            .scalar_one_or_none()
         if existing is not None and existing.has_binary:
             active = self.db.execute(select(Upload).where(Upload.asset_id == existing.asset_id,
                                                           Upload.status == "UPLOADING")).scalar_one_or_none()
@@ -255,7 +262,8 @@ class IngestService:
         if m.get("parent_ref", {}).get("checksum_sha256"):
             parent = self.db.execute(select(Asset).where(
                 Asset.organization_id == p.organization_id, Asset.source_system_id == r.device.device_id,
-                Asset.checksum_sha256 == m["parent_ref"]["checksum_sha256"])).scalar_one_or_none()
+                Asset.checksum_sha256 == m["parent_ref"]["checksum_sha256"], Asset.deleted_at.is_(None))) \
+                .scalar_one_or_none()
             if parent is not None:  # 파생본은 원 자산의 엄격한 값을 물려받는다 (domain.md 3장)
                 fields.update(metadata.inherit_strictest([
                     {"data_role": fields["data_role"], "sensitivity_class": fields["sensitivity_class"]},
@@ -287,6 +295,9 @@ class IngestService:
                                               "session_label": m.get("session_label"),
                                               "uploaded_by": p.principal_id}.items() if v},
             created_at=now, updated_at=now, **fields)
+        from app.services.retention import apply_retention
+
+        apply_retention(self.db, asset, now)  # 보존 정책 표 (08번 요구사항 3.2)
         self.db.add(asset)
         self.db.flush()
         if parent is not None:
@@ -563,9 +574,10 @@ class IntegrityVerifier:
             asset.storage_zone = "QUARANTINE"
         except Exception as exc:  # noqa: BLE001 - 이동 실패해도 상태는 격리로 둔다 (재시도는 08번 정리 작업)
             log.error("quarantine_move_failed", extra={"asset_id": asset.asset_id, "error_type": type(exc).__name__})
-        if reason not in ("UNKNOWN_SESSION", "MISSING_REQUIRED_METADATA"):
-            # 손상·형식 오류는 기본 30일 뒤 삭제 (domain.md 9장). 회차 미상·메타 누락은 자동 삭제하지 않는다
-            asset.retention_until = self.c.clock.now() + timedelta(days=self.c.settings.quarantine_retention_days)
+        # 격리 보존은 사유별 정책 (domain.md 9장: 손상 30일 삭제, 회차 미상·메타 누락은 자동 삭제 없음)
+        from app.services.retention import apply_retention
+
+        apply_retention(db, asset, self.c.clock.now())
         uploader = (asset.ingest_context or {}).get("uploaded_by")
         self.c.notifier.send(Notification(kind="upload.quarantined", organization_id=asset.organization_id,
                                           subject="업로드 자산 격리", body=f"자산 {asset.asset_id}: {reason}",

@@ -19,6 +19,8 @@ def main(argv: list[str] | None = None) -> int:
     sp = sub.add_parser("set-policy", help="수집기 정책 등록 (device-policy.schema.json 검증, 새 버전으로 저장)")
     sp.add_argument("device_id")
     sp.add_argument("policy_file")
+    rr = sub.add_parser("retention", help="보존 만료 dry-run (--execute면 실제 삭제, 운영자 확인 후)")
+    rr.add_argument("--execute", action="store_true")
     sm = sub.add_parser("set-mapping", help="관측값 매핑 프로필 새 버전 저장 (감사, 화면은 09번)")
     sm.add_argument("device_id")
     sm.add_argument("mapping_file")
@@ -47,6 +49,18 @@ def main(argv: list[str] | None = None) -> int:
         return _set_policy(c, args.device_id, args.policy_file)
     if args.cmd == "enrollment-code":
         return _enrollment_code(c, args.device_id)
+    if args.cmd == "retention":
+        import json as _json
+
+        from app.services import retention as _ret
+
+        with c.sessionmaker.begin() as db:
+            if args.execute:
+                certs = _ret.execute_expired(c, db, c.clock.now())
+                print(f"삭제 증명 {len(certs)}건: " + ", ".join(x.certificate_id for x in certs))
+            else:
+                print(_json.dumps(_ret.dry_run(db, c.clock.now()), ensure_ascii=False, indent=1))
+        return 0
     if args.cmd == "set-mapping":
         return _set_mapping(c, args.device_id, args.mapping_file)
     if args.cmd == "verify-integrity":

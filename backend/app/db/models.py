@@ -249,7 +249,9 @@ class Asset(Base):
 
     __tablename__ = "assets"
     __table_args__ = (
-        UniqueConstraint("organization_id", "source_system_id", "checksum_sha256", name="idem_key"),
+        # 멱등 키는 삭제되지 않은 자산에만 (삭제 후 같은 파일을 다시 받을 수 있게, 08번)
+        Index("uq_assets_idem_live", "organization_id", "source_system_id", "checksum_sha256", unique=True,
+              postgresql_where=text("deleted_at IS NULL")),
         Index("ix_assets_org_status", "organization_id", "ingest_status"),
         Index("ix_assets_location", "location", postgresql_using="gist"),
         Index("ix_assets_capture", "organization_id", "capture_start_at"),
@@ -298,6 +300,10 @@ class Asset(Base):
     storage_zone: Mapped[str | None] = mapped_column(String(20))
     storage_key: Mapped[str | None] = mapped_column(String(400))
     embedding: Mapped[Any | None] = mapped_column(Vector(), deferred=True)
+    legal_hold: Mapped[bool] = mapped_column(Boolean, server_default="false")  # 08: 법적 보류
+    legal_hold_reason: Mapped[str | None] = mapped_column(Text)
+    deleted_at: Mapped[datetime | None] = mapped_column(TS, index=True)  # 08: 삭제 표시 (기록은 남긴다)
+    deletion_certificate_id: Mapped[str | None] = mapped_column(ID)
     created_at: Mapped[datetime] = mapped_column(TS)
     updated_at: Mapped[datetime] = mapped_column(TS)
 
@@ -415,6 +421,7 @@ class OrgQuota(Base):
     quarantine_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
     reserved_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
     backup_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    last_alert_pct: Mapped[int] = mapped_column(Integer, server_default="0")  # 08: 80·90·100% 알림 중복 방지
     updated_at: Mapped[datetime] = mapped_column(TS)
 
 
@@ -564,3 +571,42 @@ class SensorParseRun(Base):
     row_errors: Mapped[list[Any]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     diff_from_previous: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(TS)
+
+
+# ---- 08 저장·보존
+
+
+class RetentionPolicy(Base):
+    """대상별 보존 기간·만료 동작 (08번 요구사항 3.1). 대상: RAW·PROXY·…·QUARANTINE:<사유>. days가 NULL이면 무기한."""
+
+    __tablename__ = "retention_policies"
+    target: Mapped[str] = mapped_column(String(60), primary_key=True)
+    policy_id: Mapped[str] = mapped_column(String(64), unique=True)
+    retention_days: Mapped[int | None] = mapped_column(Integer)
+    expiry_action: Mapped[str] = mapped_column(String(10))  # DELETE / KEEP
+    notify_days_before: Mapped[int] = mapped_column(Integer, server_default="30")
+    updated_at: Mapped[datetime] = mapped_column(TS)
+
+
+class DeletionCertificate(Base):
+    """삭제 증명 (08번 요구사항 5.1, 5.2)."""
+
+    __tablename__ = "deletion_certificates"
+    certificate_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ID, index=True)
+    scope: Mapped[str] = mapped_column(String(10))  # ASSET / SESSION / RETENTION
+    target_id: Mapped[str] = mapped_column(String(64))
+    reason: Mapped[str | None] = mapped_column(Text)
+    requested_by: Mapped[str] = mapped_column(String(64))
+    deleted_at: Mapped[datetime] = mapped_column(TS)
+    objects: Mapped[list[Any]] = mapped_column(JSONB)
+    backup_copies_expire_at: Mapped[datetime | None] = mapped_column(TS)
+
+
+class DailyTask(Base):
+    """하루 한 번 도는 정비 작업의 마지막 실행일 (보존·대조·예측)."""
+
+    __tablename__ = "daily_tasks"
+    name: Mapped[str] = mapped_column(String(60), primary_key=True)
+    last_run_on: Mapped[datetime] = mapped_column(DateTime(timezone=False))
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)

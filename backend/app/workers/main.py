@@ -133,12 +133,19 @@ def sweep(c: Container) -> int:
 
 
 def maintenance(c: Container) -> None:
+    from app.services import retention
     from app.services.integrity import anchor_previous_days
 
     reaped = c.queue.reap_expired_leases()
     if reaped:
         log.warning("job_leases_reaped", extra={"count": reaped})
     anchor_previous_days(c)
+    # 하루 한 번: 보존 만료 예고·dry-run(또는 자동 실행)·사용량 대조 (08번)
+    retention.run_daily(c, "retention_notify", lambda db: {"orgs": retention.notify_expiring(c, db, c.clock.now())})
+    retention.run_daily(c, "retention_run", lambda db: (
+        {"executed": [x.certificate_id for x in retention.execute_expired(c, db, c.clock.now())]}
+        if c.settings.retention_auto_execute else retention.dry_run(db, c.clock.now())))
+    retention.run_daily(c, "quota_reconcile", lambda db: {"diffs": retention.reconcile(c, db)})
 
 
 def main() -> None:
