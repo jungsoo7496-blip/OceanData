@@ -1,0 +1,258 @@
+{
+  "realm": "marine",
+  "enabled": true,
+  "displayName": "해양 실증데이터 플랫폼 (개발)",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": false,
+  "bruteForceProtected": true,
+  "failureFactor": 5,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "otpPolicyType": "totp",
+  "otpPolicyAlgorithm": "HmacSHA1",
+  "otpPolicyDigits": 6,
+  "otpPolicyPeriod": 30,
+  "clients": [
+    {
+      "clientId": "marine-web",
+      "name": "플랫폼 웹",
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://localhost:5173/*"
+      ],
+      "webOrigins": [
+        "http://localhost:5173"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:5173/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience-marine-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "marine-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "marine-dev-cli",
+      "name": "개발용 CLI (운영 금지)",
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "protocolMappers": [
+        {
+          "name": "audience-marine-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "marine-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "id": "00000000-0000-4000-8000-000000000101",
+      "username": "admin-a",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "admin-a@example.invalid",
+      "firstName": "admin-a",
+      "lastName": "시험",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-password",
+          "temporary": false
+        }
+      ],
+      "requiredActions": [
+        "CONFIGURE_TOTP"
+      ],
+      "realmRoles": [
+        "default-roles-marine"
+      ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000102",
+      "username": "member-a",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "member-a@example.invalid",
+      "firstName": "member-a",
+      "lastName": "시험",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-password",
+          "temporary": false
+        }
+      ],
+      "requiredActions": [],
+      "realmRoles": [
+        "default-roles-marine"
+      ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000103",
+      "username": "admin-b",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "admin-b@example.invalid",
+      "firstName": "admin-b",
+      "lastName": "시험",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-password",
+          "temporary": false
+        }
+      ],
+      "requiredActions": [
+        "CONFIGURE_TOTP"
+      ],
+      "realmRoles": [
+        "default-roles-marine"
+      ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000104",
+      "username": "member-b",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "member-b@example.invalid",
+      "firstName": "member-b",
+      "lastName": "시험",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-password",
+          "temporary": false
+        }
+      ],
+      "requiredActions": [],
+      "realmRoles": [
+        "default-roles-marine"
+      ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000105",
+      "username": "viewer",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "viewer@example.invalid",
+      "firstName": "viewer",
+      "lastName": "시험",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-password",
+          "temporary": false
+        }
+      ],
+      "requiredActions": [],
+      "realmRoles": [
+        "default-roles-marine"
+      ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000106",
+      "username": "operator",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "operator@example.invalid",
+      "firstName": "operator",
+      "lastName": "시험",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-password",
+          "temporary": false
+        }
+      ],
+      "requiredActions": [
+        "CONFIGURE_TOTP"
+      ],
+      "realmRoles": [
+        "default-roles-marine"
+      ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000107",
+      "username": "operator2",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "operator2@example.invalid",
+      "firstName": "operator2",
+      "lastName": "시험",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-password",
+          "temporary": false
+        }
+      ],
+      "requiredActions": [
+        "CONFIGURE_TOTP"
+      ],
+      "realmRoles": [
+        "default-roles-marine"
+      ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000108",
+      "username": "reviewer",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "reviewer@example.invalid",
+      "firstName": "reviewer",
+      "lastName": "시험",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-password",
+          "temporary": false
+        }
+      ],
+      "requiredActions": [],
+      "realmRoles": [
+        "default-roles-marine"
+      ]
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000109",
+      "username": "consumer",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "consumer@example.invalid",
+      "firstName": "consumer",
+      "lastName": "시험",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-password",
+          "temporary": false
+        }
+      ],
+      "requiredActions": [],
+      "realmRoles": [
+        "default-roles-marine"
+      ]
+    }
+  ]
+}

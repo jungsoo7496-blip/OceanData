@@ -1,0 +1,89 @@
+# CI_Pipeline (01번 요구사항 9). 하나라도 실패하면 병합하지 않는다.
+name: ci
+on:
+  push: {branches: [main]}
+  pull_request:
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -r tools/requirements.txt
+      - run: make contracts-check
+      - run: make traceability
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - run: python3 tools/check_secrets.py
+      - name: gitleaks
+        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.21.2 detect --source /repo --no-banner --redact -v
+
+  backend:
+    runs-on: ubuntu-latest
+    env:
+      TEST_DATABASE_URL: postgresql+pg8000://marine_owner:ci-owner@127.0.0.1:5432/marine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: PostgreSQL (PostGIS + pgvector, 개발 이미지와 같음)
+        run: |
+          docker build -t marine-postgres:ci deploy/compose/postgres
+          docker run -d --name pg -p 5432:5432 -e POSTGRES_USER=marine_owner -e POSTGRES_PASSWORD=ci-owner \
+            -e POSTGRES_DB=marine -e APP_DB_PASSWORD=ci-app marine-postgres:ci
+          for i in $(seq 1 60); do docker exec pg pg_isready -U marine_owner -d marine && break; sleep 1; done
+      - run: pip install -e "backend[dev]"
+      - name: 린트·타입·정적 보안
+        working-directory: backend
+        run: |
+          ruff check app tests
+          mypy app
+          bandit -q -ll -r app -x app/db/migrations
+      - name: 마이그레이션 up → down → up (01번 요구사항 5.3)
+        working-directory: backend
+        env: {MIGRATION_DATABASE_URL: "${{ env.TEST_DATABASE_URL }}"}
+        run: alembic upgrade head && alembic downgrade base && alembic upgrade head && alembic downgrade base
+      - name: 시험 (단위·통합·계약·수용)
+        working-directory: backend
+        run: pytest -q
+      - name: 의존성 취약점
+        working-directory: backend
+        run: pip-audit --skip-editable
+      - name: 라이선스 허용 목록 (런타임 의존성만)
+        run: |
+          python -m venv /tmp/runtime && /tmp/runtime/bin/pip install -q ./backend
+          python tools/check_licenses.py --python /tmp/runtime/bin/python
+
+  web:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: web}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm, cache-dependency-path: web/package-lock.json}
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm audit --omit=dev --audit-level=high
+
+  agent:
+    # 06번 스펙에서 agent/를 만들면 돈다
+    if: ${{ hashFiles('agent/go.mod') != '' }}
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: agent}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version-file: agent/go.mod}
+      - run: go vet ./... && go test ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - run: go run github.com/securego/gosec/v2/cmd/gosec@latest ./...

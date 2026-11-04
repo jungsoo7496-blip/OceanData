@@ -1,5 +1,8 @@
 # 해양 실증데이터 플랫폼 — Kiro 작업 패키지 v0.2
 
+> **개발 진행 중.** 현재 상태와 로컬에서 이어가는 방법은 [`HANDOFF.md`](HANDOFF.md)를 먼저 본다.
+> 빠른 시작: `cp .env.example .env && make venv && make up && make seed`
+
 기준 문서 v0.04를 Kiro가 읽는 형식(steering + spec)으로 옮기고, GPT v0.05 검토 결과와 오픈소스 재사용 판정을 합친 패키지입니다.
 하드웨어가 확정되기 전에 소프트웨어를 먼저 만들 수 있도록 스토리지·GPU·배포 형태를 인터페이스 뒤로 숨기는 규칙을 steering에 넣었습니다.
 v0.1에서 바뀐 점은 `CHANGELOG.md`에 있습니다.

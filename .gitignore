@@ -13,3 +13,8 @@ coverage/
 /var/
 /tmp-samples/
 agent/bin/
+
+# 사내 CA 인증서는 커밋하지 않는다
+deploy/certs/*.crt
+*.egg-info/
+*.tsbuildinfo

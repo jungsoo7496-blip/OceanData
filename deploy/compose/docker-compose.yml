@@ -1,0 +1,154 @@
+# 개발용 Docker Compose (tech.md 4장, 01번 요구사항 1). 운영 배포 스크립트는 하드웨어 확정 후.
+# 실행: make up (저장소 루트의 .env를 읽는다)
+name: marine
+
+x-app-env: &app-env
+  DATABASE_URL: ${DATABASE_URL}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+  S3_REGION: ${S3_REGION}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+  S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE}
+  BUCKET_RAW: ${BUCKET_RAW}
+  BUCKET_PROC: ${BUCKET_PROC}
+  BUCKET_EVIDENCE: ${BUCKET_EVIDENCE}
+  BUCKET_DATASETS: ${BUCKET_DATASETS}
+  BUCKET_QUARANTINE: ${BUCKET_QUARANTINE}
+  IDP_ISSUER_URL: ${IDP_ISSUER_URL}
+  IDP_INTERNAL_URL: ${IDP_INTERNAL_URL}
+  IDP_AUDIENCE: ${IDP_AUDIENCE}
+  DEVICE_TOKEN_SIGNING_KEY: ${DEVICE_TOKEN_SIGNING_KEY}
+  DEVICE_TOKEN_TTL_S: ${DEVICE_TOKEN_TTL_S}
+  ENROLLMENT_CODE_TTL_S: ${ENROLLMENT_CODE_TTL_S}
+  GPU_ENABLED: ${GPU_ENABLED}
+  PROCESSING_STEPS: ${PROCESSING_STEPS}
+  REPORT_FORMATS: ${REPORT_FORMATS}
+  EXTERNAL_SOURCES: ${EXTERNAL_SOURCES}
+  PRESIGN_UPLOAD_TTL_S: ${PRESIGN_UPLOAD_TTL_S}
+  PRESIGN_DOWNLOAD_TTL_S: ${PRESIGN_DOWNLOAD_TTL_S}
+  LOG_LEVEL: ${LOG_LEVEL}
+
+services:
+  postgres:
+    build: ./postgres
+    image: marine-postgres:dev
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      APP_DB_USER: ${APP_DB_USER}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:3.80
+    environment:
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        printf '{"identities":[{"name":"dev","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]}]}' "$$S3_ACCESS_KEY_ID" "$$S3_SECRET_ACCESS_KEY" > /tmp/s3.json
+        exec weed server -dir=/data -ip=seaweedfs -ip.bind=0.0.0.0 -s3 -s3.port=8333 -s3.config=/tmp/s3.json -volume.max=0
+    ports: ["8333:8333"]
+    volumes: [s3data:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8333 && wget -q -O /dev/null http://127.0.0.1:9333/cluster/status"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0.7
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_HEALTH_ENABLED: "true"
+      KC_HOSTNAME: http://localhost:8080
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+    ports: ["8080:8080"]
+    volumes: ["./keycloak/realm-marine.json:/opt/keycloak/data/import/realm-marine.json:ro"]
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  migrate:
+    build: {context: ../.., dockerfile: backend/Dockerfile}
+    image: marine-api:dev
+    environment:
+      <<: *app-env
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL}
+      APP_DB_USER: ${APP_DB_USER}
+    command: ["sh", "-c", "alembic upgrade head && python -m app.cli init-buckets"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      seaweedfs: {condition: service_healthy}
+    restart: "no"
+
+  api:
+    image: marine-api:dev
+    environment: *app-env
+    ports: ["8000:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      keycloak: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3).status == 200 else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  worker:
+    image: marine-api:dev
+    environment: *app-env
+    command: ["python", "-m", "app.workers.main"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9101/metrics', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  web:
+    build:
+      context: ../../web
+      additional_contexts: {certs: ../certs}
+    image: marine-web:dev
+    ports: ["5173:80"]
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # --- 선택 서비스: docker compose --profile ops up
+  prometheus:
+    profiles: [ops]
+    image: prom/prometheus:v2.55.1
+    volumes: ["./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["9090:9090"]
+  grafana:
+    # AGPL: 수정하지 않은 운영자 내부용으로만 (tech.md 3장)
+    profiles: [ops]
+    image: grafana/grafana-oss:11.3.1
+    ports: ["3000:3000"]
+  mailpit:
+    profiles: [ops]
+    image: axllent/mailpit:v1.21
+    ports: ["8025:8025", "1025:1025"]
+
+volumes:
+  pgdata:
+  s3data:

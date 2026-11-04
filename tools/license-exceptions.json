@@ -1,0 +1,19 @@
+{
+  "description": "허용 목록 밖이지만 쓰는 의존성. 항목마다 사유와 ADR을 적는다. approved=false는 사람 승인 대기(검사는 경고만).",
+  "exceptions": [
+    {
+      "package": "typing_extensions",
+      "license": "PSF-2.0",
+      "reason": "FastAPI·Pydantic의 필수 의존성. PSF-2.0은 OSI 승인 허용형 라이선스(CPython과 같음)이며 카피레프트 조건이 없다.",
+      "adr": "docs/adr/0011-psf-license-exception.md",
+      "approved": false
+    },
+    {
+      "package": "greenlet",
+      "license": "MIT AND PSF-2.0",
+      "reason": "SQLAlchemy의 의존성. 일부 파일이 PSF-2.0이다.",
+      "adr": "docs/adr/0011-psf-license-exception.md",
+      "approved": false
+    }
+  ]
+}
