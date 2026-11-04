@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from app import API_VERSION
-from app.api import auth, context, system
+from app.api import auth, catalog, context, system
 from app.config import get_settings
 from app.container import Container, build_container
 from app.errors import install_error_handlers
@@ -26,6 +26,7 @@ def create_app(c: Container | None = None) -> FastAPI:
     app.include_router(system.router)
     app.include_router(auth.router)
     app.include_router(context.router)
+    app.include_router(catalog.router)
     return app
 
 

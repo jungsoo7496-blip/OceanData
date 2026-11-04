@@ -45,6 +45,7 @@ PERMISSIONS: dict[str, Rule] = {
     "agent:heartbeat": Rule(frozenset(), scope="agent:heartbeat"),
     "agent_health:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
     "schema:read": Rule(ALL_USER_ROLES, scope="status:read"),
+    "code:read": Rule(ALL_USER_ROLES, scope="status:read"),
     "contract:validate": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="upload:write"),
     # 04 수집
     "upload:write": Rule(PROVIDER, scope="upload:write"),

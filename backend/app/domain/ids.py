@@ -14,6 +14,7 @@ PREFIXES = {
     "upload": "upl", "event": "evt", "share_request": "shr", "dataset": "dst", "dataset_version": "dsv",
     "access_request": "acr", "grant": "grt", "distribution": "dlv", "job": "job", "record": "rec",
     "report": "rpt", "webhook": "whk", "api_key": "key", "user": "usr", "audit": "aud",
+    "agreement": "agr", "integration_card": "icd", "break_glass": "brk",
 }
 
 

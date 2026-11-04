@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -20,6 +21,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.db.types import Geometry, Vector
 
 TS = DateTime(timezone=True)
 ID = String(30)
@@ -221,3 +223,138 @@ class IdempotencyRecord(Base):
     expires_at: Mapped[datetime] = mapped_column(TS, index=True)
 
 
+
+
+# ---- 03 메타데이터 표준
+
+
+class Asset(Base):
+    """공통 메타데이터 v1.0 (domain.md 8장). 확장(video_ext 등)은 ext JSONB에 둔다."""
+
+    __tablename__ = "assets"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "source_system_id", "checksum_sha256", name="idem_key"),
+        Index("ix_assets_org_status", "organization_id", "ingest_status"),
+        Index("ix_assets_location", "location", postgresql_using="gist"),
+        Index("ix_assets_capture", "organization_id", "capture_start_at"),
+    )
+    asset_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(20))
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"))
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.project_id"), index=True)
+    session_id: Mapped[str | None] = mapped_column(ForeignKey("sessions.session_id"), index=True)
+    source_system_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"), index=True)
+    dataset_id: Mapped[str | None] = mapped_column(ID)
+    data_type: Mapped[str] = mapped_column(String(20))
+    variant: Mapped[str] = mapped_column(String(20))
+    data_role: Mapped[str] = mapped_column(String(20))
+    capture_start_at: Mapped[datetime | None] = mapped_column(TS)
+    capture_end_at: Mapped[datetime | None] = mapped_column(TS)
+    ingested_at: Mapped[datetime] = mapped_column(TS)
+    timestamp_quality: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    location: Mapped[dict[str, Any] | None] = mapped_column(Geometry())
+    source_location: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    area_code: Mapped[str | None] = mapped_column(String(40))
+    location_precision: Mapped[str | None] = mapped_column(String(20))
+    mime_type: Mapped[str] = mapped_column(String(120))
+    byte_size: Mapped[int] = mapped_column(BigInteger)
+    checksum_sha256: Mapped[str] = mapped_column(String(64))
+    has_binary: Mapped[bool] = mapped_column(Boolean)
+    collection_mode: Mapped[str] = mapped_column(String(30))
+    privacy_status: Mapped[str] = mapped_column(String(30))
+    sensitivity_class: Mapped[str] = mapped_column(String(20))
+    sharing_scope: Mapped[str] = mapped_column(String(30))
+    legal_basis_ref: Mapped[str | None] = mapped_column(String(200))
+    retention_policy_id: Mapped[str] = mapped_column(String(60))
+    retention_until: Mapped[datetime] = mapped_column(TS)
+    quality_status: Mapped[str] = mapped_column(String(20))
+    quality_reasons: Mapped[list[str]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    ingest_status: Mapped[str] = mapped_column(String(20))
+    quarantine_reason: Mapped[str | None] = mapped_column(String(40))
+    share_status: Mapped[str] = mapped_column(String(20))
+    review_result: Mapped[str | None] = mapped_column(String(10))
+    backup_class: Mapped[str] = mapped_column(String(20))
+    provenance: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    env_context: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    tags: Mapped[list[Any] | None] = mapped_column(JSONB)
+    ext: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    storage_zone: Mapped[str | None] = mapped_column(String(20))
+    storage_key: Mapped[str | None] = mapped_column(String(400))
+    embedding: Mapped[Any | None] = mapped_column(Vector(), deferred=True)
+    created_at: Mapped[datetime] = mapped_column(TS)
+    updated_at: Mapped[datetime] = mapped_column(TS)
+
+
+class AssetLineage(Base):
+    """계보 (03번 요구사항 11). 파생 자산 → 원 자산."""
+
+    __tablename__ = "asset_lineage"
+    child_asset_id: Mapped[str] = mapped_column(ForeignKey("assets.asset_id"), primary_key=True)
+    parent_asset_id: Mapped[str] = mapped_column(ForeignKey("assets.asset_id"), primary_key=True, index=True)
+    relation: Mapped[str] = mapped_column(String(20))
+    tool_version: Mapped[str | None] = mapped_column(String(120))
+    model_ref: Mapped[str | None] = mapped_column(String(200))
+    run_by: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
+class DevicePolicy(Base):
+    """원천 장비·수집기 정책 버전 (03번 요구사항 1.3). 내용은 contracts/schemas/device-policy.schema.json."""
+
+    __tablename__ = "device_policies"
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), index=True)
+    policy: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    integration_card_id: Mapped[str | None] = mapped_column(ID)
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
+class Agreement(Base):
+    """기관 약정 (domain.md 1장, 기준 문서 14.1장). TIER1=수집·관리(L0·L1), TIER2=공동활용 제공(L2~L4)."""
+
+    __tablename__ = "agreements"
+    agreement_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), index=True)
+    tier: Mapped[str] = mapped_column(String(10))
+    reference: Mapped[str] = mapped_column(String(200))
+    valid_from: Mapped[datetime] = mapped_column(TS)
+    valid_until: Mapped[datetime | None] = mapped_column(TS)
+    allowed_purposes: Mapped[list[str]] = mapped_column(ARRAY(String(40)), server_default="{}")
+    status: Mapped[str] = mapped_column(String(20), server_default="ACTIVE")
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
+class IntegrationCard(Base):
+    """연계 카드 (ONB-01). 기관·장비 단위, 버전 관리. 화면은 09번."""
+
+    __tablename__ = "integration_cards"
+    integration_card_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), index=True)
+    device_id: Mapped[str | None] = mapped_column(ForeignKey("devices.device_id"))
+    content: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
+class OrgEventCode(Base):
+    """기관별 하위 이벤트 코드 (03번 요구사항 8.3). 공통 상위분류는 contracts/codes/event-categories.json."""
+
+    __tablename__ = "org_event_codes"
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), primary_key=True)
+    code: Mapped[str] = mapped_column(String(80), primary_key=True)  # 상위분류.하위코드
+    label: Mapped[str] = mapped_column(String(120))
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
+class QualityRuleSet(Base):
+    __tablename__ = "quality_rule_sets"
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    rules: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    active: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)

@@ -87,6 +87,18 @@
       "type": "string",
       "pattern": "^aud_[0-9A-HJKMNP-TV-Z]{26}$"
     },
+    "agreement_id": {
+      "type": "string",
+      "pattern": "^agr_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "integration_card_id": {
+      "type": "string",
+      "pattern": "^icd_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "break_glass_id": {
+      "type": "string",
+      "pattern": "^brk_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
     "sha256": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"

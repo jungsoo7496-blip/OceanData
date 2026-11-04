@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, TypeVar
 
-from sqlalchemy import ColumnElement, false, select, true
+from sqlalchemy import ColumnElement, and_, false, select, true
 from sqlalchemy.orm import Session
 
 from app.domain.principal import Principal
@@ -33,7 +33,10 @@ def scope_filter(model: Any, principal: Principal, *, purpose: str = "metadata")
         if not principal.assigned_project_ids:
             return false()
         project_col = model.project_id
-        return project_col.in_(sorted(principal.assigned_project_ids))
+        cond = project_col.in_(sorted(principal.assigned_project_ids))
+        if hasattr(model, "sharing_scope"):  # 자산은 L1(PROGRAM_REVIEW) 이상만 (domain.md 2장)
+            cond = and_(cond, model.sharing_scope != "PRIVATE")
+        return cond
     return false()
 
 
