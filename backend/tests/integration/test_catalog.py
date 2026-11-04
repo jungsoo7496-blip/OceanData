@@ -49,6 +49,7 @@ def test_code_tables(ctx) -> None:
     assert ctx.client.get("/v1/codes/nope", headers=h).status_code in (400, 404)
 
 
+@pytest.mark.covers("T05-f", "T13-b")
 def test_validate_endpoint_uses_same_rules(ctx) -> None:
     h = ctx.as_user(102)
     root = contracts_dir() / "examples"
@@ -92,6 +93,7 @@ def _asset(org: str, prj: str, dev: str, *, variant: str = "ORIGINAL", scope: st
                  created_at=T0, updated_at=T0)
 
 
+@pytest.mark.covers("T06-e")
 def test_lineage_and_asset_scope(ctx) -> None:
     with ctx.c.sessionmaker.begin() as db:
         orig = _asset(ORG_A, PRJ_A, DEV_A_CAMERA)

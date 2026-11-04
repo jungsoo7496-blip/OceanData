@@ -62,6 +62,7 @@ def review_for(ctx, orig: str) -> dict:
     return next(x for x in r.json()["items"] if x["original_asset_id"] == orig)
 
 
+@pytest.mark.covers("T09-a", "T09-b", "T09-c", "T08-b", "T16-a")
 def test_t09_deid_review_flow(ictx, tmp_path: Path) -> None:
     ctx = ictx
     data = video(tmp_path, "testsrc2=size=320x240:rate=15", "a.mp4")

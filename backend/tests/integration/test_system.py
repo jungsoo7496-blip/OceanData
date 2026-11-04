@@ -63,6 +63,7 @@ def test_metrics_exposed(ctx) -> None:
     assert "http_request_duration_seconds" in r.text
 
 
+@pytest.mark.covers("T13-b")
 def test_capabilities_requires_auth_and_hides_settings(ctx) -> None:
     assert ctx.client.get("/v1/system/capabilities").status_code == 401
     r = ctx.client.get("/v1/system/capabilities", headers=ctx.as_user(102))

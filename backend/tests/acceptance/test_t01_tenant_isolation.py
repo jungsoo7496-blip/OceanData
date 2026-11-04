@@ -35,6 +35,7 @@ CROSS_ORG_CASES = [
 
 
 @pytest.mark.parametrize(("method", "path", "body"), CROSS_ORG_CASES)
+@pytest.mark.covers("T01-a")
 def test_T01_a_cross_org_resources_are_404_and_audited(ctx, method, path, body) -> None:
     r = ctx.client.request(method, path, json=body, headers=ctx.as_user(101, mfa=True))
     assert r.status_code == 404, r.text
@@ -42,6 +43,7 @@ def test_T01_a_cross_org_resources_are_404_and_audited(ctx, method, path, body) 
     assert "CROSS_ORG_ACCESS_ATTEMPT" in ctx.audit_actions()
 
 
+@pytest.mark.covers("T01-a")
 def test_T01_a_cross_org_api_key_revoke(ctx) -> None:
     k = ctx.client.post("/v1/api-keys", headers=ctx.as_user(103, mfa=True),
                         json={"name": "b", "scopes": ["status:read"], "expires_at": in_future(days=1)}).json()
@@ -49,6 +51,7 @@ def test_T01_a_cross_org_api_key_revoke(ctx) -> None:
     assert r.status_code == 404
 
 
+@pytest.mark.covers("T01-b")
 def test_T01_b_lists_do_not_reveal_other_org(ctx) -> None:
     h = ctx.as_user(102)
     devices = ctx.client.get("/v1/devices", headers=h).json()
@@ -62,6 +65,7 @@ def test_T01_b_lists_do_not_reveal_other_org(ctx) -> None:
     assert [p["project_id"] for p in projects] == [PRJ_A]
 
 
+@pytest.mark.covers("T01-b")
 def test_T01_b_pagination_stays_in_scope(ctx) -> None:
     h = ctx.as_user(102)
     seen, cursor = [], None
@@ -75,6 +79,7 @@ def test_T01_b_pagination_stays_in_scope(ctx) -> None:
     assert len(seen) == 3 and DEV_B_CAMERA not in seen
 
 
+@pytest.mark.covers("T01-c")
 def test_T01_c_body_query_header_org_id_do_not_change_scope(ctx) -> None:
     h = ctx.as_user(101)
     assert ctx.client.get(f"/v1/devices?organization_id={ORG_B}", headers=h).status_code == 400
@@ -85,6 +90,7 @@ def test_T01_c_body_query_header_org_id_do_not_change_scope(ctx) -> None:
     assert r.status_code == 400
 
 
+@pytest.mark.covers("T01-f")
 def test_T01_f_program_viewer_scope(ctx) -> None:
     h = ctx.as_user(105)
     assert [p["project_id"] for p in ctx.client.get("/v1/projects", headers=h).json()["items"]] == [PRJ_A]
@@ -94,6 +100,7 @@ def test_T01_f_program_viewer_scope(ctx) -> None:
     assert ctx.client.post("/v1/sessions", headers=h, json={}).status_code == 403
 
 
+@pytest.mark.covers("T01-g")
 def test_T01_g_operator_and_reviewer_cannot_act_as_provider_admin(ctx) -> None:
     for n in (106, 108):
         h = ctx.as_user(n, mfa=True)
@@ -109,6 +116,7 @@ def test_T01_consumer_sees_no_provider_context(ctx) -> None:
         assert ctx.client.get(path, headers=h).status_code == 403, path
 
 
+@pytest.mark.covers("T01-a")
 def test_T01_a_cross_org_incident_update_and_list(ctx) -> None:
     """11번 장애 기록: 다른 기관 장애는 목록에 없고, 바꾸려 하면 404 + 감사."""
     import dataclasses

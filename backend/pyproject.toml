@@ -69,5 +69,6 @@ testpaths = ["tests"]
 markers = [
   "integration: PostgreSQL·S3가 필요한 시험 (TEST_DATABASE_URL 필요)",
   "acceptance: 수용시험 케이스",
+  "covers(*ids): 이 시험이 덮는 docs/ACCEPTANCE.md 세부 ID (17번 수용시험 보고)",
 ]
 filterwarnings = ["ignore::DeprecationWarning:botocore.*"]

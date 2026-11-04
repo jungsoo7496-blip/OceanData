@@ -116,11 +116,21 @@ def with_descendants(db: Session, roots: list[Asset]) -> list[Asset]:
 def affected_by(db: Session, assets: list[Asset]) -> list[dict[str, Any]]:
     """승인된 증빙·보고서(10번)·이용 권한이 있는 데이터셋 버전(13번)의 인용 목록.
 
-    10번: 승인된 회차 기록 버전과 승인·제출된 보고서 버전. 13번 데이터셋은 그 스펙에서 더한다.
+    10번: 승인된 회차 기록 버전과 승인·제출된 보고서 버전. 13번: 유효한 이용 권한(GRANTED)이 있는 데이터셋 버전.
     """
+    from app.db.models import DatasetVersionItem, Grant
     from app.services.evidence import citing_approved
 
-    return citing_approved(db, [a.asset_id for a in assets])
+    ids = [a.asset_id for a in assets]
+    out = citing_approved(db, ids)
+    if ids:  # 13번: 유효한 이용 권한이 있는 데이터셋 버전에 든 자산 (T15-c, 철회 후 삭제)
+        rows = db.execute(select(DatasetVersionItem.asset_id, DatasetVersionItem.dataset_version_id,
+                                 Grant.grant_id).join(Grant, Grant.dataset_version_id ==
+                                                      DatasetVersionItem.dataset_version_id)
+                          .where(DatasetVersionItem.asset_id.in_(ids), Grant.status == "GRANTED")).all()
+        out += [{"asset_id": a, "cited_by": "DATASET", "id": v, "grant_id": g,
+                 "action": "이용 권한을 먼저 철회하세요 (POST /v1/grants/{id}/revoke)"} for a, v, g in rows]
+    return out
 
 
 def delete_assets(c: Container, db: Session, *, organization_id: str, assets: list[Asset], scope: str,

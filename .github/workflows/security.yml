@@ -1,0 +1,53 @@
+# 보안 검사 (17번 요구사항 4, T01-h): SBOM(Syft)·라이선스, 취약점(Trivy), 동적 검사(OWASP ZAP baseline).
+# 교차 기관 접근(BOLA)은 도구에 맡기지 않고 T01 수용시험으로 따로 본다.
+name: security
+on:
+  push: {branches: [main]}
+  schedule: [{cron: "17 18 * * 1"}]  # 매주 화요일 03:17 KST
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  sbom-vuln:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: API 이미지 빌드 (런타임 의존성만 들어간다)
+        run: docker build -f backend/Dockerfile -t marine-api:ci .
+      - name: SBOM (SPDX JSON)
+        run: |
+          mkdir -p var
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/syft:v1.18.1 \
+            marine-api:ci -o spdx-json > var/sbom.spdx.json
+      - name: SBOM 라이선스 허용 목록 (pypi·npm·golang 패키지)
+        run: python tools/check_sbom_licenses.py var/sbom.spdx.json
+      - name: 취약점 (높음·심각, 고칠 수 있는 것)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/src" aquasec/trivy:0.58.1 \
+            image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 marine-api:ci
+          docker run --rm -v "$PWD:/src" aquasec/trivy:0.58.1 \
+            fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 /src
+      - uses: actions/upload-artifact@v4
+        with: {name: sbom, path: var/sbom.spdx.json}
+
+  dast:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'push'  # 무거워서 주간·수동으로
+    steps:
+      - uses: actions/checkout@v4
+      - name: 개발 환경 기동
+        run: |
+          cp .env.example .env
+          make up
+          make seed
+      - name: OWASP ZAP baseline (API 문서 기준 수동 스캔)
+        run: |
+          mkdir -p var && chmod 777 var
+          docker run --rm --network host -v "$PWD/var:/zap/wrk" ghcr.io/zaproxy/zaproxy:2.15.0 \
+            zap-baseline.py -t http://localhost:8000 -J zap-report.json -r zap-report.html -I
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: zap-report, path: "var/zap-report.*"}

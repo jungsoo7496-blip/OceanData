@@ -1,7 +1,7 @@
 # 인수인계 (클라우드 → 로컬)
 
 이 파일은 클라우드 세션에서 만든 작업을 로컬에서 이어가기 위한 안내다. 작업이 진행될 때마다 갱신한다.
-최종 갱신: 2026-11-04 (12번 Open API까지)
+최종 갱신: 2026-11-04 (17번 수용시험·릴리스 게이트까지)
 
 ## 1. 지금 상태 한눈에
 | 스펙 | 상태 | 남은 것 (자세히는 각 tasks.md) |
@@ -21,10 +21,12 @@
 | 13 공유·데이터셋 | 핵심 완료 | 공유 규칙(속성 기반 T08)·우회 가드·후보·심사·등급 변경·데이터셋 버전·카탈로그·이용 신청·Grant·배포·철회·이용 이력·DCAT·T15 완료. 비식별 작업 처리(14번), 약정 API(03번), 썸네일 샘플 남음 |
 | 14 비식별·검수 | 핵심 완료 (기준선) | 대상 제한·가림 렌더링·처리 이력·검수 배정/표본/결정·미탐 회차 재검수·품질 집계·태그·이벤트 규칙·장면 검색·T09 완료. **탐지·임베딩 모델은 모의/기준선** — 모델 선정 후 교체 (ADR-0020) |
 | 12 Open API·환경 결합 | 핵심 완료 (모의 어댑터) | 소스 등록·주기 수집·보충·호출 한도·형식 변경 격리·경보·관측소 장비·환경 결합(거리·시각 차이)·재배포 제한·출처 표기·보고서 변수·환경 필터·T17 완료. **실제 기관 API 어댑터는 명세 확인 후** |
-| 15~17 | 시작 전 | 다음 추천: 17(수용·릴리스) → 15·16(조건부, 하드웨어·요구 확정 후) |
+| 17 수용·릴리스 | 핵심 완료 | 세부 ID별 수용 보고(`make test-acceptance`)·가상 3사 여정 E2E(T06-d)·동시 업로드 쿼터(T12-a)·워커 정지(T12-c)·Locust 부하 시나리오·SBOM/Trivy/ZAP CI·Runbook 10종·릴리스 게이트·릴리스 노트. Go·웹 E2E 결과 연결, 스테이징 Runbook 수행 기록(T14), 운영 실측(T12-b·T18), CI 결과 확인 남음 |
+| 15·16 | 시작 전 | 조건부 (엣지 하드웨어·연계 카드, NGSI-LD 요구 확정 후) |
 
-**시험:** 백엔드 174건(단위·속성 기반·통합·계약·수용 T01·T07·T08·T09·T11·T15·T17) + 에이전트(Go) 8개 패키지 통과 (MQTT 시험은 MQTT_TEST_BROKER 필요) (`cd backend && pytest`).
+**시험:** 백엔드 179건(단위·속성 기반·통합·계약·수용 T01·T05·T06-d·T07·T08·T09·T11·T12·T15·T16·T17) + 에이전트(Go) 8개 패키지 통과 (수용 T02-a·b·c 연결) (MQTT 시험은 MQTT_TEST_BROKER 필요) (`cd backend && pytest`).
 수집 시험은 moto S3 서버와 실제 SeaweedFS(`TEST_S3_ENDPOINT`) 양쪽에서 통과.
+**수용시험 (2026-11-04):** PASS 65 · NOT_IMPLEMENTED 12 · NEEDS_INPUT 5 · NEEDS_HARDWARE 2 — 세부 ID별 표는 `docs/ACCEPTANCE-STATUS.md`. M1 릴리스 게이트 통과 (`make release-gate MILESTONE=M1`).
 **개발 환경:** `make up` 7개 서비스 healthy. 실제 Keycloak 로그인 → 업로드 생성 → localhost:8333 사전 서명 URL로 파트 전송 → 워커 무결성 검증 → READY_PRIVATE → 영수증까지 확인.
 
 ## 2. 로컬에서 시작하기
@@ -38,7 +40,8 @@ make venv                     # backend/.venv에 개발 의존성 설치
 make up                       # 전체 개발 환경 기동 (처음엔 이미지 빌드로 몇 분 걸림)
 make seed                     # 시험 기관 5·사용자 9·사업 2·장비 5·회차 2
 make test-integration         # 통합 시험 (make up의 PostgreSQL 사용)
-make test-acceptance          # T01 수용시험
+make test-acceptance          # 수용시험 → var/acceptance.{json,md} (세부 ID별)
+make release-gate MILESTONE=M1   # 계약·추적성·비밀값·라이선스·시험·마일스톤 케이스
 ```
 
 - API 문서: http://localhost:8000/docs · 웹 포털: http://localhost:5173 (member-a/dev-password로 로그인) · 포털 E2E: `cd web && node e2e/portal.mjs` · Keycloak: http://localhost:8080 (admin / .env의 KEYCLOAK_ADMIN_PASSWORD)
@@ -50,8 +53,8 @@ make test-acceptance          # T01 수용시험
 로컬 저장소에서 `claude`를 실행하고 이렇게 시작하면 된다.
 
 ```
-HANDOFF.md, AGENTS.md, .kiro/steering/*.md를 읽고 17-acceptance-release를 이어서 진행해줘.
-requirements.md를 기준으로 design.md와 tasks.md를 먼저 쓰고, 계약(contracts/)부터 고친 다음 구현해.
+HANDOFF.md, AGENTS.md, .kiro/steering/*.md를 읽고 각 스펙 tasks.md의 남은 [ ] 항목을 이어서 진행해줘.
+먼저 docs/ACCEPTANCE-STATUS.md의 NOT_IMPLEMENTED 항목부터. 계약(contracts/)부터 고친 다음 구현해.
 ```
 
 Kiro를 쓸 경우: Specs 패널에서 03번을 열고 README의 "Kiro에 줄 지시 예시"를 따른다. 01·02번 design.md·tasks.md는 이미 있다.
@@ -113,4 +116,6 @@ tools/         validate_contracts.py, check_traceability.py, check_licenses.py, 
 - 통합 시험은 `TEST_DATABASE_URL`의 DB 서버에 임시 DB를 만들고 끝나면 지운다. `make up`의 postgres(5432)를 쓰면 된다.
 - 공유 시험 흐름(개발): 약정 `python -m app.cli agreement <기관ID> --reference 합성 --purposes AI_TRAINING`, 비식별 작업 대신 `python -m app.cli share-processed <원본ID>`(14번 전까지).
 - 알림 메일 확인: `.env`에 `SMTP_HOST=mailpit` 후 `docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile ops up -d mailpit`, 받은 메일은 http://localhost:8025. 워커가 `WATCH_EVAL_INTERVAL_S`마다 감시 규칙을 평가한다. 수동 평가: `python -m app.cli watch`, 모의 하드웨어 신호: `python -m app.cli hardware-signal --status CRITICAL`.
-- `.github/workflows/ci.yml`은 GitHub에 push하면 돈다. 클라우드 세션에서는 아직 GitHub Actions 결과를 확인하지 못했다.
+- 운영 절차는 `docs/runbook/` (10종). 스테이징에서 수행하면 `docs/runbook/records/`에 기록을 남긴다 (T14).
+- 부하 시험: `pip install -r loadtest/requirements.txt` 후 `make loadtest LOAD_HOST=... ` (loadtest/README.md). SBOM·취약점: syft·trivy 설치 후 `make sbom`, `make vuln-scan`.
+- `.github/workflows/ci.yml`·`security.yml`은 GitHub에 push하면 돈다. 클라우드 세션에서는 아직 GitHub Actions 결과를 확인하지 못했다.

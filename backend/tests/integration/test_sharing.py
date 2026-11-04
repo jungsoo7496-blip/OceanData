@@ -46,6 +46,7 @@ def share(ctx, asset_id: str, user: int, **body):
                            headers=ctx.as_user(user))
 
 
+@pytest.mark.covers("T08-a", "T08-d", "T08-h", "T08-j")
 def test_sharing_flow(ctx) -> None:
     ids = make_assets(ctx)
     # 요구사항 1: BYPRODUCT 원본만 후보, CORE·파생본은 사유와 함께 제외

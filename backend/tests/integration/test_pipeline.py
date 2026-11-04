@@ -121,6 +121,7 @@ def test_corrupt_video_is_quarantined(ictx) -> None:
     assert (q.used_bytes, q.quarantine_bytes) == (0, len(data))
 
 
+@pytest.mark.covers("T04-f", "T16-c")
 def test_queue_retry_lease_and_resource_classes(ictx) -> None:
     c = ictx.c
     calls: list[str] = []

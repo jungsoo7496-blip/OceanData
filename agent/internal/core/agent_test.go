@@ -234,6 +234,7 @@ func (e *env) scanStable(t *testing.T, a *Agent) int {
 	return n
 }
 
+// covers: T02-a
 func TestT02FolderToServerWithoutHumanIntervention(t *testing.T) {
 	e := newEnv(t)
 	a := e.agent(t)
@@ -332,6 +333,7 @@ func TestAlreadyRegisteredIsNotResent(t *testing.T) {
 	}
 }
 
+// covers: T02-c
 func TestPolicyChangeExcludesQueuedFilesAndReports(t *testing.T) {
 	e := newEnv(t)
 	a := e.agent(t)
@@ -387,5 +389,43 @@ func TestTransferWindowClosedPausesUpload(t *testing.T) {
 	e.scanStable(t, a)
 	if n, _ := a.ProcessOnce(context.Background()); n != 0 || len(e.fake.uploads) != 0 {
 		t.Fatal("허용 시간대 밖에서는 보내면 안 된다")
+	}
+}
+
+// covers: T02-b
+// 쓰기 중인 파일(크기가 계속 바뀜)은 크기가 size_stable_s 동안 그대로일 때까지 대기열에 넣지 않는다.
+func TestWritingFileIsNotQueuedUntilSizeStable(t *testing.T) {
+	e := newEnv(t)
+	a := e.agent(t)
+	ctx := context.Background()
+	chunk := bytes.Repeat([]byte("2026-11-01T00:00:00Z,18.4\n"), 1000)
+	data := append([]byte{}, chunk...)
+	e.write(t, "S1/sensor/growing.csv", data)
+	for i := 0; i < 4; i++ { // 스캔 사이마다 계속 쓴다
+		if n, err := a.Scan(ctx); err != nil || n != 0 {
+			t.Fatalf("쓰기 중인 파일을 넣었다 (스캔 %d, n=%d, err=%v)", i, n, err)
+		}
+		e.clock = e.clock.Add(2 * time.Second)
+		data = append(data, chunk...)
+		e.write(t, "S1/sensor/growing.csv", data)
+	}
+	if n, _ := a.Scan(ctx); n != 0 { // 마지막 쓰기 직후 첫 관찰
+		t.Fatalf("크기가 막 바뀐 파일을 넣었다 (%d)", n)
+	}
+	e.clock = e.clock.Add(2 * time.Second)
+	if n, err := a.Scan(ctx); err != nil || n != 1 {
+		t.Fatalf("크기가 안정된 뒤에는 넣어야 한다 (n=%d, err=%v)", n, err)
+	}
+	f, _ := a.Store.Get(ctx, "S1/sensor/growing.csv")
+	if f.Size != int64(len(data)) {
+		t.Fatalf("최종 크기로 넣어야 한다: %d != %d", f.Size, len(data))
+	}
+	if _, err := a.ProcessOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.fake.mu.Lock()
+	defer e.fake.mu.Unlock()
+	if len(e.fake.uploads) != 1 {
+		t.Fatalf("업로드 %d건 (1건이어야 함)", len(e.fake.uploads))
 	}
 }

@@ -43,6 +43,7 @@ def assert_clean_body(n) -> None:  # 요구사항 3.4: 토큰·URL·개인정보
         assert bad not in n.body and bad not in n.subject, bad
 
 
+@pytest.mark.covers("T07-a", "T07-d")
 def test_t07a_agent_stop_raises_alert_and_incident(ctx) -> None:
     dh = _device_headers(ctx)
     assert ctx.client.post("/v1/agents/heartbeat", json=hb(disk_free_bytes=FREE), headers=dh).status_code == 204
@@ -101,6 +102,7 @@ def test_t07a_agent_stop_raises_alert_and_incident(ctx) -> None:
     assert (item["status"], item["assignee"]) == ("RESOLVED", "김담당") and "자동 해제" in item["memo"]
 
 
+@pytest.mark.covers("T07-b")
 def test_t07b_scheduled_session_without_data(ctx) -> None:
     now = datetime.now(UTC).replace(microsecond=0)
     r = ctx.client.post("/v1/sessions", headers=ctx.as_user(101), json={
@@ -126,6 +128,7 @@ def test_t07b_scheduled_session_without_data(ctx) -> None:
     assert inc["incident_id"] in res.resolved
 
 
+@pytest.mark.covers("T07-c")
 def test_t07c_observation_lag_and_clock_offset(ctx) -> None:
     with ctx.c.sessionmaker.begin() as db:
         db.execute(update(Device).where(Device.device_id == DEV_A_SENSOR).values(expected_interval_s=60))

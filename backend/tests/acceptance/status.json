@@ -1,0 +1,74 @@
+{
+  "T02-e": {
+    "status": "NOT_IMPLEMENTED",
+    "reason": "15번 엣지 수집기 (조건부, 하드웨어·연계 카드 확정 후)"
+  },
+  "T02-f": {
+    "status": "NOT_IMPLEMENTED",
+    "reason": "15번 엣지 수집기"
+  },
+  "T02-g": {
+    "status": "NOT_IMPLEMENTED",
+    "reason": "웹 업로드 재개는 브라우저 E2E(web/e2e)로 수동 확인, 자동 수용시험 미작성"
+  },
+  "T03-a": {
+    "status": "NEEDS_HARDWARE",
+    "reason": "10GB 시험은 운영 스토리지·회선에서 (04번 tasks)"
+  },
+  "T03-b": {
+    "status": "NOT_IMPLEMENTED",
+    "reason": "72시간 오프라인은 에이전트 Go 시험(06번) 축소판만, 엣지는 15번"
+  },
+  "T10-a": {
+    "status": "NOT_IMPLEMENTED",
+    "reason": "08번 백업·복원 (PoC 후)"
+  },
+  "T10-b": {
+    "status": "NOT_IMPLEMENTED",
+    "reason": "08번 백업 대상 작업 (PoC 후)"
+  },
+  "T11-f": {
+    "status": "NEEDS_INPUT",
+    "reason": "실제 관리기관 보고서 양식(HWPX) 확보 후"
+  },
+  "T12-b": {
+    "status": "NEEDS_HARDWARE",
+    "reason": "부하 도구(loadtest/)는 있음. 수치는 운영 하드웨어에서 실측"
+  },
+  "T13-a": {
+    "status": "NEEDS_INPUT",
+    "reason": "외부 개발자 시험 (사람 참여)"
+  },
+  "T14-a": {
+    "status": "NEEDS_INPUT",
+    "reason": "스테이징에서 Runbook 수행 기록 (docs/runbook/records/)"
+  },
+  "T14-b": {
+    "status": "NEEDS_INPUT",
+    "reason": "스테이징에서 Runbook 수행 기록"
+  },
+  "T19-a": {
+    "status": "NOT_IMPLEMENTED",
+    "reason": "16번 NGSI-LD 어댑터 (조건부)"
+  },
+  "T19-b": {
+    "status": "NOT_IMPLEMENTED",
+    "reason": "16번 (조건부, 게이트 통과 후)"
+  },
+  "T01-h": {
+    "status": "NEEDS_INPUT",
+    "reason": "GitHub Actions security 작업(SBOM·Trivy·ZAP) 결과로 판정 — 클라우드 세션에서는 결과 미확인"
+  },
+  "T06-b": {
+    "status": "NOT_IMPLEMENTED",
+    "reason": "데이터셋 → 원본은 매니페스트로 확인(T06-d), 모델 버전·검수자를 한 번에 보여 주는 조회는 없음"
+  },
+  "T17-b": {
+    "status": "NOT_IMPLEMENTED",
+    "reason": "반경·시간 창 밖이면 결합하지 않음(구현), '경고' 표시는 미구현"
+  },
+  "T18": {
+    "status": "NEEDS_HARDWARE",
+    "reason": "노드·디스크 추가 전후 비교"
+  }
+}

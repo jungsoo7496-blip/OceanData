@@ -31,6 +31,7 @@ def batch(items: list[dict], **kw) -> dict:
             "observations": items, **kw}
 
 
+@pytest.mark.covers("T05-d")
 def test_batch_item_results_and_rules(ctx) -> None:
     h = ctx.as_user(102)
     items = [

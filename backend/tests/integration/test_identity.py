@@ -11,6 +11,7 @@ from tests.conftest import _KEY, in_future, user_token
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.covers("T01-d")
 def test_user_token_validation_and_audit(ctx) -> None:
     from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -35,6 +36,7 @@ def test_user_token_validation_and_audit(ctx) -> None:
     assert _KEY  # 시험 키 사용 확인
 
 
+@pytest.mark.covers("T01-c")
 def test_organization_id_in_query_or_header_is_rejected(ctx) -> None:
     h = ctx.as_user(101)
     assert ctx.client.get(f"/v1/devices?organization_id={ORG_A}", headers=h).json()["code"] == "VALIDATION_ERROR"

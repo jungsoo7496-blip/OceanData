@@ -58,6 +58,7 @@ def synthetic_session(ctx) -> dict[str, str]:
     return ids
 
 
+@pytest.mark.covers("T11-a", "T11-b", "T11-c", "T11-d", "T11-e", "T06-a")
 def test_t11_report_flow_and_t06a_trace(ictx) -> None:
     ctx = ictx
     ids = synthetic_session(ctx)

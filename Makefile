@@ -8,7 +8,8 @@ TEST_DATABASE_URL ?= postgresql+pg8000://marine_owner:change-me-owner@127.0.0.1:
 
 .PHONY: venv up down logs migrate seed verify-audit sample-video test test-unit test-integration test-acceptance \
         lint typecheck security license-check secrets-check web-check contracts-check traceability \
-        traceability-write ci agent-build agent-test bench verify-integrity sample-observations
+        traceability-write ci agent-build agent-test bench verify-integrity sample-observations \
+        release-gate release-notes sbom vuln-scan loadtest
 
 venv:
 	cd backend && uv venv -q .venv && uv pip install -q -p .venv -e ".[dev]" -r ../tools/requirements.txt
@@ -42,8 +43,32 @@ test-unit:
 test-integration:
 	cd backend && TEST_DATABASE_URL="$(TEST_DATABASE_URL)" .venv/bin/pytest -q -m "integration and not acceptance"
 
+# 수용시험 (17번): covers 마커가 있는 시험·수용시험을 돌리고 세부 ID별 보고서 var/acceptance.{json,md}를 만든다
 test-acceptance:
-	cd backend && TEST_DATABASE_URL="$(TEST_DATABASE_URL)" .venv/bin/pytest -q -m acceptance
+	mkdir -p var && $(VPY) -c "open('var/acceptance-results.jsonl', 'w').close()"
+	-cd backend && ACCEPTANCE_RESULTS=$(CURDIR)/var/acceptance-results.jsonl TEST_DATABASE_URL="$(TEST_DATABASE_URL)" \
+		.venv/bin/pytest -q -m "acceptance or covers"
+	-$(VPY) tools/go_acceptance.py --out var/acceptance-results.jsonl
+	$(VPY) tools/acceptance_report.py
+
+# 릴리스 게이트 (17번 요구사항 6): make release-gate MILESTONE=M1 BASE_REF=<이전 태그>
+release-gate:
+	TEST_DATABASE_URL="$(TEST_DATABASE_URL)" MILESTONE="$(MILESTONE)" BASE_REF="$(BASE_REF)" $(VPY) tools/release_gate.py
+
+release-notes:
+	BASE_REF="$(BASE_REF)" $(VPY) tools/release_gate.py --notes
+
+# SBOM·취약점 (17번 요구사항 4): syft·trivy가 설치돼 있어야 한다 (CI는 security 작업)
+sbom:
+	mkdir -p var && syft dir:. -o spdx-json > var/sbom.spdx.json && $(VPY) tools/check_sbom_licenses.py var/sbom.spdx.json
+
+vuln-scan:
+	trivy fs --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed .
+
+# 부하 시험 (T12, 수치는 실측 후): loadtest/README.md
+loadtest:
+	mkdir -p var && locust -f loadtest/locustfile.py --host $${LOAD_HOST:-http://localhost:8000} --headless \
+		-u $${LOAD_USERS:-10} -r $${LOAD_RATE:-2} -t $${LOAD_TIME:-1m} --json > var/loadtest.json
 
 lint:
 	cd backend && .venv/bin/ruff check app tests

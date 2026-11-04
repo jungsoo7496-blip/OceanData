@@ -55,6 +55,7 @@ def asset_at(ctx, captured: datetime | None, lon: float = 126.52, lat: float = 3
         return a.asset_id
 
 
+@pytest.mark.covers("T17-a", "T17-c")
 def test_t17_collect_join_backfill_and_alert(ictx) -> None:
     ctx = ictx
     assert ctx.client.post("/v1/external-sources", json=SOURCE, headers=ctx.as_user(101)).status_code == 403

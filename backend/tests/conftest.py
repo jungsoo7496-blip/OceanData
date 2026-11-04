@@ -190,3 +190,22 @@ def ictx(db_url: str, engine: Engine, s3_endpoint: dict[str, str]) -> Iterator[C
         seed(db)
     with TestClient(create_app(container), raise_server_exceptions=False) as client:
         yield Ctx(client, container)
+
+
+# ---- 17번 수용시험 보고: ACCEPTANCE_RESULTS 경로가 있으면 covers 마커가 있는 시험의 결과를 JSON Lines로 남긴다
+_RESULTS = os.environ.get("ACCEPTANCE_RESULTS")
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: Any, call: Any) -> Iterator[None]:
+    outcome = yield
+    rep = outcome.get_result()
+    ids = [i for m in item.iter_markers("covers") for i in m.args]
+    if not _RESULTS or not ids or (rep.when != "call" and not (rep.when == "setup" and rep.outcome != "passed")):
+        return
+    import json
+
+    line = {"nodeid": item.nodeid, "covers": ids, "outcome": rep.outcome,
+            "log": (rep.longreprtext or "")[-2000:] if rep.outcome == "failed" else ""}
+    with open(_RESULTS, "a", encoding="utf-8") as f:
+        f.write(json.dumps(line, ensure_ascii=False) + "\n")

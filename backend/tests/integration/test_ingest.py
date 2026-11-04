@@ -136,6 +136,7 @@ def test_T03_resume_after_interruption(ictx) -> None:
     assert ictx.client.get(f"/v1/uploads/{created['upload_id']}", headers=h).json()["ingest_status"] == "REGISTERED"
 
 
+@pytest.mark.covers("T04-a")
 def test_T04_checksum_mismatch_is_quarantined(ictx) -> None:
     h = ictx.as_user(102)
     data = mp4_bytes(6 * MB, seed=2)
@@ -156,6 +157,7 @@ def test_T04_checksum_mismatch_is_quarantined(ictx) -> None:
     check(body, "GET", "/v1/assets/{asset_id}")
 
 
+@pytest.mark.covers("T04-b")
 def test_T04_mime_mismatch_detected_by_content(ictx) -> None:
     h = ictx.as_user(102)
     data = b"time,temp\n2026-11-01T00:00:00Z,18.4\n" * 1000
@@ -193,6 +195,7 @@ def test_unknown_session_quarantine_then_assign_and_revalidate(ictx) -> None:
     assert (q.quarantine_bytes, q.used_bytes) == (0, len(data))
 
 
+@pytest.mark.covers("T04-c", "T04-d", "T04-e")
 def test_duplicates_and_idempotency(ictx) -> None:
     h = ictx.as_user(102)
     data = mp4_bytes(5 * MB, seed=3)
@@ -215,6 +218,7 @@ def test_duplicates_and_idempotency(ictx) -> None:
         assert len(db.execute(select(Upload)).scalars().all()) == 2
 
 
+@pytest.mark.covers("T02-c", "T02-d", "T02-h", "T04-g")
 def test_variant_rules_and_metadata_only(ictx) -> None:
     h = ictx.as_user(102)
     data = mp4_bytes(5 * MB, seed=6)
@@ -241,6 +245,7 @@ def test_variant_rules_and_metadata_only(ictx) -> None:
     assert back["ingest_status"] == "READY_PRIVATE" and back["has_binary"] is False
 
 
+@pytest.mark.covers("T03-c")
 def test_quota_abort_and_expiry(ictx) -> None:
     h = ictx.as_user(102)
     data = mp4_bytes(5 * MB, seed=7)

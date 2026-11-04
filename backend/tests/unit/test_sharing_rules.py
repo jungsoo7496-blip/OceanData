@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -39,28 +40,34 @@ def test_happy_paths() -> None:
     assert evaluate("PUBLIC", good(privacy_status="ANONYMIZED_VERIFIED"), ALL) == []
 
 
+@pytest.mark.covers("T08-a")
 def test_t08_a_core_cannot_reach_l2() -> None:
     assert "data_role=BYPRODUCT (원 자산 포함)" in conds("SANDBOX_PARTNERS", good(data_role="CORE"))
 
 
+@pytest.mark.covers("T08-b")
 def test_t08_b_unreviewed_deid_cannot_reach_l2() -> None:
     assert "review_result=PASSED" in conds("SANDBOX_PARTNERS", good(review_result=None))
 
 
+@pytest.mark.covers("T08-d")
 def test_t08_d_agreement_required() -> None:
     assert "제공기관 2단 약정 유효" in conds("SANDBOX_PARTNERS", good(tier2_agreement_valid=False))
 
 
+@pytest.mark.covers("T08-h")
 def test_t08_h_original_and_core_original_derivatives() -> None:
     assert "variant ≠ ORIGINAL" in conds("SANDBOX_PARTNERS", good(variant="ORIGINAL", ancestors=()))
     core = good(ancestors=(Lineal("ORIGINAL", "CORE", "INTERNAL"),))
     assert {"CORE 원본의 파생본이 아님", "data_role=BYPRODUCT (원 자산 포함)"} <= conds("SANDBOX_PARTNERS", core)
 
 
+@pytest.mark.covers("T08-i")
 def test_t08_i_operator_final_approval_required() -> None:
     assert "share_status=APPROVED (운영자 최종 승인)" in conds("SANDBOX_PARTNERS", good(share_status="QUALITY_REVIEW"))
 
 
+@pytest.mark.covers("T08-j")
 def test_t08_j_l1_needs_org_admin() -> None:
     assert conds("PROGRAM_REVIEW", good(), approvals={"PLATFORM_OPERATOR"}) == {"ORG_ADMIN 승인"}
     assert evaluate("PROGRAM_REVIEW", good(variant="ORIGINAL", data_role="CORE"), {"ORG_ADMIN"}) == []
@@ -106,6 +113,7 @@ approvals = st.sets(st.sampled_from(["ORG_ADMIN", "PLATFORM_OPERATOR", "REVIEWER
 
 @settings(max_examples=3000, deadline=None)
 @given(f=facts, target=st.sampled_from(SCOPES), ok=approvals)
+@pytest.mark.covers("T08-c", "T08-g")
 def test_t08_c_no_path_breaks_domain_rules(f: Facts, target: str, ok: set[str]) -> None:
     """조건을 모두 충족했다고 판정되면, domain.md 4장 불변식이 반드시 성립한다."""
     if evaluate(target, f, ok):

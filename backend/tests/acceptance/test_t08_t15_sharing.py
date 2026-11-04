@@ -87,6 +87,7 @@ def decide(ctx, user: int, req_id: str, decision: str):
                            json={"decision": decision, "reason": "검토 결과"})
 
 
+@pytest.mark.covers("T08-e", "T08-f", "T15-c", "T15-d", "T15-e", "T15-g", "T06-c")
 def test_t08_t15_dataset_distribution(ictx) -> None:
     ctx = ictx
     a = approved_pair(ctx, ORG_A, PRJ_A, DEV_A_CAMERA, ["AI_TRAINING", "JOINT_RESEARCH"])
@@ -175,6 +176,27 @@ def test_t08_t15_dataset_distribution(ictx) -> None:
     assert all(x["consumer_organization"] == "이용기관 (시험)" for x in r.json()["items"])
     assert "DISTRIBUTION_ISSUED" in ctx.audit_actions()
 
+    # T15-e: v1 Grant로 v2에 접근할 수 없다 — 이용 권한은 버전 하나에 묶이고 배포는 그 버전 파일만 준다
+    r = ctx.client.post(path, headers=ctx.as_user(OP), json={"version": "2.0.0", "data_card": CARD,
+                                                             "item_asset_ids": [a["deid"], b["deid"]]})
+    v2 = r.json()["dataset_version_id"]
+    assert r.status_code == 201 and v2 != vid
+    r = ctx.client.post("/v1/distributions", json={"grant_id": grant}, headers=ctx.as_user(CONSUMER))
+    assert r.json()["dataset_version_id"] == vid and r.json()["recipient"]["manifest_sha256"] == v1["manifest_sha256"]
+    assert all(v2 not in f["url"] for f in r.json()["files"])
+    r = ctx.client.post("/v1/distributions", json={"grant_id": grant, "dataset_version_id": v2},
+                        headers=ctx.as_user(CONSUMER))
+    assert r.status_code in (400, 422)  # 버전을 바꿔 달라는 필드 자체가 없다
+    assert {g["dataset_version_id"] for g in ctx.client.get("/v1/grants", headers=ctx.as_user(CONSUMER))
+            .json()["items"]} == {vid}
+
+    # T15-c: 유효한 이용 권한이 있는 데이터셋의 포함 자산은 삭제 거부 + 철회 안내
+    r = ctx.client.post(f"/v1/assets/{a['deid']}/deletion", json={"reason": "시험", "confirm_affected": False},
+                        headers=ctx.as_user(ADMIN_A, mfa=True))
+    assert r.status_code == 409
+    ds_hit = next(x for x in r.json()["affected"] if x["cited_by"] == "DATASET")
+    assert ds_hit["grant_id"] == grant and "철회" in ds_hit["action"]
+
     # 하향 + 즉시 철회 (요구사항 10.3): 새 URL 발급 중단, 회수 불가 안내, 파기 확인
     r = share(ctx, ADMIN_A, a["deid"], "PROGRAM_REVIEW", existing_grant_handling="REVOKE_NOW")
     assert r.json()["state"] == "APPLIED"
@@ -211,6 +233,7 @@ def test_t08_t15_dataset_distribution(ictx) -> None:
     assert [x["dct:identifier"] for x in r.json()["dcat:dataset"]] == [ds2]
 
 
+@pytest.mark.covers("T15-d")
 def test_t15_deadline_and_expiry(ictx) -> None:
     """응답 기한 초과 → 거부, 권한 기간 만료 → EXPIRED (요구사항 8.3, 10.1)."""
     ctx = ictx

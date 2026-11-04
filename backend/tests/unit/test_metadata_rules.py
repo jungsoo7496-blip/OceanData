@@ -51,6 +51,7 @@ def test_schema_version_rule(declared, ok) -> None:
     assert metadata.check_schema_version("1.1.0", ["1.0.0", "1.2.0"]).ok
 
 
+@pytest.mark.covers("T05-b")
 def test_capture_time_unknown_without_evidence() -> None:
     r = normalize.resolve_capture_time("2026-11-01T10:00:00+09:00", None, {"source": "UNKNOWN", "verified": False},
                                        {"mtime": "2026-11-01T10:00:00+09:00"})
@@ -82,6 +83,7 @@ def test_valid_positions_pass(lon, lat) -> None:
 
 
 @given(st.floats(-90, 90), st.floats(90.0001, 180))
+@pytest.mark.covers("T05-c")
 def test_swapped_lonlat_detected(lat_like, lon_like) -> None:
     probs = normalize.check_location({"type": "Point", "coordinates": [lat_like, lon_like]})
     assert [p.code for p in probs] == ["lonlat_swapped"]

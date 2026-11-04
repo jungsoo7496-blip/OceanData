@@ -58,6 +58,7 @@ def test_retention_policies_applied(ictx) -> None:
         "UNKNOWN_SESSION", "quarantine_unknown_session", 9999)  # 회차 미상은 자동 삭제하지 않는다
 
 
+@pytest.mark.covers("T15-a")
 def test_dry_run_legal_hold_and_expiry_execution(ictx) -> None:
     a1, a2 = upload_csv(ictx, b"t,v\n1,1\n"), upload_csv(ictx, b"t,v\n2,2\n")
     with ictx.c.engine.begin() as conn:
@@ -89,6 +90,7 @@ def test_dry_run_legal_hold_and_expiry_execution(ictx) -> None:
     assert r.status_code == 409 and r.json()["affected"][0]["reason"] == "LEGAL_HOLD"
 
 
+@pytest.mark.covers("T15-b")
 def test_asset_deletion_with_derivatives_certificate_and_reupload(ictx, tmp_path) -> None:
     if not shutil.which("ffmpeg"):
         pytest.skip("ffmpeg가 필요합니다")
