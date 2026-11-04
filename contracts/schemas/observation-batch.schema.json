@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "관측값 배치 v1.0 (POST /v1/observations 요청 본문)",
+  "description": "센서 관측값 묶음 (07번). 결측은 value=null + quality_flag=MISSING. observed_at은 오프셋이 있는 RFC 3339. 오프셋 없는 원천 시각은 source_timestamp로 보내고 장비 정책의 source_timezone으로 변환한다.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_system_id",
+    "observations"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/schema_version"
+    },
+    "source_system_id": {
+      "$ref": "common.schema.json#/$defs/device_id"
+    },
+    "session_id": {
+      "$ref": "common.schema.json#/$defs/session_id"
+    },
+    "clock_offset_ms": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "장비가 추정한 시계 오차. observed_at을 고치지 않고 함께 기록한다."
+    },
+    "observations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/observation"
+      },
+      "description": "항목 수 한도는 정책값이며 넘으면 413 PAYLOAD_TOO_LARGE (스키마에 넣지 않는다)"
+    }
+  },
+  "$defs": {
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric",
+        "quality_flag"
+      ],
+      "properties": {
+        "metric": {
+          "$ref": "common.schema.json#/$defs/metric_code"
+        },
+        "observed_at": {
+          "$ref": "common.schema.json#/$defs/offset_datetime"
+        },
+        "source_timestamp": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "원천 시각 문자열 그대로 (오프셋이 없을 때)"
+        },
+        "value": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "description": "원천 단위 그대로. 서버가 contracts/codes/units.json으로 정규화한다."
+        },
+        "quality_flag": {
+          "$ref": "common.schema.json#/$defs/observation_quality_flag"
+        },
+        "depth_m": {
+          "type": "number",
+          "description": "수심(양수, 미터). 해당 없으면 생략"
+        },
+        "channel": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "같은 장비·항목의 측정 채널 (센서 여러 개). 중복 판단 키에 들어간다"
+        },
+        "location": {
+          "$ref": "common.schema.json#/$defs/geometry"
+        },
+        "source_record_id": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "allOf": [
+        {
+          "anyOf": [
+            {
+              "required": [
+                "observed_at"
+              ]
+            },
+            {
+              "required": [
+                "source_timestamp"
+              ]
+            }
+          ]
+        },
+        {
+          "description": "결측 표기 규칙: MISSING ⇔ value=null",
+          "if": {
+            "properties": {
+              "quality_flag": {
+                "const": "MISSING"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "value"
+            ],
+            "properties": {
+              "value": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "value",
+              "unit"
+            ],
+            "properties": {
+              "value": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

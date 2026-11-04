@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0.0",
+  "session_id": "ses_01JD0000000000000000000101",
+  "event_code": "SAFETY_INCIDENT.near_miss",
+  "started_at": "2027-05-10T01:50:00Z",
+  "timestamp_quality": {
+    "source": "MANUAL",
+    "verified": false,
+    "est_offset_ms": 60000
+  },
+  "severity": "CRITICAL",
+  "source": "MANUAL",
+  "note": "접근 선박과 근접. 선장 보고 기준 시각.",
+  "linked_asset_ids": [
+    "ast_01JD0000000000000000010001"
+  ]
+}

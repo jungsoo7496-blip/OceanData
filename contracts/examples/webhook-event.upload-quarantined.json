@@ -1,0 +1,12 @@
+{
+  "event_id": "01JD0000000000000000070001",
+  "type": "upload.quarantined",
+  "occurred_at": "2027-05-10T04:05:00Z",
+  "organization_id": "org_01JD0000000000000000000001",
+  "data": {
+    "asset_id": "ast_01JD0000000000000000010003",
+    "upload_id": "upl_01JD0000000000000000020001",
+    "ingest_status": "QUARANTINED",
+    "quarantine_reason": "CHECKSUM_MISMATCH"
+  }
+}

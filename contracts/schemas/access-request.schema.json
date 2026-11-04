@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "이용 신청 v1.0 (POST /v1/access-requests 요청 본문)",
+  "description": "이용기업이 특정 데이터셋 버전 하나를 신청한다. 목적은 모든 제공기관의 2단 약정 허용 목적 안에 있어야 한다 (domain.md 4장).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["dataset_version_id", "purpose", "purpose_detail", "period", "security_measures", "agreement_accepted", "agreement_version"],
+  "properties": {
+    "dataset_version_id": { "$ref": "common.schema.json#/$defs/dataset_version_id" },
+    "purpose": { "$ref": "common.schema.json#/$defs/purpose" },
+    "purpose_detail": { "type": "string", "minLength": 10, "maxLength": 2000 },
+    "period": {
+      "type": "object", "additionalProperties": false, "required": ["start_date", "end_date"],
+      "properties": {
+        "start_date": { "type": "string", "format": "date" },
+        "end_date": { "type": "string", "format": "date" }
+      }
+    },
+    "security_measures": { "type": "string", "minLength": 10, "maxLength": 2000, "description": "보관 위치·접근 통제·파기 방법" },
+    "agreement_accepted": { "const": true },
+    "agreement_version": { "type": "string", "maxLength": 32 }
+  }
+}

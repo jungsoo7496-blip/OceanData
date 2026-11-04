@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "실증 이벤트 v1.0 (POST /v1/events 요청 본문)",
+  "description": "회차·장비·시간 구간에 붙는 사건 기록 (07번). event_code는 공통 상위분류(contracts/codes/event-categories.json) + 선택적 기관 하위코드. 모델이 만든 이벤트는 사람이 확인하기 전까지 human_verified=false. 서버 응답(EventRecord)은 $defs/event_body를 확장해 쓴다.",
+  "allOf": [{ "$ref": "#/$defs/event_body" }],
+  "unevaluatedProperties": false,
+  "$defs": {
+    "event_body": {
+      "type": "object",
+      "required": ["schema_version", "session_id", "event_code", "started_at", "timestamp_quality", "source"],
+      "properties": {
+        "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+        "session_id": { "$ref": "common.schema.json#/$defs/session_id" },
+        "source_system_id": { "$ref": "common.schema.json#/$defs/device_id" },
+        "event_code": { "$ref": "common.schema.json#/$defs/code_ref" },
+        "started_at": { "$ref": "common.schema.json#/$defs/utc_datetime" },
+        "ended_at": { "$ref": "common.schema.json#/$defs/utc_datetime" },
+        "timestamp_quality": { "$ref": "common.schema.json#/$defs/timestamp_quality" },
+        "location": { "$ref": "common.schema.json#/$defs/geometry" },
+        "severity": { "$ref": "common.schema.json#/$defs/event_severity" },
+        "source": { "$ref": "common.schema.json#/$defs/event_source" },
+        "model_ref": { "type": "string", "maxLength": 128 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "human_verified": { "type": "boolean", "default": false },
+        "source_event_id": { "type": "string", "maxLength": 128 },
+        "linked_asset_ids": { "type": "array", "maxItems": 200, "items": { "$ref": "common.schema.json#/$defs/asset_id" } },
+        "note": { "type": "string", "maxLength": 2000 }
+      },
+      "allOf": [
+        {
+          "description": "모델 결과는 생성 시점에 확인됨으로 올 수 없다",
+          "if": { "properties": { "source": { "const": "MODEL" } } },
+          "then": { "required": ["model_ref", "confidence"], "properties": { "human_verified": { "const": false } } }
+        },
+        {
+          "description": "장비·규칙이 만든 이벤트는 장비를 밝힌다",
+          "if": { "properties": { "source": { "enum": ["DEVICE", "RULE"] } } },
+          "then": { "required": ["source_system_id"] }
+        }
+      ]
+    }
+  }
+}

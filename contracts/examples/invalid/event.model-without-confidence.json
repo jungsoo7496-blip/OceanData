@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0.0",
+  "session_id": "ses_01JD0000000000000000000101",
+  "source_system_id": "dev_01JD0000000000000000001001",
+  "event_code": "FLOATING_OBJECT",
+  "started_at": "2027-05-10T01:33:10Z",
+  "ended_at": "2027-05-10T01:33:40Z",
+  "timestamp_quality": {
+    "source": "GPS",
+    "verified": true,
+    "est_offset_ms": 50
+  },
+  "location": {
+    "type": "Point",
+    "coordinates": [
+      129.1043,
+      35.0987
+    ]
+  },
+  "severity": "WARNING",
+  "source": "MODEL",
+  "model_ref": "detector-x@1.2.0",
+  "human_verified": false,
+  "linked_asset_ids": [
+    "ast_01JD0000000000000000010001"
+  ]
+}

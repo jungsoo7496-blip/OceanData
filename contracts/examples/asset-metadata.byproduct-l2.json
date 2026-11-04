@@ -1,0 +1,65 @@
+{
+  "schema_version": "1.0.0",
+  "asset_id": "ast_01JD0000000000000000010002",
+  "dataset_id": null,
+  "organization_id": "org_01JD0000000000000000000001",
+  "project_id": "prj_01JD0000000000000000000011",
+  "session_id": "ses_01JD0000000000000000000101",
+  "source_system_id": "dev_01JD0000000000000000001005",
+  "data_type": "VIDEO",
+  "variant": "DEID",
+  "data_role": "BYPRODUCT",
+  "capture_start_at": "2027-05-10T01:30:00Z",
+  "capture_end_at": "2027-05-10T01:40:00Z",
+  "ingested_at": "2027-05-20T03:00:00Z",
+  "timestamp_quality": {
+    "source": "GPS",
+    "verified": true,
+    "est_offset_ms": 50
+  },
+  "location": {
+    "type": "Point",
+    "coordinates": [
+      129.1,
+      35.1
+    ]
+  },
+  "location_precision": "GENERALIZED",
+  "mime_type": "video/mp4",
+  "byte_size": 268435456,
+  "checksum_sha256": "5c5247e75c6b95d8f9c0d2fbb851a679bb42aedf16b403e5d3ccd946b5d8c467",
+  "has_binary": true,
+  "collection_mode": "C3_APPROVED_FULL",
+  "privacy_status": "PSEUDONYMIZED",
+  "sensitivity_class": "RESTRICTED",
+  "sharing_scope": "SANDBOX_PARTNERS",
+  "legal_basis_ref": "LB-2027-014",
+  "retention_policy_id": "deid_36m_v1",
+  "retention_until": "2030-05-20T00:00:00Z",
+  "quality_status": "PASSED",
+  "quality_reasons": [],
+  "ingest_status": "READY_PRIVATE",
+  "share_status": "APPROVED",
+  "review_result": "PASSED",
+  "backup_class": "NONE",
+  "provenance": {
+    "ingest_channel": "PIPELINE",
+    "parent_asset_ids": [
+      "ast_01JD0000000000000000010004"
+    ],
+    "transform": "DEID",
+    "tool_version": "deid-pipeline 0.5.0",
+    "model_ref": "person-face-detector@2.1.0",
+    "job_id": "job_01JD0000000000000000060001",
+    "reviewed_by": "usr_01JD0000000000000000040001"
+  },
+  "tags": [],
+  "video_ext": {
+    "resolution": "1920x1080",
+    "fps": 30,
+    "codec": "h264",
+    "container": "mp4",
+    "bitrate_mbps": 4,
+    "duration_s": 600
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "schema_version": "1.0.0",
+  "asset_id": "ast_01JD0000000000000000010001",
+  "dataset_id": null,
+  "organization_id": "org_01JD0000000000000000000001",
+  "project_id": "prj_01JD0000000000000000000011",
+  "session_id": "ses_01JD0000000000000000000101",
+  "source_system_id": "dev_01JD0000000000000000001001",
+  "data_type": "VIDEO",
+  "variant": "ORIGINAL",
+  "data_role": "CORE",
+  "capture_start_at": "2027-05-10T01:30:00Z",
+  "capture_end_at": "2027-05-10T01:40:00Z",
+  "ingested_at": "2027-05-10T04:00:00Z",
+  "timestamp_quality": {
+    "source": "GPS",
+    "verified": true,
+    "est_offset_ms": 50
+  },
+  "location": {
+    "type": "LineString",
+    "coordinates": [
+      [
+        129.1001,
+        35.1002
+      ],
+      [
+        129.1102,
+        35.0951
+      ]
+    ]
+  },
+  "location_precision": "EXACT_RESTRICTED",
+  "mime_type": "video/mp4",
+  "byte_size": 1073741824,
+  "checksum_sha256": "b648d973167961361eac888761515e508ce51a7e3001d1a821e7569289a084b4",
+  "has_binary": true,
+  "collection_mode": "C3_APPROVED_FULL",
+  "privacy_status": "REVIEW_REQUIRED",
+  "sensitivity_class": "RESTRICTED",
+  "sharing_scope": "PRIVATE",
+  "legal_basis_ref": null,
+  "retention_policy_id": "raw_12m_v1",
+  "retention_until": "2028-05-10T00:00:00Z",
+  "quality_status": "PASSED",
+  "quality_reasons": [],
+  "ingest_status": "QUARANTINED",
+  "share_status": "NONE",
+  "review_result": null,
+  "backup_class": "NONE",
+  "provenance": {
+    "ingest_channel": "AGENT",
+    "client_version": "0.3.0",
+    "original_filename": "CAM01_20270510_013000.mp4",
+    "original_relative_path": "2027-05-10_01/cam01/CAM01_20270510_013000.mp4"
+  },
+  "tags": [
+    {
+      "name": "VESSEL",
+      "confidence": 0.88,
+      "source": "MODEL",
+      "model_ref": "detector-x@1.2.0",
+      "human_verified": false
+    }
+  ],
+  "video_ext": {
+    "resolution": "1920x1080",
+    "fps": 30,
+    "codec": "h264",
+    "container": "mp4",
+    "bitrate_mbps": 4,
+    "duration_s": 600
+  },
+  "vessel_ext": {
+    "voyage_id": "V2027-0510-A",
+    "sog_kn": 8.2,
+    "cog_deg": 145,
+    "heading_deg": 143,
+    "camera_mount": "bow"
+  }
+}

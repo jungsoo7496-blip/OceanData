@@ -1,0 +1,12 @@
+{
+  "dataset_version_id": "dsv_01JD0000000000000000030002",
+  "purpose": "AI_TRAINING",
+  "purpose_detail": "해상 부유물 탐지 모델 학습용 (사내 연구, 외부 배포 없음)",
+  "period": {
+    "start_date": "2027-07-01",
+    "end_date": "2028-06-30"
+  },
+  "security_measures": "사내 격리 서버에만 보관, 접근자 3명 지정, 종료 후 30일 안에 파기",
+  "agreement_accepted": true,
+  "agreement_version": "2027-01"
+}

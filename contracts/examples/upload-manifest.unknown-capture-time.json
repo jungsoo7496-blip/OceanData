@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0.0",
+  "source_system_id": "dev_01JD0000000000000000001001",
+  "session_id": "ses_01JD0000000000000000000101",
+  "data_type": "VIDEO",
+  "variant": "ORIGINAL",
+  "file": {
+    "original_filename": "export_0007.mp4",
+    "byte_size": 209715200,
+    "checksum_sha256": "f0d39a040a15acefbf491392179733240deddfd00a007887a7937853f07476db",
+    "mime_type": "video/mp4"
+  },
+  "capture_start_at": null,
+  "capture_end_at": null,
+  "timestamp_quality": {
+    "source": "UNKNOWN",
+    "verified": false,
+    "est_offset_ms": null
+  },
+  "client": {
+    "kind": "WEB",
+    "version": "web-1.0.0"
+  }
+}

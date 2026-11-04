@@ -1,0 +1,499 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "공통 메타데이터 v1.0 — 자산 레코드",
+  "description": "서버가 저장·반환하는 자산 메타데이터 (domain.md 8장). allOf의 조건부 규칙은 저장 상태가 공유 조건(domain.md 4장)과 모순되지 않는지 보는 불변식이다. 공유 판단 자체는 domain/sharing_rules가 한다.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "asset_id",
+    "organization_id",
+    "project_id",
+    "source_system_id",
+    "data_type",
+    "variant",
+    "data_role",
+    "ingested_at",
+    "timestamp_quality",
+    "mime_type",
+    "byte_size",
+    "checksum_sha256",
+    "collection_mode",
+    "privacy_status",
+    "sensitivity_class",
+    "sharing_scope",
+    "retention_policy_id",
+    "retention_until",
+    "quality_status",
+    "ingest_status",
+    "share_status",
+    "backup_class",
+    "provenance",
+    "has_binary"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/schema_version"
+    },
+    "asset_id": {
+      "$ref": "common.schema.json#/$defs/asset_id"
+    },
+    "dataset_id": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/dataset_id"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "organization_id": {
+      "$ref": "common.schema.json#/$defs/organization_id"
+    },
+    "project_id": {
+      "$ref": "common.schema.json#/$defs/project_id"
+    },
+    "session_id": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/session_id"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source_system_id": {
+      "$ref": "common.schema.json#/$defs/device_id"
+    },
+    "data_type": {
+      "$ref": "common.schema.json#/$defs/data_type"
+    },
+    "variant": {
+      "$ref": "common.schema.json#/$defs/variant"
+    },
+    "data_role": {
+      "$ref": "common.schema.json#/$defs/data_role"
+    },
+    "capture_start_at": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/utc_datetime"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "capture_end_at": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/utc_datetime"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ingested_at": {
+      "$ref": "common.schema.json#/$defs/utc_datetime"
+    },
+    "timestamp_quality": {
+      "$ref": "common.schema.json#/$defs/timestamp_quality"
+    },
+    "location": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/geometry"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source_location": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/source_location"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "area_code": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "해역 코드 (코드표 확정 전까지 자유 문자열)"
+    },
+    "location_precision": {
+      "$ref": "common.schema.json#/$defs/location_precision"
+    },
+    "mime_type": {
+      "type": "string",
+      "pattern": "^[a-z0-9.+-]+/[a-z0-9.+-]+$"
+    },
+    "byte_size": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "checksum_sha256": {
+      "$ref": "common.schema.json#/$defs/sha256"
+    },
+    "has_binary": {
+      "type": "boolean",
+      "description": "C0 메타데이터 전용 자산은 false"
+    },
+    "collection_mode": {
+      "$ref": "common.schema.json#/$defs/collection_mode"
+    },
+    "privacy_status": {
+      "$ref": "common.schema.json#/$defs/privacy_status"
+    },
+    "sensitivity_class": {
+      "$ref": "common.schema.json#/$defs/sensitivity_class"
+    },
+    "sharing_scope": {
+      "$ref": "common.schema.json#/$defs/sharing_scope"
+    },
+    "legal_basis_ref": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 200
+    },
+    "retention_policy_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]{2,64}$"
+    },
+    "retention_until": {
+      "$ref": "common.schema.json#/$defs/utc_datetime"
+    },
+    "quality_status": {
+      "$ref": "common.schema.json#/$defs/quality_status"
+    },
+    "quality_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "ingest_status": {
+      "$ref": "common.schema.json#/$defs/ingest_status"
+    },
+    "quarantine_reason": {
+      "$ref": "common.schema.json#/$defs/quarantine_reason"
+    },
+    "share_status": {
+      "$ref": "common.schema.json#/$defs/share_status"
+    },
+    "review_result": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/review_result"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "backup_class": {
+      "$ref": "common.schema.json#/$defs/backup_class"
+    },
+    "provenance": {
+      "$ref": "common.schema.json#/$defs/provenance"
+    },
+    "env_context": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "12번 Env_Joiner가 붙인 관측값 요약 (출처·거리·시간차 포함)"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/tag"
+      }
+    },
+    "video_ext": {
+      "$ref": "common.schema.json#/$defs/video_ext"
+    },
+    "cctv_ext": {
+      "$ref": "common.schema.json#/$defs/cctv_ext"
+    },
+    "vessel_ext": {
+      "$ref": "common.schema.json#/$defs/vessel_ext"
+    },
+    "sensor_ext": {
+      "$ref": "common.schema.json#/$defs/sensor_ext"
+    },
+    "external_obs_ext": {
+      "$ref": "common.schema.json#/$defs/external_obs_ext"
+    },
+    "annotation_ext": {
+      "$ref": "common.schema.json#/$defs/annotation_ext"
+    },
+    "evidence_ext": {
+      "$ref": "common.schema.json#/$defs/evidence_ext"
+    }
+  },
+  "allOf": [
+    {
+      "description": "CORE는 L1을 넘을 수 없다",
+      "if": {
+        "properties": {
+          "data_role": {
+            "const": "CORE"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "sharing_scope": {
+            "enum": [
+              "PRIVATE",
+              "PROGRAM_REVIEW"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "description": "L2 이상 상태의 불변식 (domain.md 4장)",
+      "if": {
+        "properties": {
+          "sharing_scope": {
+            "enum": [
+              "SANDBOX_PARTNERS",
+              "APPROVED_PARTNERS",
+              "PUBLIC"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "review_result",
+          "legal_basis_ref"
+        ],
+        "properties": {
+          "variant": {
+            "not": {
+              "const": "ORIGINAL"
+            }
+          },
+          "data_role": {
+            "const": "BYPRODUCT"
+          },
+          "privacy_status": {
+            "enum": [
+              "NOT_APPLICABLE",
+              "PSEUDONYMIZED",
+              "ANONYMIZED_VERIFIED"
+            ]
+          },
+          "review_result": {
+            "const": "PASSED"
+          },
+          "share_status": {
+            "const": "APPROVED"
+          },
+          "sensitivity_class": {
+            "enum": [
+              "INTERNAL",
+              "RESTRICTED"
+            ]
+          },
+          "legal_basis_ref": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "description": "L4는 L2 조건에 더해 익명·비해당과 INTERNAL만",
+      "if": {
+        "properties": {
+          "sharing_scope": {
+            "const": "PUBLIC"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "privacy_status": {
+            "enum": [
+              "NOT_APPLICABLE",
+              "ANONYMIZED_VERIFIED"
+            ]
+          },
+          "sensitivity_class": {
+            "const": "INTERNAL"
+          }
+        }
+      }
+    },
+    {
+      "description": "ANONYMIZED_VERIFIED에는 법적 근거 기록이 있어야 한다",
+      "if": {
+        "properties": {
+          "privacy_status": {
+            "const": "ANONYMIZED_VERIFIED"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "legal_basis_ref"
+        ],
+        "properties": {
+          "legal_basis_ref": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "description": "촬영시각 근거가 UNKNOWN이면 촬영시각을 채우지 않는다",
+      "if": {
+        "properties": {
+          "timestamp_quality": {
+            "properties": {
+              "source": {
+                "const": "UNKNOWN"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "capture_start_at": {
+            "type": "null"
+          },
+          "capture_end_at": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "description": "격리 상태에는 사유 코드가 있어야 한다",
+      "if": {
+        "properties": {
+          "ingest_status": {
+            "const": "QUARANTINED"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "quarantine_reason"
+        ]
+      }
+    },
+    {
+      "description": "회차가 없는 자산은 등록 상태가 될 수 없다",
+      "if": {
+        "anyOf": [
+          {
+            "not": {
+              "required": [
+                "session_id"
+              ]
+            }
+          },
+          {
+            "required": [
+              "session_id"
+            ],
+            "properties": {
+              "session_id": {
+                "type": "null"
+              }
+            }
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "ingest_status": {
+            "enum": [
+              "DISCOVERED",
+              "UPLOADING",
+              "RECEIVED",
+              "VALIDATING",
+              "QUARANTINED",
+              "REJECTED",
+              "FAILED"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "description": "위치가 있으면 공개 정밀도가 있어야 한다",
+      "if": {
+        "required": [
+          "location"
+        ],
+        "properties": {
+          "location": {
+            "type": "object"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "location_precision"
+        ]
+      }
+    },
+    {
+      "description": "가명·익명 처리 상태는 파생본에만 붙는다",
+      "if": {
+        "properties": {
+          "privacy_status": {
+            "enum": [
+              "PSEUDONYMIZED",
+              "ANONYMIZED_VERIFIED"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "variant": {
+            "not": {
+              "const": "ORIGINAL"
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "바이너리 없는 자산(C0)은 원본 기록뿐이다",
+      "if": {
+        "properties": {
+          "has_binary": {
+            "const": false
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "variant": {
+            "const": "ORIGINAL"
+          }
+        }
+      }
+    }
+  ]
+}

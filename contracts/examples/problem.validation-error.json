@@ -1,0 +1,14 @@
+{
+  "type": "/problems/validation-error",
+  "title": "입력 형식이 맞지 않습니다",
+  "status": 400,
+  "code": "VALIDATION_ERROR",
+  "request_id": "01JD0000000000000000050002",
+  "errors": [
+    {
+      "pointer": "/location/coordinates/1",
+      "code": "out_of_range",
+      "message": "위도 값이 범위를 벗어났습니다. 좌표 순서는 [경도, 위도]입니다."
+    }
+  ]
+}

@@ -1,0 +1,93 @@
+{
+  "schema_version": "1.0.0",
+  "dataset_id": "dst_01JD0000000000000000030001",
+  "dataset_version_id": "dsv_01JD0000000000000000030002",
+  "version": "1.0.0",
+  "created_at": "2027-06-01T00:00:00Z",
+  "provider_organization_ids": [
+    "org_01JD0000000000000000000001"
+  ],
+  "item_count": 1,
+  "total_bytes": 268435456,
+  "items": [
+    {
+      "asset_id": "ast_01JD0000000000000000010002",
+      "source_asset_id": "ast_01JD0000000000000000010004",
+      "variant": "DEID",
+      "path": "video/clip_0001.mp4",
+      "byte_size": 268435456,
+      "checksum_sha256": "5c5247e75c6b95d8f9c0d2fbb851a679bb42aedf16b403e5d3ccd946b5d8c467",
+      "privacy_status": "PSEUDONYMIZED",
+      "sharing_scope": "APPROVED_PARTNERS",
+      "legal_basis_ref": "LB-2027-014"
+    }
+  ],
+  "data_card": {
+    "title": "남해 연안 해상 환경 영상 v1",
+    "rights_holders": [
+      "제공기관 A"
+    ],
+    "review_owner": "운영기관 데이터 검수 담당",
+    "source_summary": {
+      "organization_count": 1,
+      "session_count": 1,
+      "device_types": [
+        "선박 카메라"
+      ],
+      "period_start": "2027-05-10",
+      "period_end": "2027-05-10",
+      "sea_areas_generalized": [
+        "남해 동부 연안"
+      ]
+    },
+    "contents": {
+      "file_count": 1,
+      "total_duration_s": 600,
+      "total_bytes": 268435456,
+      "formats": [
+        "video/mp4"
+      ]
+    },
+    "conditions": {
+      "environment_distribution": {
+        "significant_wave_height_m": {
+          "0-1": 1
+        }
+      },
+      "missing_data_note": "야간 영상 없음",
+      "bias_note": "맑은 날 주간 위주",
+      "limitations": "단일 선박·단일 카메라"
+    },
+    "privacy": {
+      "risk_note": "원거리 인물이 찍혔을 수 있어 가명처리 후 검수함",
+      "processing_methods": [
+        "인물·얼굴 영역 블러"
+      ],
+      "review_method": "표본 검수 (비율은 정책값)"
+    },
+    "lineage": {
+      "model_versions": [
+        "person-face-detector@2.1.0"
+      ],
+      "tool_versions": [
+        "deid-pipeline 0.5.0"
+      ]
+    },
+    "usage": {
+      "allowed_purposes": [
+        "JOINT_RESEARCH",
+        "AI_TRAINING"
+      ],
+      "redistribution_allowed": false,
+      "commercial_use_allowed": false,
+      "period_note": "승인일부터 12개월",
+      "revocation_terms": "제공기관이 철회하면 새 다운로드를 멈추고 이용기관은 보유분 파기 확인서를 낸다",
+      "attribution": "출처: 제공기관 A, 해양 실증데이터 플랫폼"
+    },
+    "delivery": {
+      "methods": [
+        "DOWNLOAD_URL"
+      ]
+    }
+  }
+}

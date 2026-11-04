@@ -1,0 +1,48 @@
+{
+  "version": "1.0.0",
+  "reasons": [
+    {
+      "code": "CHECKSUM_MISMATCH",
+      "label": "해시 불일치",
+      "action": "같은 파일을 다시 보낸다",
+      "auto_delete_after_days": 30
+    },
+    {
+      "code": "MISSING_REQUIRED_METADATA",
+      "label": "필수 메타데이터 누락",
+      "action": "장비 정책과 매니페스트를 확인한다",
+      "auto_delete_after_days": null
+    },
+    {
+      "code": "UNKNOWN_SESSION",
+      "label": "회차 미상",
+      "action": "포털에서 회차를 지정한다",
+      "auto_delete_after_days": null
+    },
+    {
+      "code": "UNSUPPORTED_FORMAT",
+      "label": "지원하지 않는 형식",
+      "action": "운영자에게 형식 추가를 요청한다",
+      "auto_delete_after_days": 30
+    },
+    {
+      "code": "CORRUPT_FILE",
+      "label": "손상·재생 불가",
+      "action": "원본을 확인하고 다시 보낸다",
+      "auto_delete_after_days": 30
+    },
+    {
+      "code": "MIME_MISMATCH",
+      "label": "신고 형식과 내용 불일치",
+      "action": "MIME 신고를 고친다",
+      "auto_delete_after_days": 30
+    },
+    {
+      "code": "MALWARE_SUSPECTED",
+      "label": "악성코드 의심",
+      "action": "운영자 확인 전까지 열지 않는다",
+      "auto_delete_after_days": 30
+    }
+  ],
+  "rule": "auto_delete_after_days가 null이면 자동 삭제하지 않고 ORG_ADMIN이 폐기를 확정할 때만 지운다 (domain.md 9장). 일수는 정책값."
+}

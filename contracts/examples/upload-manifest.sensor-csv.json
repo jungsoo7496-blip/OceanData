@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0.0",
+  "source_system_id": "dev_01JD0000000000000000001003",
+  "session_id": "ses_01JD0000000000000000000101",
+  "data_type": "SENSOR",
+  "variant": "ORIGINAL",
+  "file": {
+    "original_filename": "buoy_a_20270510.csv",
+    "byte_size": 48213,
+    "checksum_sha256": "2741881cdeb44e7f16d33225b7a20bf01427c396efd527e4c2b2053f77c07900",
+    "mime_type": "text/csv"
+  },
+  "capture_start_at": "2027-05-10T00:00:00Z",
+  "capture_end_at": "2027-05-10T23:50:00Z",
+  "timestamp_quality": {
+    "source": "NTP",
+    "verified": true,
+    "est_offset_ms": 200
+  },
+  "sensor_ext": {
+    "metrics": [
+      "sea_water_temperature",
+      "significant_wave_height"
+    ],
+    "sampling_interval_s": 600,
+    "observation_mapping_version": "buoy-a-v1"
+  },
+  "client": {
+    "kind": "AGENT",
+    "version": "0.3.0",
+    "local_collection_id": "lc-000000000002"
+  }
+}

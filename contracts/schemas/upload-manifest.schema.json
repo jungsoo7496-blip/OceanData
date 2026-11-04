@@ -1,0 +1,221 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "업로드 매니페스트 v1.0 (POST /v1/uploads 요청 본문)",
+  "description": "에이전트·웹·기관 서버가 보내는 신고서. organization_id는 넣지 않는다 (인증 정보로 정한다). 근거 없는 촬영시각은 비워 두고 timestamp_quality.source=UNKNOWN으로 보낸다. C0_METADATA_ONLY 장비도 같은 형식이며 서버가 파트 URL을 발급하지 않는다.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_system_id",
+    "data_type",
+    "variant",
+    "file",
+    "timestamp_quality",
+    "client"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/schema_version"
+    },
+    "source_system_id": {
+      "$ref": "common.schema.json#/$defs/device_id"
+    },
+    "project_id": {
+      "$ref": "common.schema.json#/$defs/project_id"
+    },
+    "session_id": {
+      "$ref": "common.schema.json#/$defs/session_id"
+    },
+    "session_label": {
+      "description": "감시 규칙이 폴더 이름 등에서 뽑은 회차 표시값. 서버가 장비의 회차 추출 규칙으로 session_id를 찾는다. 못 찾으면 UNKNOWN_SESSION으로 격리한다.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "watch_rule_id": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "data_type": {
+      "$ref": "common.schema.json#/$defs/data_type"
+    },
+    "variant": {
+      "description": "보내는 파일의 종류. 원천 장비의 collection_mode가 허용하지 않으면 422 RULE_VIOLATION (domain.md 3장)",
+      "$ref": "common.schema.json#/$defs/variant"
+    },
+    "parent_ref": {
+      "description": "현장에서 만든 파생본(PROXY·CLIP·SAMPLE_FRAME)이면 현장 원본을 가리킨다",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "checksum_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "local_collection_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "start_offset_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "end_offset_s": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "data_role": {
+      "description": "선택. 없으면 장비·감시 규칙 기본값. 장비 정책이 허용하지 않는 값이면 거부된다.",
+      "$ref": "common.schema.json#/$defs/data_role"
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "original_filename",
+        "byte_size",
+        "checksum_sha256",
+        "mime_type"
+      ],
+      "properties": {
+        "original_filename": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "original_relative_path": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "byte_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "checksum_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "mime_type": {
+          "type": "string",
+          "pattern": "^[a-z0-9.+-]+/[a-z0-9.+-]+$",
+          "description": "신고 MIME. 서버가 내용으로 다시 판별한다."
+        }
+      }
+    },
+    "capture_start_at": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/utc_datetime"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "capture_end_at": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/utc_datetime"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "timestamp_quality": {
+      "$ref": "common.schema.json#/$defs/timestamp_quality"
+    },
+    "original_timestamps": {
+      "description": "변환 전 원래 시각 문자열 (예: 장비 로그의 현지 시각)",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 64
+      }
+    },
+    "location": {
+      "$ref": "common.schema.json#/$defs/geometry"
+    },
+    "source_location": {
+      "$ref": "common.schema.json#/$defs/source_location"
+    },
+    "area_code": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "video_ext": {
+      "$ref": "common.schema.json#/$defs/video_ext"
+    },
+    "cctv_ext": {
+      "$ref": "common.schema.json#/$defs/cctv_ext"
+    },
+    "vessel_ext": {
+      "$ref": "common.schema.json#/$defs/vessel_ext"
+    },
+    "sensor_ext": {
+      "$ref": "common.schema.json#/$defs/sensor_ext"
+    },
+    "annotation_ext": {
+      "$ref": "common.schema.json#/$defs/annotation_ext"
+    },
+    "evidence_ext": {
+      "$ref": "common.schema.json#/$defs/evidence_ext"
+    },
+    "client": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "version"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "common.schema.json#/$defs/client_kind"
+        },
+        "version": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "local_collection_id": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "에이전트가 파일마다 만든 로컬 ID. Idempotency-Key로도 쓴다."
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "timestamp_quality": {
+            "properties": {
+              "source": {
+                "const": "UNKNOWN"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "capture_start_at": {
+            "type": "null"
+          },
+          "capture_end_at": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "description": "회차는 ID나 표시값 중 하나만 보낸다",
+      "not": {
+        "required": [
+          "session_id",
+          "session_label"
+        ]
+      }
+    }
+  ]
+}

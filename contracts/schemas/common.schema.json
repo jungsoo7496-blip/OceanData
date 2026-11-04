@@ -1,0 +1,871 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "공통 정의 v1.0 (domain.md와 같은 값)",
+  "description": "ID 형식, 코드값, 공통 객체. 코드값을 바꾸려면 .kiro/steering/domain.md부터 고친다. tools/validate_contracts.py가 두 곳의 값이 같은지 검사한다.",
+  "$defs": {
+    "ulid": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "organization_id": {
+      "type": "string",
+      "pattern": "^org_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "project_id": {
+      "type": "string",
+      "pattern": "^prj_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^ses_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "device_id": {
+      "type": "string",
+      "pattern": "^dev_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "asset_id": {
+      "type": "string",
+      "pattern": "^ast_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "upload_id": {
+      "type": "string",
+      "pattern": "^upl_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "event_id": {
+      "type": "string",
+      "pattern": "^evt_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "share_request_id": {
+      "type": "string",
+      "pattern": "^shr_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "dataset_id": {
+      "type": "string",
+      "pattern": "^dst_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "dataset_version_id": {
+      "type": "string",
+      "pattern": "^dsv_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "access_request_id": {
+      "type": "string",
+      "pattern": "^acr_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "grant_id": {
+      "type": "string",
+      "pattern": "^grt_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "job_id": {
+      "type": "string",
+      "pattern": "^job_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "report_id": {
+      "type": "string",
+      "pattern": "^rpt_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "record_id": {
+      "type": "string",
+      "pattern": "^rec_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "distribution_id": {
+      "type": "string",
+      "pattern": "^dlv_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "webhook_id": {
+      "type": "string",
+      "pattern": "^whk_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "api_key_id": {
+      "type": "string",
+      "pattern": "^key_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "user_id": {
+      "type": "string",
+      "pattern": "^usr_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "audit_id": {
+      "type": "string",
+      "pattern": "^aud_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "schema_version": {
+      "description": "주.부.수 형식. 서버는 스키마 검증 전에 버전을 먼저 본다: 주버전이 다르거나 서버가 모르는 더 높은 부버전이면 422 UNSUPPORTED_SCHEMA_VERSION, 같거나 낮은 부버전은 받는다.",
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "utc_datetime": {
+      "description": "RFC 3339 UTC (Z로 끝남)",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$"
+    },
+    "offset_datetime": {
+      "description": "RFC 3339, 시간대 오프셋 필수 (Z 또는 ±hh:mm)",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "iana_timezone": {
+      "type": "string",
+      "pattern": "^[A-Za-z_]+(/[A-Za-z0-9_+-]+)*$",
+      "examples": [
+        "Asia/Seoul",
+        "UTC"
+      ]
+    },
+    "code_ref": {
+      "description": "코드표 값. 공통 상위분류 + 선택적 기관 하위코드 (예: VESSEL.small_boat)",
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{1,39}(\\.[a-z0-9_]{1,40})?$"
+    },
+    "metric_code": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{1,63}$"
+    },
+    "org_type": {
+      "enum": [
+        "PROVIDER",
+        "PROGRAM_AGENCY",
+        "OPERATOR",
+        "CONSUMER"
+      ]
+    },
+    "role": {
+      "enum": [
+        "ORG_ADMIN",
+        "ORG_MEMBER",
+        "PROGRAM_VIEWER",
+        "PLATFORM_OPERATOR",
+        "REVIEWER",
+        "CONSUMER",
+        "DEVICE",
+        "SERVICE"
+      ]
+    },
+    "collection_mode": {
+      "enum": [
+        "C0_METADATA_ONLY",
+        "C1_SAMPLE_PREVIEW",
+        "C2_EVENT_CLIPS",
+        "C3_APPROVED_FULL"
+      ]
+    },
+    "data_role": {
+      "enum": [
+        "CORE",
+        "BYPRODUCT"
+      ]
+    },
+    "privacy_status": {
+      "enum": [
+        "UNKNOWN",
+        "NOT_APPLICABLE",
+        "REVIEW_REQUIRED",
+        "PSEUDONYMIZED",
+        "ANONYMIZED_VERIFIED"
+      ]
+    },
+    "sensitivity_class": {
+      "enum": [
+        "INTERNAL",
+        "RESTRICTED",
+        "SECURITY"
+      ]
+    },
+    "sharing_scope": {
+      "enum": [
+        "PRIVATE",
+        "PROGRAM_REVIEW",
+        "SANDBOX_PARTNERS",
+        "APPROVED_PARTNERS",
+        "PUBLIC"
+      ]
+    },
+    "ingest_status": {
+      "enum": [
+        "DISCOVERED",
+        "UPLOADING",
+        "RECEIVED",
+        "VALIDATING",
+        "REGISTERED",
+        "PROXIED",
+        "READY_PRIVATE",
+        "QUARANTINED",
+        "REJECTED",
+        "FAILED"
+      ]
+    },
+    "quarantine_reason": {
+      "enum": [
+        "CHECKSUM_MISMATCH",
+        "MISSING_REQUIRED_METADATA",
+        "UNKNOWN_SESSION",
+        "UNSUPPORTED_FORMAT",
+        "CORRUPT_FILE",
+        "MIME_MISMATCH",
+        "MALWARE_SUSPECTED"
+      ]
+    },
+    "share_status": {
+      "enum": [
+        "NONE",
+        "CANDIDATE",
+        "LEGAL_REVIEW",
+        "PROCESSING",
+        "QUALITY_REVIEW",
+        "APPROVED",
+        "REJECTED",
+        "REPROCESS"
+      ]
+    },
+    "grant_status": {
+      "enum": [
+        "REQUESTED",
+        "PROVIDER_APPROVED",
+        "GRANTED",
+        "EXPIRED",
+        "REVOKED",
+        "DENIED"
+      ]
+    },
+    "report_status": {
+      "enum": [
+        "DRAFT",
+        "APPROVED",
+        "SUBMITTED",
+        "SUPERSEDED"
+      ]
+    },
+    "quality_status": {
+      "enum": [
+        "PENDING",
+        "PASSED",
+        "WARNING",
+        "FAILED"
+      ]
+    },
+    "review_result": {
+      "enum": [
+        "PASSED",
+        "FAILED"
+      ]
+    },
+    "backup_class": {
+      "enum": [
+        "NONE",
+        "PROTECTED"
+      ]
+    },
+    "local_copy_policy": {
+      "enum": [
+        "RETAINED",
+        "ROTATING",
+        "NONE",
+        "UNKNOWN"
+      ]
+    },
+    "data_type": {
+      "enum": [
+        "VIDEO",
+        "IMAGE",
+        "SENSOR",
+        "EVENT",
+        "AIS",
+        "LOG",
+        "DOCUMENT",
+        "ANNOTATION"
+      ]
+    },
+    "variant": {
+      "description": "ORIGINAL은 원천 파일, 나머지는 파생본 (domain.md 3·4장)",
+      "enum": [
+        "ORIGINAL",
+        "PROXY",
+        "THUMBNAIL",
+        "SAMPLE_FRAME",
+        "CLIP",
+        "DEID",
+        "LABEL",
+        "SENSOR_EXPORT"
+      ]
+    },
+    "timestamp_source": {
+      "enum": [
+        "GPS",
+        "NTP",
+        "DEVICE",
+        "MANIFEST",
+        "MANUAL",
+        "UNKNOWN"
+      ]
+    },
+    "location_precision": {
+      "enum": [
+        "EXACT_RESTRICTED",
+        "GENERALIZED",
+        "NONE"
+      ]
+    },
+    "observation_quality_flag": {
+      "enum": [
+        "GOOD",
+        "SUSPECT",
+        "BAD",
+        "MISSING"
+      ]
+    },
+    "event_source": {
+      "enum": [
+        "DEVICE",
+        "MANUAL",
+        "MODEL",
+        "RULE"
+      ]
+    },
+    "event_severity": {
+      "enum": [
+        "INFO",
+        "WARNING",
+        "CRITICAL"
+      ]
+    },
+    "annotation_kind": {
+      "enum": [
+        "GROUND_TRUTH",
+        "PREDICTION"
+      ]
+    },
+    "purpose": {
+      "enum": [
+        "JOINT_RESEARCH",
+        "AI_TRAINING",
+        "MODEL_IMPROVEMENT",
+        "COMMERCIAL_SERVICE",
+        "EXTERNAL_SALE"
+      ]
+    },
+    "client_kind": {
+      "enum": [
+        "AGENT",
+        "EDGE",
+        "WEB",
+        "API"
+      ]
+    },
+    "error_code": {
+      "enum": [
+        "VALIDATION_ERROR",
+        "UNAUTHENTICATED",
+        "FORBIDDEN",
+        "MFA_REQUIRED",
+        "NOT_FOUND",
+        "CONFLICT",
+        "IDEMPOTENCY_CONFLICT",
+        "INVALID_STATE_TRANSITION",
+        "QUOTA_EXCEEDED",
+        "GONE",
+        "PAYLOAD_TOO_LARGE",
+        "RULE_VIOLATION",
+        "UNSUPPORTED_SCHEMA_VERSION",
+        "RATE_LIMITED",
+        "INTERNAL",
+        "STORAGE_UNAVAILABLE",
+        "SERVICE_UNAVAILABLE"
+      ]
+    },
+    "observation_reject_reason": {
+      "enum": [
+        "TIMEZONE_UNKNOWN",
+        "FUTURE_TIMESTAMP",
+        "VALUE_CONFLICT",
+        "UNKNOWN_METRIC",
+        "MISSING_FLAG_MISMATCH",
+        "DEVICE_SCOPE",
+        "SESSION_NOT_FOUND"
+      ]
+    },
+    "timestamp_quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "verified"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/timestamp_source"
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "est_offset_ms": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "position": {
+      "description": "[경도, 위도] 또는 [경도, 위도, 높이]. 위도 자리의 값이 ±90을 넘으면 순서가 뒤바뀐 것으로 보고 거부한다.",
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 3,
+      "prefixItems": [
+        {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        },
+        {
+          "type": "number",
+          "minimum": -90,
+          "maximum": 90
+        },
+        {
+          "type": "number"
+        }
+      ]
+    },
+    "geometry": {
+      "description": "GeoJSON (EPSG:4326). Point, LineString(선박 항적), Polygon(감시 구역)",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "coordinates"
+          ],
+          "properties": {
+            "type": {
+              "const": "Point"
+            },
+            "coordinates": {
+              "$ref": "#/$defs/position"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "coordinates"
+          ],
+          "properties": {
+            "type": {
+              "const": "LineString"
+            },
+            "coordinates": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "$ref": "#/$defs/position"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "coordinates"
+          ],
+          "properties": {
+            "type": {
+              "const": "Polygon"
+            },
+            "coordinates": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "array",
+                "minItems": 4,
+                "items": {
+                  "$ref": "#/$defs/position"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "source_location": {
+      "description": "EPSG:4326이 아닌 원래 좌표. 서버가 변환하고 원래 값과 변환 이력을 보관한다.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "crs",
+        "geometry"
+      ],
+      "properties": {
+        "crs": {
+          "type": "string",
+          "pattern": "^EPSG:[0-9]{4,6}$"
+        },
+        "geometry": {
+          "type": "object"
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": [
+        "ingest_channel"
+      ],
+      "properties": {
+        "ingest_channel": {
+          "enum": [
+            "AGENT",
+            "EDGE",
+            "WEB",
+            "API",
+            "EXTERNAL_API",
+            "PIPELINE"
+          ]
+        },
+        "client_version": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "original_filename": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "original_relative_path": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "original_timestamps": {
+          "type": "object",
+          "description": "변환 전 원래 시각 문자열들",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "parent_asset_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/asset_id"
+          }
+        },
+        "transform": {
+          "type": "string",
+          "description": "PROXY, THUMBNAIL, CLIP, DEID, LABEL 등"
+        },
+        "tool_version": {
+          "type": "string"
+        },
+        "model_ref": {
+          "type": "string"
+        },
+        "job_id": {
+          "$ref": "#/$defs/job_id"
+        },
+        "reviewed_by": {
+          "$ref": "#/$defs/user_id"
+        }
+      }
+    },
+    "tag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "source",
+        "human_verified"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/code_ref"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "source": {
+          "enum": [
+            "MODEL",
+            "HUMAN"
+          ]
+        },
+        "model_ref": {
+          "type": "string"
+        },
+        "human_verified": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "MODEL"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "model_ref",
+              "confidence"
+            ]
+          }
+        }
+      ]
+    },
+    "video_ext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resolution": {
+          "type": "string",
+          "pattern": "^[0-9]{2,5}x[0-9]{2,5}$"
+        },
+        "fps": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "codec": {
+          "type": "string"
+        },
+        "container": {
+          "type": "string"
+        },
+        "bitrate_mbps": {
+          "type": "number",
+          "minimum": 0
+        },
+        "duration_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "orientation_deg": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 360
+        },
+        "fov_deg": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 360
+        },
+        "segment_index": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "cctv_ext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "zone_code": {
+          "type": "string"
+        },
+        "event_code": {
+          "$ref": "#/$defs/code_ref"
+        },
+        "detected_at": {
+          "$ref": "#/$defs/utc_datetime"
+        },
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "operator_confirmed": {
+          "type": "boolean"
+        },
+        "original_ref": {
+          "description": "센터에 원본이 있으면 asset_id, 현장에만 있으면 SITE_ONLY",
+          "type": "string",
+          "pattern": "^(ast_[0-9A-HJKMNP-TV-Z]{26}|SITE_ONLY)$"
+        }
+      }
+    },
+    "vessel_ext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "voyage_id": {
+          "type": "string"
+        },
+        "sog_kn": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cog_deg": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 360
+        },
+        "heading_deg": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 360
+        },
+        "camera_mount": {
+          "type": "string"
+        },
+        "ais_link_ref": {
+          "type": "string",
+          "description": "AIS 연계 내부 참조. 외부 공개 시 제거한다."
+        }
+      }
+    },
+    "sensor_ext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "metrics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/metric_code"
+          }
+        },
+        "sampling_interval_s": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "calibration_ref": {
+          "type": "string"
+        },
+        "observation_mapping_version": {
+          "type": "string"
+        },
+        "measured_from": {
+          "$ref": "#/$defs/utc_datetime"
+        },
+        "measured_to": {
+          "$ref": "#/$defs/utc_datetime"
+        }
+      }
+    },
+    "external_obs_ext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "api_name": {
+          "type": "string"
+        },
+        "station_id": {
+          "type": "string"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/utc_datetime"
+        },
+        "collected_at": {
+          "$ref": "#/$defs/utc_datetime"
+        },
+        "terms_ref": {
+          "type": "string"
+        },
+        "redistribution_allowed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "annotation_ext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "annotation_kind"
+      ],
+      "properties": {
+        "annotation_kind": {
+          "$ref": "#/$defs/annotation_kind"
+        },
+        "label_schema": {
+          "type": "string"
+        },
+        "geometry_type": {
+          "enum": [
+            "BBOX",
+            "SEGMENTATION",
+            "POINT",
+            "CLASSIFICATION",
+            "TRACK"
+          ]
+        },
+        "label_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "model_ref": {
+          "type": "string"
+        },
+        "labeler": {
+          "enum": [
+            "HUMAN",
+            "MODEL"
+          ]
+        },
+        "reviewer_id": {
+          "$ref": "#/$defs/user_id"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "annotation_kind": {
+                "const": "PREDICTION"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "model_ref"
+            ]
+          }
+        }
+      ]
+    },
+    "evidence_ext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "test_item": {
+          "type": "string"
+        },
+        "conditions": {
+          "type": "string"
+        },
+        "formula": {
+          "type": "string"
+        },
+        "reference_value": {
+          "type": "string"
+        },
+        "ground_truth_asset_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/asset_id"
+          }
+        },
+        "evidence_asset_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/asset_id"
+          }
+        },
+        "approved_by": {
+          "$ref": "#/$defs/user_id"
+        },
+        "approved_at": {
+          "$ref": "#/$defs/utc_datetime"
+        }
+      }
+    }
+  }
+}

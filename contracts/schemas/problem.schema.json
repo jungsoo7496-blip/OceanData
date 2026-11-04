@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "오류 응답 (RFC 9457 problem details + 확장)",
+  "description": "media type: application/problem+json. 프로그램 분기는 code로 한다. title·detail은 한국어이며 내부 정보·다른 기관 식별자를 넣지 않는다.",
+  "type": "object",
+  "required": ["type", "title", "status", "code", "request_id"],
+  "properties": {
+    "type": { "type": "string", "format": "uri-reference", "examples": ["/problems/rule-violation"] },
+    "title": { "type": "string" },
+    "status": { "type": "integer", "minimum": 400, "maximum": 599 },
+    "detail": { "type": "string" },
+    "instance": { "type": "string", "format": "uri-reference" },
+    "code": { "$ref": "common.schema.json#/$defs/error_code" },
+    "request_id": { "$ref": "common.schema.json#/$defs/ulid" },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["pointer", "code", "message"],
+        "properties": {
+          "pointer": { "type": "string", "description": "JSON Pointer (RFC 6901)", "examples": ["/file/checksum_sha256"] },
+          "code": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      }
+    },
+    "unmet_conditions": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["condition"],
+        "properties": {
+          "condition": { "type": "string", "examples": ["review_result=PASSED", "제공기관 2단 약정 유효"] },
+          "actual": { "type": ["string", "null"] }
+        }
+      }
+    }
+  },
+  "allOf": [
+    { "if": { "properties": { "code": { "const": "RULE_VIOLATION" } } }, "then": { "required": ["unmet_conditions"], "properties": { "status": { "const": 422 } } } },
+    { "if": { "properties": { "code": { "const": "VALIDATION_ERROR" } } }, "then": { "required": ["errors"], "properties": { "status": { "const": 400 } } } }
+  ]
+}

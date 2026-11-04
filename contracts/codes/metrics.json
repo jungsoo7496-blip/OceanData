@@ -1,0 +1,101 @@
+{
+  "version": "1.0.0-draft",
+  "status": "초안 — 연계 카드로 확정",
+  "metrics": [
+    {
+      "code": "sea_water_temperature",
+      "label": "수온",
+      "unit": "degC"
+    },
+    {
+      "code": "sea_water_salinity",
+      "label": "염분",
+      "unit": "PSU"
+    },
+    {
+      "code": "significant_wave_height",
+      "label": "유의파고",
+      "unit": "m"
+    },
+    {
+      "code": "max_wave_height",
+      "label": "최대파고",
+      "unit": "m"
+    },
+    {
+      "code": "wave_period",
+      "label": "파주기",
+      "unit": "s"
+    },
+    {
+      "code": "wave_direction",
+      "label": "파향",
+      "unit": "deg"
+    },
+    {
+      "code": "current_speed",
+      "label": "유속",
+      "unit": "m/s"
+    },
+    {
+      "code": "current_direction",
+      "label": "유향",
+      "unit": "deg"
+    },
+    {
+      "code": "wind_speed",
+      "label": "풍속",
+      "unit": "m/s"
+    },
+    {
+      "code": "wind_direction",
+      "label": "풍향",
+      "unit": "deg"
+    },
+    {
+      "code": "air_temperature",
+      "label": "기온",
+      "unit": "degC"
+    },
+    {
+      "code": "air_pressure",
+      "label": "기압",
+      "unit": "hPa"
+    },
+    {
+      "code": "relative_humidity",
+      "label": "상대습도",
+      "unit": "%"
+    },
+    {
+      "code": "visibility",
+      "label": "시정",
+      "unit": "m"
+    },
+    {
+      "code": "precipitation_rate",
+      "label": "강수 강도",
+      "unit": "mm/h"
+    },
+    {
+      "code": "dissolved_oxygen",
+      "label": "용존산소",
+      "unit": "mg/L"
+    },
+    {
+      "code": "turbidity",
+      "label": "탁도",
+      "unit": "NTU"
+    },
+    {
+      "code": "tide_level",
+      "label": "조위",
+      "unit": "m"
+    },
+    {
+      "code": "device_battery_level",
+      "label": "장비 배터리",
+      "unit": "%"
+    }
+  ]
+}

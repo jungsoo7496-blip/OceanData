@@ -1,0 +1,31 @@
+{
+  "version": "1.0.0",
+  "source": "기준 문서 7.2장 (공통 상위분류)",
+  "subcode_rule": "기관 하위코드는 '상위분류.하위코드'(예: VESSEL.small_boat)로 03번 Code_Table에 등록한다. 상위분류는 운영자만 바꾼다.",
+  "categories": [
+    {
+      "code": "VESSEL",
+      "label": "선박"
+    },
+    {
+      "code": "PERSON",
+      "label": "사람"
+    },
+    {
+      "code": "FLOATING_OBJECT",
+      "label": "부유물"
+    },
+    {
+      "code": "WEATHER_WAVE",
+      "label": "기상·파랑"
+    },
+    {
+      "code": "EQUIPMENT_FAULT",
+      "label": "장비 장애"
+    },
+    {
+      "code": "SAFETY_INCIDENT",
+      "label": "안전사고"
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0.0",
+  "asset_id": "ast_01JD0000000000000000010003",
+  "dataset_id": null,
+  "organization_id": "org_01JD0000000000000000000001",
+  "project_id": "prj_01JD0000000000000000000011",
+  "session_id": null,
+  "source_system_id": "dev_01JD0000000000000000001001",
+  "data_type": "VIDEO",
+  "variant": "ORIGINAL",
+  "data_role": "CORE",
+  "capture_start_at": null,
+  "capture_end_at": null,
+  "ingested_at": "2027-05-10T04:00:00Z",
+  "timestamp_quality": {
+    "source": "UNKNOWN",
+    "verified": false,
+    "est_offset_ms": null
+  },
+  "location": null,
+  "mime_type": "video/mp4",
+  "byte_size": 209715200,
+  "checksum_sha256": "f0d39a040a15acefbf491392179733240deddfd00a007887a7937853f07476db",
+  "has_binary": true,
+  "collection_mode": "C3_APPROVED_FULL",
+  "privacy_status": "REVIEW_REQUIRED",
+  "sensitivity_class": "RESTRICTED",
+  "sharing_scope": "PRIVATE",
+  "legal_basis_ref": null,
+  "retention_policy_id": "raw_12m_v1",
+  "retention_until": "2028-05-10T00:00:00Z",
+  "quality_status": "WARNING",
+  "quality_reasons": [
+    "CAPTURE_TIME_UNKNOWN"
+  ],
+  "ingest_status": "QUARANTINED",
+  "share_status": "NONE",
+  "review_result": null,
+  "backup_class": "NONE",
+  "provenance": {
+    "ingest_channel": "WEB",
+    "client_version": "web-1.0.0",
+    "original_filename": "export_0007.mp4"
+  },
+  "tags": [],
+  "video_ext": {
+    "resolution": "1920x1080",
+    "fps": 30,
+    "codec": "h264",
+    "container": "mp4",
+    "bitrate_mbps": 4,
+    "duration_s": 600
+  },
+  "quarantine_reason": "UNKNOWN_SESSION"
+}

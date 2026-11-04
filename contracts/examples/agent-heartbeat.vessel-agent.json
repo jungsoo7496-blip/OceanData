@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0.0",
+  "collector_device_id": "dev_01JD0000000000000000001004",
+  "agent_version": "0.3.0",
+  "policy_version": "pv-12",
+  "sent_at": "2027-05-10T05:00:00Z",
+  "last_success_at": "2027-05-10T04:00:00Z",
+  "queue": {
+    "items": 42,
+    "bytes": 52428800000,
+    "observations": 0
+  },
+  "last_error_code": "NETWORK_UNREACHABLE",
+  "disk_free_bytes": 812345678901,
+  "clock_offset_ms": 35,
+  "plugins": [],
+  "sources": [
+    {
+      "device_id": "dev_01JD0000000000000000001001",
+      "queue": {
+        "items": 40,
+        "bytes": 51000000000
+      },
+      "last_success_at": "2027-05-10T04:00:00Z"
+    },
+    {
+      "device_id": "dev_01JD0000000000000000001005",
+      "queue": {
+        "items": 2,
+        "bytes": 1428800000
+      },
+      "last_success_at": "2027-05-10T03:40:00Z"
+    }
+  ]
+}

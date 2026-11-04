@@ -1,0 +1,2062 @@
+openapi: 3.1.0
+info:
+  title: 해양 실증데이터 플랫폼 API
+  version: 1.0.0-draft.1
+  summary: 기업·이용기관 연계 API v1 초안
+  description: |
+    domain.md(.kiro/steering)의 값과 규칙을 따르는 계약 초안이다.
+
+    - `x-freeze: G1` 표시가 붙은 작업은 12월 G1(표준·API 동결) 회의에 올릴 기업 연계 API다.
+      `x-freeze: G4`·`G5`는 공동활용 단계(가공·검수, 승인형 공급)에서 확정한다.
+    - 포털 내부 화면용 API는 각 스펙의 설계 단계에서 이 파일에 먼저 추가한 뒤 구현한다 (계약 우선).
+    - 오류는 RFC 9457 `application/problem+json`이며 프로그램 분기는 `code`로 한다.
+    - 시각은 UTC(RFC 3339, Z). ID는 접두사 + ULID. 모든 응답에 `X-Request-Id` 헤더가 붙는다.
+    - organization_id는 인증 정보로 정한다. 요청 본문·쿼리로 받지 않는다.
+    - 대용량 바이너리는 API를 거치지 않고 사전 서명 URL로 스토리지에 직접 보낸다. URL은 로그에 남기지 않는다.
+servers:
+  - url: https://api.example.invalid
+    description: 자리표시자 (운영 주소 미정)
+security:
+  - bearerAuth: []
+tags:
+  - name: system
+    description: 상태·기능 조회
+  - name: auth
+    description: 기기·기관 서버 인증 (사용자는 Keycloak OIDC)
+  - name: context
+    description: 실증사업·회차·장비
+  - name: contracts
+    description: 스키마·코드표·사전 검증
+  - name: uploads
+    description: 업로드 세션·재개·완료
+  - name: assets
+    description: 자산 조회·영수증·계보
+  - name: observations
+    description: 센서 관측값
+  - name: events
+    description: 실증 이벤트
+  - name: records
+    description: 회차 기록 (실증일지)
+  - name: agents
+    description: 에이전트 등록·하트비트
+  - name: status
+    description: 수집 현황·품질
+  - name: webhooks
+    description: 웹훅 구독
+  - name: sharing
+    description: 공유 등급 신청 (G4)
+  - name: datasets
+    description: 데이터셋·이용 신청·배포 (G5)
+
+paths:
+  /healthz:
+    get:
+      tags: [system]
+      operationId: getHealthz
+      summary: 프로세스 생존 확인
+      security: []
+      x-freeze: G1
+      responses:
+        '200':
+          description: 살아 있음
+          content:
+            application/json:
+              schema: {type: object, properties: {status: {const: ok}}}
+  /readyz:
+    get:
+      tags: [system]
+      operationId: getReadyz
+      summary: 의존 시스템(DB·S3·IdP) 준비 상태
+      security: []
+      x-freeze: G1
+      responses:
+        '200':
+          description: 모두 정상
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Readiness'}
+        '503':
+          description: 하나 이상 실패 (실패한 의존 시스템 이름만, 주소·자격증명 없음)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Readiness'}
+
+  /v1/system/capabilities:
+    get:
+      tags: [system]
+      operationId: getCapabilities
+      summary: 켜진 기능·GPU 사용 여부·지원 스키마 버전
+      x-freeze: G1
+      responses:
+        '200':
+          description: 기능 상태 (설정값·주소는 넣지 않는다)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Capabilities'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /v1/auth/token:
+    post:
+      tags: [auth]
+      operationId: issueToken
+      summary: 기기 자격증명·API 키를 단기 액세스 토큰으로 교환
+      description: 사용자 로그인은 Keycloak OIDC를 쓴다. 이 엔드포인트는 기기와 기관 서버용이다. 발급 방식은 보안 설계에서 확정한다 (tech.md 결정 대기).
+      security: []
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema: {$ref: '#/components/schemas/TokenRequest'}
+      responses:
+        '200':
+          description: 단기 액세스 토큰 (기본 5분)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TokenResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
+  /v1/agents/enroll:
+    post:
+      tags: [agents]
+      operationId: enrollAgent
+      summary: 1회용 등록 코드로 기기 자격증명 발급
+      security: []
+      x-freeze: G1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EnrollRequest'}
+      responses:
+        '201':
+          description: 기기 자격증명 (client_secret은 이 응답에서 한 번만 보인다)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EnrollResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '410': {$ref: '#/components/responses/Gone'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
+  /v1/me:
+    get:
+      tags: [context]
+      operationId: getMe
+      summary: 현재 인증 주체의 기관·역할
+      x-freeze: G1
+      responses:
+        '200':
+          description: 인증 주체 정보
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Me'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /v1/projects:
+    get:
+      tags: [context]
+      operationId: listProjects
+      summary: 자기 기관의 실증사업 목록
+      x-freeze: G1
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: 실증사업 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/Project'}}
+                  next_cursor: {type: [string, 'null']}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /v1/sessions:
+    get:
+      tags: [context]
+      operationId: listSessions
+      summary: 실증회차 목록
+      x-freeze: G1
+      parameters:
+        - name: project_id
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/project_id'}
+        - name: label
+          in: query
+          description: 회차 표시값으로 찾기 (감시 규칙의 폴더 이름 등)
+          schema: {type: string, maxLength: 120}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: 회차 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/Session'}}
+                  next_cursor: {type: [string, 'null']}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      tags: [context]
+      operationId: createSession
+      summary: 실증회차 생성
+      x-freeze: G1
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SessionCreate'}
+      responses:
+        '201':
+          description: 생성됨
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Session'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/sessions/{session_id}:
+    parameters:
+      - {$ref: '#/components/parameters/SessionId'}
+    get:
+      tags: [context]
+      operationId: getSession
+      summary: 실증회차 상세
+      x-freeze: G1
+      responses:
+        '200':
+          description: 회차
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Session'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/sessions/{session_id}/records:
+    parameters:
+      - {$ref: '#/components/parameters/SessionId'}
+    post:
+      tags: [records]
+      operationId: createSessionRecord
+      summary: 회차 기록(실증일지·시험 결과) 작성과 근거 연결
+      x-freeze: G1
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SessionRecordCreate'}
+      responses:
+        '201':
+          description: 생성됨
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SessionRecord'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/devices:
+    get:
+      tags: [context]
+      operationId: listDevices
+      summary: 자기 기관 장비 목록
+      x-freeze: G1
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: 장비 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/Device'}}
+                  next_cursor: {type: [string, 'null']}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      tags: [context]
+      operationId: createDevice
+      summary: 장비 등록 (ORG_ADMIN)
+      x-freeze: G1
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DeviceCreate'}
+      responses:
+        '201':
+          description: 등록됨
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Device'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /v1/devices/{device_id}:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    get:
+      tags: [context]
+      operationId: getDevice
+      summary: 장비 상세
+      x-freeze: G1
+      responses:
+        '200':
+          description: 장비
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Device'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/devices/{device_id}/policy:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    get:
+      tags: [agents]
+      operationId: getDevicePolicy
+      summary: 장비 정책 (에이전트가 주기적으로 받아 적용)
+      x-freeze: G1
+      responses:
+        '200':
+          description: 장비 정책
+          content:
+            application/json:
+              schema: {$ref: './schemas/device-policy.schema.json'}
+              examples:
+                vessel:
+                  externalValue: ./examples/device-policy.vessel-camera.json
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/devices/{device_id}/enrollment-codes:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    post:
+      tags: [agents]
+      operationId: createEnrollmentCode
+      summary: 에이전트 등록 코드 발급 (ORG_ADMIN, 1회용, 기본 24시간)
+      x-freeze: G1
+      responses:
+        '201':
+          description: 등록 코드 (이 응답에서 한 번만 보인다)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EnrollmentCode'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/agents/heartbeat:
+    post:
+      tags: [agents]
+      operationId: postHeartbeat
+      summary: 에이전트 상태 보고
+      x-freeze: G1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './schemas/agent-heartbeat.schema.json'}
+            examples:
+              vessel:
+                externalValue: ./examples/agent-heartbeat.vessel-agent.json
+      responses:
+        '204': {description: 받음}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /v1/agents/{device_id}/health:
+    parameters:
+      - {$ref: '#/components/parameters/DeviceId'}
+    get:
+      tags: [agents]
+      operationId: getAgentHealth
+      summary: 에이전트 원격 상태
+      x-freeze: G1
+      responses:
+        '200':
+          description: 상태
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AgentHealth'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/schemas:
+    get:
+      tags: [contracts]
+      operationId: listSchemas
+      summary: 게시된 JSON Schema 목록
+      x-freeze: G1
+      responses:
+        '200':
+          description: 스키마 목록
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SchemaIndex'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /v1/schemas/{name}/{version}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema: {type: string, pattern: '^[a-z][a-z0-9-]{1,63}$'}
+      - name: version
+        in: path
+        required: true
+        schema: {type: string, pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'}
+    get:
+      tags: [contracts]
+      operationId: getSchema
+      summary: JSON Schema (contracts/schemas 파일의 참조를 묶은 단일 문서)
+      description: 저장소의 스키마 파일은 상대 참조(common.schema.json#…)를 쓴다. 이 API는 참조를 $defs로 묶어(bundle) 그대로 검증에 쓸 수 있는 문서 하나로 준다.
+      x-freeze: G1
+      responses:
+        '200':
+          description: JSON Schema 2020-12 문서
+          content:
+            application/schema+json:
+              schema: {type: object}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/codes/{table}:
+    parameters:
+      - name: table
+        in: path
+        required: true
+        schema: {enum: [units, metrics, event-categories, purposes, quarantine-reasons]}
+    get:
+      tags: [contracts]
+      operationId: getCodeTable
+      summary: 코드표 (공통값 + 자기 기관 하위코드)
+      x-freeze: G1
+      responses:
+        '200':
+          description: 코드표
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CodeTable'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/contracts/validate:
+    post:
+      tags: [contracts]
+      operationId: validateContract
+      summary: 저장 없이 매니페스트·관측값·이벤트를 계약으로 검사
+      x-freeze: G1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ValidateRequest'}
+      responses:
+        '200':
+          description: 검사 결과 (문서가 틀려도 200, 결과에 문제 목록)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ValidateResult'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /v1/uploads:
+    post:
+      tags: [uploads]
+      operationId: createUpload
+      summary: 매니페스트 신고 → 업로드 세션과 파트 URL 발급
+      description: |
+        - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
+        - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
+        - 같은 (기관, 장비, sha256) 자산에 바이너리가 있으면 200 ALREADY_REGISTERED와 기존 asset_id.
+        - 같은 자산이 바이너리 없는 C0 자산이고 정책이 허용하면 201 UPLOAD_CREATED (기존 asset_id로 세션을 연다).
+        - C0_METADATA_ONLY 원천 장비는 파트 URL 없이 201 METADATA_ONLY_REGISTERED.
+        - schema_version 주버전이 다르거나 서버가 모르는 높은 부버전이면 422 UNSUPPORTED_SCHEMA_VERSION.
+      x-freeze: G1
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './schemas/upload-manifest.schema.json'}
+            examples:
+              vessel_video:
+                externalValue: ./examples/upload-manifest.vessel-video.json
+              cctv_metadata_only:
+                externalValue: ./examples/upload-manifest.cctv-metadata-only.json
+              unknown_capture_time:
+                externalValue: ./examples/upload-manifest.unknown-capture-time.json
+      responses:
+        '200':
+          description: 이미 등록된 파일 (새 세션을 만들지 않음)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UploadCreated'}
+        '201':
+          description: 업로드 세션 생성 또는 메타데이터 전용 등록
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UploadCreated'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+
+  /v1/uploads/{upload_id}:
+    parameters:
+      - {$ref: '#/components/parameters/UploadId'}
+    get:
+      tags: [uploads]
+      operationId: getUpload
+      summary: 업로드 상태 (RECEIVED와 REGISTERED를 구분)
+      x-freeze: G1
+      responses:
+        '200':
+          description: 상태
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UploadStatus'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    delete:
+      tags: [uploads]
+      operationId: abortUpload
+      summary: 업로드 취소 (미완료 파트 정리, 쿼터 예약 해제)
+      x-freeze: G1
+      responses:
+        '204': {description: 취소됨}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/uploads/{upload_id}/parts:
+    parameters:
+      - {$ref: '#/components/parameters/UploadId'}
+    get:
+      tags: [uploads]
+      operationId: listUploadParts
+      summary: 완료된 파트와 남은 파트의 새 URL (재개용)
+      x-freeze: G1
+      responses:
+        '200':
+          description: 파트 현황
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PartList'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '410': {$ref: '#/components/responses/Gone'}
+
+  /v1/uploads/{upload_id}/complete:
+    parameters:
+      - {$ref: '#/components/parameters/UploadId'}
+    post:
+      tags: [uploads]
+      operationId: completeUpload
+      summary: 멀티파트 완료 → RECEIVED, 무결성 검증 작업 등록
+      x-freeze: G1
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CompleteRequest'}
+      responses:
+        '202':
+          description: 받음. 등록 여부는 GET /v1/uploads/{upload_id} 또는 웹훅으로 확인
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UploadStatus'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '410': {$ref: '#/components/responses/Gone'}
+
+  /v1/assets:
+    get:
+      tags: [assets]
+      operationId: listAssets
+      summary: 자기 기관 자산 목록 (권한 범위 안에서만, 전체 건수 없음)
+      x-freeze: G1
+      parameters:
+        - name: session_id
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/session_id'}
+        - name: source_system_id
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+        - name: data_type
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/data_type'}
+        - name: ingest_status
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/ingest_status'}
+        - name: quality_status
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/quality_status'}
+        - name: sharing_scope
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/sharing_scope'}
+        - name: variant
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/variant'}
+        - name: captured_from
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        - name: captured_to
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: 자산 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items: {type: array, items: {$ref: './schemas/asset-metadata.schema.json'}}
+                  next_cursor: {type: [string, 'null']}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /v1/assets/{asset_id}:
+    parameters:
+      - {$ref: '#/components/parameters/AssetId'}
+    get:
+      tags: [assets]
+      operationId: getAsset
+      summary: 자산 메타데이터
+      x-freeze: G1
+      responses:
+        '200':
+          description: 자산
+          content:
+            application/json:
+              schema: {$ref: './schemas/asset-metadata.schema.json'}
+              examples:
+                vessel_video:
+                  externalValue: ./examples/asset-metadata.vessel-video-l0.json
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [assets]
+      operationId: patchAsset
+      summary: 회차 지정·data_role 변경(ORG_ADMIN, 사유 필수)·위치 공개 정밀도
+      description: sharing_scope는 여기서 바꿀 수 없다 (share-requests 사용).
+      x-freeze: G1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AssetPatch'}
+      responses:
+        '200':
+          description: 변경된 자산
+          content:
+            application/json:
+              schema: {$ref: './schemas/asset-metadata.schema.json'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/assets/{asset_id}/receipt:
+    parameters:
+      - {$ref: '#/components/parameters/AssetId'}
+    get:
+      tags: [assets]
+      operationId: getAssetReceipt
+      summary: 등록 영수증
+      x-freeze: G1
+      responses:
+        '200':
+          description: 영수증
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Receipt'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/assets/{asset_id}/lineage:
+    parameters:
+      - {$ref: '#/components/parameters/AssetId'}
+    get:
+      tags: [assets]
+      operationId: getAssetLineage
+      summary: 상위·하위 자산 (권한 범위 안에서)
+      x-freeze: G1
+      responses:
+        '200':
+          description: 계보
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Lineage'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/assets/{asset_id}/share-requests:
+    parameters:
+      - {$ref: '#/components/parameters/AssetId'}
+    post:
+      tags: [sharing]
+      operationId: createShareRequest
+      summary: 공유 등급 변경 신청 — 상향은 domain.md 4장 조건 검사, 하향은 언제든 (ORG_ADMIN만)
+      description: L1 이상 결정은 ORG_ADMIN만 할 수 있다 (그 밖의 역할은 403). 원본(variant=ORIGINAL)과 CORE는 L1을 넘을 수 없다. 하향에는 existing_grant_handling이 필요하다.
+      x-freeze: G4
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ShareRequestCreate'}
+      responses:
+        '201':
+          description: 신청 접수 (L1은 즉시 반영, L2 이상은 심사 흐름)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ShareRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422':
+          description: 조건 미충족 (RULE_VIOLATION, unmet_conditions)
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/schemas/Problem'}
+              examples:
+                rule_violation:
+                  externalValue: ./examples/problem.rule-violation.json
+
+  /v1/observations:
+    get:
+      tags: [observations]
+      operationId: listObservations
+      summary: 관측값 조회 (interval을 주면 구간 집계)
+      x-freeze: G1
+      parameters:
+        - name: source_system_id
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+        - name: metric
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/metric_code'}
+        - name: from
+          in: query
+          required: true
+          schema: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        - name: to
+          in: query
+          required: true
+          schema: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        - name: quality_flag
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/observation_quality_flag'}
+        - name: channel
+          in: query
+          schema: {type: string, maxLength: 32}
+        - name: interval
+          in: query
+          description: 집계 간격 (예 PT10M). 결측은 평균에 넣지 않고 missing_count로 센다.
+          schema: {type: string, pattern: '^PT[0-9]+[MH]$'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: 관측값 또는 집계
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - {$ref: '#/components/schemas/ObservationList'}
+                  - {$ref: '#/components/schemas/ObservationAggregateList'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      tags: [observations]
+      operationId: postObservations
+      summary: 관측값 배치 전송 (항목별 결과)
+      x-freeze: G1
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './schemas/observation-batch.schema.json'}
+            examples:
+              ocean_sensor:
+                externalValue: ./examples/observation-batch.ocean-sensor.json
+      responses:
+        '200':
+          description: 항목별 결과 (ACCEPTED / DUPLICATE / REJECTED)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ObservationBatchResult'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
+  /v1/events:
+    get:
+      tags: [events]
+      operationId: listEvents
+      summary: 실증 이벤트 조회
+      x-freeze: G1
+      parameters:
+        - name: session_id
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/session_id'}
+        - name: event_code
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/code_ref'}
+        - name: source_system_id
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+        - name: human_verified
+          in: query
+          schema: {type: boolean}
+        - name: from
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        - name: to
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: 이벤트 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/EventRecord'}}
+                  next_cursor: {type: [string, 'null']}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      tags: [events]
+      operationId: createEvent
+      summary: 실증 이벤트 등록
+      x-freeze: G1
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './schemas/event.schema.json'}
+            examples:
+              model_detection:
+                externalValue: ./examples/event.model-detection.json
+              manual_safety:
+                externalValue: ./examples/event.manual-safety.json
+      responses:
+        '200':
+          description: 같은 원천 이벤트 ID가 이미 있음 (기존 이벤트 반환)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EventRecord'}
+        '201':
+          description: 등록됨
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EventRecord'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/events/{event_id}:
+    parameters:
+      - {$ref: '#/components/parameters/EventId'}
+    get:
+      tags: [events]
+      operationId: getEvent
+      summary: 이벤트 상세
+      x-freeze: G1
+      responses:
+        '200':
+          description: 이벤트
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EventRecord'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [events]
+      operationId: patchEvent
+      summary: 사람 확인·자산 연결·종료 시각 추가
+      x-freeze: G1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EventPatch'}
+      responses:
+        '200':
+          description: 변경된 이벤트
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EventRecord'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/ingest-status:
+    get:
+      tags: [status]
+      operationId: getIngestStatus
+      summary: 자기 기관 장비별 수집 상태
+      x-freeze: G1
+      responses:
+        '200':
+          description: 장비별 상태
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/IngestStatus'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /v1/quality-reports:
+    get:
+      tags: [status]
+      operationId: getQualityReport
+      summary: 품질 상태 집계 (회차·기간)
+      x-freeze: G1
+      parameters:
+        - name: session_id
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/session_id'}
+        - name: from
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        - name: to
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+      responses:
+        '200':
+          description: 품질 집계
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/QualityReport'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /v1/webhooks/subscriptions:
+    get:
+      tags: [webhooks]
+      operationId: listWebhookSubscriptions
+      summary: 웹훅 구독 목록
+      x-freeze: G1
+      responses:
+        '200':
+          description: 구독 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/WebhookSubscription'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      tags: [webhooks]
+      operationId: createWebhookSubscription
+      summary: 웹훅 구독 등록 (서명 비밀은 이 응답에서 한 번만)
+      x-freeze: G1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/WebhookSubscriptionCreate'}
+      responses:
+        '201':
+          description: 등록됨
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/WebhookSubscription'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /v1/webhooks/subscriptions/{webhook_id}:
+    parameters:
+      - {$ref: '#/components/parameters/WebhookId'}
+    delete:
+      tags: [webhooks]
+      operationId: deleteWebhookSubscription
+      summary: 웹훅 구독 삭제
+      x-freeze: G1
+      responses:
+        '204': {description: 삭제됨}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/datasets:
+    get:
+      tags: [datasets]
+      operationId: listDatasets
+      summary: 게시된 데이터셋 (CONSUMER에게는 승인 가능한 것만)
+      x-freeze: G5
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: 데이터셋 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/Dataset'}}
+                  next_cursor: {type: [string, 'null']}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /v1/datasets/{dataset_id}:
+    parameters:
+      - {$ref: '#/components/parameters/DatasetId'}
+    get:
+      tags: [datasets]
+      operationId: getDataset
+      summary: 데이터셋 상세 (데이터 카드 포함)
+      x-freeze: G5
+      responses:
+        '200':
+          description: 데이터셋
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Dataset'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/datasets/{dataset_id}/versions:
+    parameters:
+      - {$ref: '#/components/parameters/DatasetId'}
+    post:
+      tags: [datasets]
+      operationId: createDatasetVersion
+      summary: 승인 자산으로 데이터셋 버전 생성 (PLATFORM_OPERATOR, 수정 불가)
+      x-freeze: G4
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DatasetVersionCreate'}
+      responses:
+        '202':
+          description: 생성 작업 접수. 완료되면 매니페스트를 조회할 수 있다
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/JobAccepted'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+
+  /v1/access-requests:
+    post:
+      tags: [datasets]
+      operationId: createAccessRequest
+      summary: 이용 신청 (데이터셋 버전 하나)
+      x-freeze: G5
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './schemas/access-request.schema.json'}
+            examples:
+              ai_training:
+                externalValue: ./examples/access-request.ai-training.json
+      responses:
+        '201':
+          description: 신청 접수 (REQUESTED)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AccessRequest'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+
+  /v1/access-requests/{access_request_id}/decisions:
+    parameters:
+      - {$ref: '#/components/parameters/AccessRequestId'}
+    post:
+      tags: [datasets]
+      operationId: decideAccessRequest
+      summary: 제공기관 ORG_ADMIN 승인·거절 → 운영자 최종 승인
+      x-freeze: G5
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AccessDecision'}
+      responses:
+        '200':
+          description: 반영된 신청 상태
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AccessRequest'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/distributions:
+    post:
+      tags: [datasets]
+      operationId: createDistribution
+      summary: 유효한 Grant로 단기 다운로드 URL과 매니페스트 발급
+      x-freeze: G5
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DistributionCreate'}
+      responses:
+        '201':
+          description: 배포 기록과 URL (기본 5분, 로그 금지)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Distribution'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '410': {$ref: '#/components/responses/Gone'}
+
+  /v1/catalog/dcat:
+    get:
+      tags: [datasets]
+      operationId: getDcatCatalog
+      summary: PUBLIC(L4) 데이터셋 메타데이터를 DCAT 3 JSON-LD로
+      security: []
+      x-freeze: G5
+      responses:
+        '200':
+          description: DCAT 3 카탈로그
+          content:
+            application/ld+json:
+              schema: {type: object}
+
+webhooks:
+  upload.registered:
+    post:
+      operationId: webhookUploadRegistered
+      summary: 자산이 REGISTERED가 됨
+      x-freeze: G1
+      parameters:
+        - {$ref: '#/components/parameters/WebhookSignature'}
+        - {$ref: '#/components/parameters/WebhookTimestamp'}
+        - {$ref: '#/components/parameters/WebhookEventId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './schemas/webhook-event.schema.json'}
+      responses:
+        '2XX': {description: 받음 (2xx가 아니면 지수 백오프로 재시도)}
+  upload.quarantined:
+    post:
+      operationId: webhookUploadQuarantined
+      summary: 자산이 격리됨 (quarantine_reason 포함)
+      x-freeze: G1
+      parameters:
+        - {$ref: '#/components/parameters/WebhookSignature'}
+        - {$ref: '#/components/parameters/WebhookTimestamp'}
+        - {$ref: '#/components/parameters/WebhookEventId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './schemas/webhook-event.schema.json'}
+            examples:
+              checksum_mismatch:
+                externalValue: ./examples/webhook-event.upload-quarantined.json
+      responses:
+        '2XX': {description: 받음}
+  asset.processed:
+    post:
+      operationId: webhookAssetProcessed
+      summary: 프록시·썸네일 등 처리 완료 (READY_PRIVATE)
+      x-freeze: G1
+      parameters:
+        - {$ref: '#/components/parameters/WebhookSignature'}
+        - {$ref: '#/components/parameters/WebhookTimestamp'}
+        - {$ref: '#/components/parameters/WebhookEventId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './schemas/webhook-event.schema.json'}
+      responses:
+        '2XX': {description: 받음}
+  share.status_changed:
+    post:
+      operationId: webhookShareStatusChanged
+      summary: 공유 심사 상태 변경
+      x-freeze: G4
+      parameters:
+        - {$ref: '#/components/parameters/WebhookSignature'}
+        - {$ref: '#/components/parameters/WebhookTimestamp'}
+        - {$ref: '#/components/parameters/WebhookEventId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './schemas/webhook-event.schema.json'}
+      responses:
+        '2XX': {description: 받음}
+  grant.revoked:
+    post:
+      operationId: webhookGrantRevoked
+      summary: 이용 권한 철회
+      x-freeze: G5
+      parameters:
+        - {$ref: '#/components/parameters/WebhookSignature'}
+        - {$ref: '#/components/parameters/WebhookTimestamp'}
+        - {$ref: '#/components/parameters/WebhookEventId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './schemas/webhook-event.schema.json'}
+      responses:
+        '2XX': {description: 받음}
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 사용자는 Keycloak OIDC 액세스 토큰, 기기·기관 서버는 /v1/auth/token에서 받은 단기 토큰.
+
+  headers:
+    RequestId:
+      description: 요청 추적 ID (ULID). 요청에 있으면 그대로 돌려준다.
+      schema: {$ref: './schemas/common.schema.json#/$defs/ulid'}
+    RetryAfter:
+      description: 다시 시도할 때까지 기다릴 초
+      schema: {type: integer, minimum: 1}
+
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      schema: {type: string, maxLength: 512}
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 500, default: 50}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관.
+      schema: {type: string, minLength: 8, maxLength: 128}
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema: {$ref: './schemas/common.schema.json#/$defs/session_id'}
+    DeviceId:
+      name: device_id
+      in: path
+      required: true
+      schema: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+    AssetId:
+      name: asset_id
+      in: path
+      required: true
+      schema: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+    UploadId:
+      name: upload_id
+      in: path
+      required: true
+      schema: {$ref: './schemas/common.schema.json#/$defs/upload_id'}
+    EventId:
+      name: event_id
+      in: path
+      required: true
+      schema: {$ref: './schemas/common.schema.json#/$defs/event_id'}
+    DatasetId:
+      name: dataset_id
+      in: path
+      required: true
+      schema: {$ref: './schemas/common.schema.json#/$defs/dataset_id'}
+    AccessRequestId:
+      name: access_request_id
+      in: path
+      required: true
+      schema: {$ref: './schemas/common.schema.json#/$defs/access_request_id'}
+    WebhookId:
+      name: webhook_id
+      in: path
+      required: true
+      schema: {$ref: './schemas/common.schema.json#/$defs/webhook_id'}
+    WebhookSignature:
+      name: X-Signature
+      in: header
+      required: true
+      description: 'hex(HMAC-SHA256(secret, timestamp + "." + body))'
+      schema: {type: string, pattern: '^[0-9a-f]{64}$'}
+    WebhookTimestamp:
+      name: X-Signature-Timestamp
+      in: header
+      required: true
+      description: 유닉스 초. 수신 측은 허용 오차(기본 5분) 밖이면 거부한다.
+      schema: {type: integer}
+    WebhookEventId:
+      name: X-Event-Id
+      in: header
+      required: true
+      schema: {$ref: './schemas/common.schema.json#/$defs/ulid'}
+
+  responses:
+    BadRequest:
+      description: 입력 형식 오류 (VALIDATION_ERROR)
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+          examples:
+            validation:
+              externalValue: ./examples/problem.validation-error.json
+    Unauthorized:
+      description: 인증 실패·만료·폐기된 자격증명 (UNAUTHENTICATED)
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Forbidden:
+      description: 같은 기관 안에서 권한 부족 (FORBIDDEN) 또는 다중 인증 필요 (MFA_REQUIRED)
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    NotFound:
+      description: 없음 또는 다른 기관 리소스 (둘을 구분하지 않는다)
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Conflict:
+      description: CONFLICT, IDEMPOTENCY_CONFLICT, INVALID_STATE_TRANSITION, QUOTA_EXCEEDED
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Gone:
+      description: 만료된 업로드 세션·등록 코드·이용 권한 (GONE)
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    PayloadTooLarge:
+      description: 본문·배치 크기 한도 초과 (PAYLOAD_TOO_LARGE)
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Unprocessable:
+      description: RULE_VIOLATION(수집·공유·이용 정책 조건 미충족, unmet_conditions) 또는 UNSUPPORTED_SCHEMA_VERSION
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    TooManyRequests:
+      description: 호출 제한 (RATE_LIMITED)
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Retry-After: {$ref: '#/components/headers/RetryAfter'}
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    ServiceUnavailable:
+      description: STORAGE_UNAVAILABLE 또는 SERVICE_UNAVAILABLE
+      headers:
+        X-Request-Id: {$ref: '#/components/headers/RequestId'}
+        Retry-After: {$ref: '#/components/headers/RetryAfter'}
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+
+  schemas:
+    Problem:
+      $ref: './schemas/problem.schema.json'
+
+    Readiness:
+      type: object
+      required: [status, checks]
+      properties:
+        status: {enum: [ready, not_ready]}
+        checks:
+          type: object
+          additionalProperties: {enum: [ok, failed]}
+
+    Capabilities:
+      type: object
+      required: [api_version, schema_versions, gpu_enabled, processing_steps, report_formats, external_sources]
+      properties:
+        api_version: {type: string}
+        schema_versions: {type: array, items: {type: string}}
+        gpu_enabled: {type: boolean}
+        processing_steps:
+          type: array
+          items: {enum: [META, PROXY, THUMBNAIL, SENSOR_PARSE, DEID, TAG, EMBED]}
+        report_formats:
+          type: array
+          items: {enum: [PDF, XLSX, HWPX]}
+        external_sources: {type: array, items: {type: string}}
+        features:
+          type: object
+          additionalProperties: {type: boolean}
+
+    TokenRequest:
+      type: object
+      required: [grant_type, client_id, client_secret]
+      properties:
+        grant_type: {const: client_credentials}
+        client_id: {type: string, maxLength: 128}
+        client_secret: {type: string, maxLength: 256}
+        scope:
+          type: string
+          description: '공백으로 구분한 범위 (02번 요구사항 6: upload:write observation:write event:write asset:read status:read webhook:manage). 생략하면 자격증명에 허용된 전체 범위'
+
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token: {type: string}
+        token_type: {const: Bearer}
+        expires_in: {type: integer, minimum: 1}
+
+    EnrollRequest:
+      type: object
+      additionalProperties: false
+      required: [enrollment_code, agent_version, os]
+      properties:
+        enrollment_code: {type: string, minLength: 8, maxLength: 64}
+        agent_version: {type: string, maxLength: 64}
+        os: {enum: [windows, linux]}
+
+    EnrollResponse:
+      type: object
+      required: [device_id, client_id, client_secret, token_endpoint]
+      properties:
+        device_id: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+        client_id: {type: string}
+        client_secret: {type: string, description: 이 응답에서 한 번만 보인다. 서버는 해시만 저장한다.}
+        token_endpoint: {const: /v1/auth/token}
+
+    EnrollmentCode:
+      type: object
+      required: [code, expires_at]
+      properties:
+        code: {type: string}
+        expires_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+
+    Me:
+      type: object
+      required: [principal_kind, organization_id, org_type, roles, mfa]
+      properties:
+        principal_kind: {enum: [USER, DEVICE, API_KEY]}
+        user_id: {$ref: './schemas/common.schema.json#/$defs/user_id'}
+        device_id: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+        organization_id: {$ref: './schemas/common.schema.json#/$defs/organization_id'}
+        org_type: {$ref: './schemas/common.schema.json#/$defs/org_type'}
+        roles: {type: array, items: {$ref: './schemas/common.schema.json#/$defs/role'}}
+        mfa: {type: boolean}
+
+    Project:
+      type: object
+      required: [project_id, name, status]
+      properties:
+        project_id: {$ref: './schemas/common.schema.json#/$defs/project_id'}
+        name: {type: string}
+        status: {enum: [PLANNED, ACTIVE, CLOSED]}
+
+    SessionCreate:
+      type: object
+      additionalProperties: false
+      required: [project_id, label, title, starts_at]
+      properties:
+        project_id: {$ref: './schemas/common.schema.json#/$defs/project_id'}
+        label: {type: string, minLength: 1, maxLength: 120, description: 기관 안에서 유일한 회차 표시값 (폴더 이름 규칙과 맞춘다)}
+        title: {type: string, minLength: 1, maxLength: 200}
+        starts_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        ends_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        site: {type: string, maxLength: 200}
+        note: {type: string, maxLength: 2000}
+        device_ids:
+          type: array
+          description: 이 회차에 데이터를 낼 원천 장비 (실증 예정일 무수집 감시에 쓴다, 11번)
+          items: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+
+    Session:
+      type: object
+      required: [session_id, project_id, label, title, starts_at, created_at]
+      properties:
+        session_id: {$ref: './schemas/common.schema.json#/$defs/session_id'}
+        project_id: {$ref: './schemas/common.schema.json#/$defs/project_id'}
+        label: {type: string}
+        title: {type: string}
+        starts_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        ends_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+        site: {type: [string, 'null']}
+        note: {type: [string, 'null']}
+        device_ids: {type: array, items: {$ref: './schemas/common.schema.json#/$defs/device_id'}}
+        created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+
+    EvidenceRef:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [kind, asset_id]
+          properties:
+            kind: {const: ASSET}
+            asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+            from_offset_s: {type: number, minimum: 0}
+            to_offset_s: {type: number, minimum: 0}
+        - type: object
+          additionalProperties: false
+          required: [kind, event_id]
+          properties:
+            kind: {const: EVENT}
+            event_id: {$ref: './schemas/common.schema.json#/$defs/event_id'}
+        - type: object
+          additionalProperties: false
+          required: [kind, source_system_id, metric, from, to]
+          properties:
+            kind: {const: OBSERVATION_RANGE}
+            source_system_id: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+            metric: {$ref: './schemas/common.schema.json#/$defs/metric_code'}
+            from: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+            to: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+
+    SessionRecordCreate:
+      type: object
+      additionalProperties: false
+      required: [kind, title]
+      properties:
+        kind: {enum: [LOG, TEST, NOTE]}
+        title: {type: string, minLength: 1, maxLength: 200}
+        test_item: {type: string, maxLength: 200}
+        conditions: {type: string, maxLength: 2000}
+        result: {type: string, maxLength: 4000}
+        note: {type: string, maxLength: 4000}
+        evidence_refs: {type: array, maxItems: 500, items: {$ref: '#/components/schemas/EvidenceRef'}}
+
+    SessionRecord:
+      allOf:
+        - $ref: '#/components/schemas/SessionRecordCreate'
+        - type: object
+          required: [record_id, session_id, created_at, created_by, version]
+          properties:
+            record_id: {$ref: './schemas/common.schema.json#/$defs/record_id'}
+            session_id: {$ref: './schemas/common.schema.json#/$defs/session_id'}
+            created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+            created_by: {$ref: './schemas/common.schema.json#/$defs/user_id'}
+            version: {type: integer, minimum: 1}
+
+    DeviceCreate:
+      type: object
+      additionalProperties: false
+      required: [name, kind, device_type, local_copy_policy]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 120}
+        kind: {enum: [SOURCE, COLLECTOR], description: 'SOURCE=원천 장비, COLLECTOR=에이전트 설치 장비 (domain.md 1장)'}
+        device_type: {enum: [CAMERA, NVR, SENSOR, EXTERNAL_STATION, AGENT_PC, EDGE_BOX, SERVER, OTHER]}
+        collector_device_id: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+        project_id: {$ref: './schemas/common.schema.json#/$defs/project_id'}
+        local_copy_policy: {$ref: './schemas/common.schema.json#/$defs/local_copy_policy'}
+        local_retention_days: {type: [integer, 'null'], minimum: 0}
+        expected_interval_s: {type: [integer, 'null'], minimum: 1}
+
+    Device:
+      type: object
+      required: [device_id, name, kind, device_type, status, collection_mode, local_copy_policy]
+      properties:
+        device_id: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+        name: {type: string}
+        kind: {enum: [SOURCE, COLLECTOR]}
+        device_type: {enum: [CAMERA, NVR, SENSOR, EXTERNAL_STATION, AGENT_PC, EDGE_BOX, SERVER, OTHER]}
+        collector_device_id: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+        expected_interval_s: {type: [integer, 'null']}
+        project_id: {$ref: './schemas/common.schema.json#/$defs/project_id'}
+        status: {enum: [PENDING_ENROLLMENT, ACTIVE, REVOKED]}
+        collection_mode: {$ref: './schemas/common.schema.json#/$defs/collection_mode'}
+        local_copy_policy: {$ref: './schemas/common.schema.json#/$defs/local_copy_policy'}
+        local_retention_days: {type: [integer, 'null']}
+        center_copy_may_be_only_copy: {type: boolean, description: local_copy_policy가 ROTATING·NONE·UNKNOWN이면 true}
+        last_heartbeat_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+
+    AgentHealth:
+      type: object
+      required: [device_id, status]
+      properties:
+        device_id: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+        status: {enum: [OK, STALE, ERROR, NEVER_SEEN]}
+        last_heartbeat_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+        last_success_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+        queue_items: {type: integer, minimum: 0}
+        queue_bytes: {type: integer, minimum: 0}
+        last_error_code: {type: [string, 'null']}
+        policy_version_applied: {type: [string, 'null']}
+        policy_version_current: {type: string}
+        open_alerts: {type: integer, minimum: 0}
+        last_registered_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+        last_observation_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+        expected_interval_s: {type: [integer, 'null']}
+        lag_s: {type: [integer, 'null'], description: 현재 시각 − 마지막 정상 등록(관측값 장비는 마지막 관측) 시각}
+
+    SchemaIndex:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [name, version]
+            properties:
+              name: {type: string}
+              version: {type: string}
+
+    CodeTable:
+      type: object
+      required: [table, version, items]
+      properties:
+        table: {type: string}
+        version: {type: string}
+        items: {type: array, items: {type: object}}
+
+    ValidateRequest:
+      type: object
+      additionalProperties: false
+      required: [contract, document]
+      properties:
+        contract: {enum: [upload-manifest, observation-batch, event]}
+        document: {type: object}
+
+    ValidateResult:
+      type: object
+      required: [valid, problems]
+      properties:
+        valid: {type: boolean}
+        problems:
+          type: array
+          items:
+            type: object
+            required: [pointer, code, message, severity]
+            properties:
+              pointer: {type: string}
+              code: {type: string}
+              message: {type: string}
+              severity: {enum: [ERROR, WARNING]}
+
+    PartUrl:
+      type: object
+      required: [part_number, url, expires_at]
+      properties:
+        part_number: {type: integer, minimum: 1, maximum: 10000}
+        url: {type: string, format: uri, description: 사전 서명 URL. 로그에 남기지 않는다.}
+        expires_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+
+    UploadCreated:
+      type: object
+      required: [status, asset_id]
+      properties:
+        status: {enum: [UPLOAD_CREATED, METADATA_ONLY_REGISTERED, ALREADY_REGISTERED]}
+        upload_id: {$ref: './schemas/common.schema.json#/$defs/upload_id'}
+        asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+        part_size: {type: integer, minimum: 1}
+        part_count: {type: integer, minimum: 1}
+        parts: {type: array, items: {$ref: '#/components/schemas/PartUrl'}}
+        expires_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+      allOf:
+        - if: {properties: {status: {const: UPLOAD_CREATED}}}
+          then: {required: [upload_id, part_size, part_count, parts, expires_at]}
+
+    PartList:
+      type: object
+      required: [upload_id, part_size, part_count, completed_parts, pending_parts, expires_at]
+      properties:
+        upload_id: {$ref: './schemas/common.schema.json#/$defs/upload_id'}
+        part_size: {type: integer, minimum: 1}
+        part_count: {type: integer, minimum: 1}
+        completed_parts:
+          type: array
+          items:
+            type: object
+            required: [part_number, etag, size]
+            properties:
+              part_number: {type: integer, minimum: 1}
+              etag: {type: string}
+              size: {type: integer, minimum: 0}
+        pending_parts: {type: array, items: {$ref: '#/components/schemas/PartUrl'}}
+        expires_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+
+    CompleteRequest:
+      type: object
+      additionalProperties: false
+      required: [parts]
+      properties:
+        parts:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [part_number, etag]
+            properties:
+              part_number: {type: integer, minimum: 1}
+              etag: {type: string, minLength: 1}
+
+    UploadStatus:
+      type: object
+      required: [upload_id, ingest_status, parts_completed, part_count, created_at]
+      properties:
+        upload_id: {$ref: './schemas/common.schema.json#/$defs/upload_id'}
+        asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+        ingest_status: {$ref: './schemas/common.schema.json#/$defs/ingest_status'}
+        quarantine_reason: {$ref: './schemas/common.schema.json#/$defs/quarantine_reason'}
+        parts_completed: {type: integer, minimum: 0}
+        part_count: {type: integer, minimum: 0}
+        bytes_received: {type: integer, minimum: 0}
+        error_code: {type: [string, 'null']}
+        expires_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+
+    AssetPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        session_id: {$ref: './schemas/common.schema.json#/$defs/session_id'}
+        data_role: {$ref: './schemas/common.schema.json#/$defs/data_role'}
+        location_precision: {$ref: './schemas/common.schema.json#/$defs/location_precision'}
+        reason: {type: string, minLength: 2, maxLength: 500}
+      dependentRequired:
+        data_role: [reason]
+
+    Receipt:
+      type: object
+      required: [asset_id, checksum_sha256, byte_size, registered_at, integrity_log_entry_id, integrity_entry_hash]
+      properties:
+        asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+        checksum_sha256: {$ref: './schemas/common.schema.json#/$defs/sha256'}
+        byte_size: {type: integer, minimum: 0}
+        registered_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        integrity_log_entry_id: {type: string}
+        integrity_entry_hash: {$ref: './schemas/common.schema.json#/$defs/sha256'}
+
+    LineageEdge:
+      type: object
+      required: [asset_id, relation, created_at]
+      properties:
+        asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+        relation: {enum: [PROXY, THUMBNAIL, CLIP, DEID, LABEL, SENSOR_PARSE, DATASET_COPY, REPROCESS]}
+        tool_version: {type: string}
+        model_ref: {type: string}
+        created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+
+    Lineage:
+      type: object
+      required: [asset_id, ancestors, descendants]
+      properties:
+        asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+        ancestors: {type: array, items: {$ref: '#/components/schemas/LineageEdge'}}
+        descendants: {type: array, items: {$ref: '#/components/schemas/LineageEdge'}}
+
+    ShareRequestCreate:
+      type: object
+      additionalProperties: false
+      required: [target_scope, reason]
+      properties:
+        target_scope: {$ref: './schemas/common.schema.json#/$defs/sharing_scope'}
+        reason: {type: string, minLength: 2, maxLength: 1000}
+        existing_grant_handling:
+          enum: [REVOKE_NOW, KEEP_UNTIL_EXPIRY]
+          description: 하향할 때 필수. 이미 부여된 이용 권한을 즉시 철회할지 만료까지 둘지
+
+    ShareRequest:
+      type: object
+      required: [share_request_id, asset_id, target_scope, state, share_status]
+      properties:
+        share_request_id: {$ref: './schemas/common.schema.json#/$defs/share_request_id'}
+        asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+        target_scope: {$ref: './schemas/common.schema.json#/$defs/sharing_scope'}
+        state: {enum: [APPLIED, IN_REVIEW]}
+        share_status: {$ref: './schemas/common.schema.json#/$defs/share_status'}
+
+    ObservationRecord:
+      type: object
+      required: [source_system_id, metric, observed_at, value, quality_flag]
+      properties:
+        source_system_id: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+        metric: {$ref: './schemas/common.schema.json#/$defs/metric_code'}
+        observed_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        value: {type: [number, 'null'], description: 정규화된 값 (단위는 unit)}
+        unit: {type: [string, 'null'], description: 정규화 단위 (contracts/codes/units.json)}
+        original_value: {type: [number, 'null']}
+        original_unit: {type: [string, 'null']}
+        quality_flag: {$ref: './schemas/common.schema.json#/$defs/observation_quality_flag'}
+        source_timestamp: {type: [string, 'null']}
+        clock_offset_ms: {type: [integer, 'null']}
+        depth_m: {type: [number, 'null']}
+        source_asset_id: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/asset_id'}, {type: 'null'}]}
+
+    ObservationList:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/ObservationRecord'}}
+        next_cursor: {type: [string, 'null']}
+
+    ObservationAggregateList:
+      type: object
+      required: [interval, items]
+      properties:
+        interval: {type: string}
+        items:
+          type: array
+          items:
+            type: object
+            required: [bucket_start, count, missing_count]
+            properties:
+              bucket_start: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+              min: {type: [number, 'null']}
+              max: {type: [number, 'null']}
+              avg: {type: [number, 'null']}
+              count: {type: integer, minimum: 0}
+              missing_count: {type: integer, minimum: 0}
+
+    ObservationBatchResult:
+      type: object
+      required: [accepted, duplicates, rejected, results]
+      properties:
+        accepted: {type: integer, minimum: 0}
+        duplicates: {type: integer, minimum: 0}
+        rejected: {type: integer, minimum: 0}
+        results:
+          type: array
+          items:
+            type: object
+            required: [index, status]
+            properties:
+              index: {type: integer, minimum: 0}
+              status: {enum: [ACCEPTED, DUPLICATE, REJECTED]}
+              reason: {$ref: './schemas/common.schema.json#/$defs/observation_reject_reason'}
+
+    EventRecord:
+      allOf:
+        - $ref: './schemas/event.schema.json#/$defs/event_body'
+        - type: object
+          required: [event_id, organization_id, created_at, human_verified]
+          properties:
+            event_id: {$ref: './schemas/common.schema.json#/$defs/event_id'}
+            organization_id: {$ref: './schemas/common.schema.json#/$defs/organization_id'}
+            created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+            verified_by: {$ref: './schemas/common.schema.json#/$defs/user_id'}
+            verified_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+      unevaluatedProperties: false
+
+    EventPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        human_verified: {const: true, description: 사람이 확인했다고 표시 (되돌리려면 새 이벤트)}
+        ended_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        add_linked_asset_ids: {type: array, maxItems: 200, items: {$ref: './schemas/common.schema.json#/$defs/asset_id'}}
+        note: {type: string, maxLength: 2000}
+
+    IngestStatus:
+      type: object
+      required: [generated_at, devices]
+      properties:
+        generated_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        devices: {type: array, items: {$ref: '#/components/schemas/AgentHealth'}}
+
+    QualityReport:
+      type: object
+      required: [counts_by_quality_status, top_reasons]
+      properties:
+        session_id: {$ref: './schemas/common.schema.json#/$defs/session_id'}
+        from: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        to: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        counts_by_quality_status:
+          type: object
+          additionalProperties: {type: integer, minimum: 0}
+        top_reasons:
+          type: array
+          items:
+            type: object
+            required: [reason, count]
+            properties:
+              reason: {type: string}
+              count: {type: integer, minimum: 0}
+
+    WebhookSubscriptionCreate:
+      type: object
+      additionalProperties: false
+      required: [url, event_types]
+      properties:
+        url: {type: string, format: uri, pattern: '^https://'}
+        event_types:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {enum: [upload.registered, upload.quarantined, asset.processed, share.status_changed, grant.revoked]}
+
+    WebhookSubscription:
+      type: object
+      required: [webhook_id, url, event_types, active, created_at]
+      properties:
+        webhook_id: {$ref: './schemas/common.schema.json#/$defs/webhook_id'}
+        url: {type: string, format: uri}
+        event_types: {type: array, items: {type: string}}
+        active: {type: boolean}
+        created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        secret: {type: string, description: 등록 응답에서만 한 번 보인다}
+
+    Dataset:
+      type: object
+      required: [dataset_id, title, versions]
+      properties:
+        dataset_id: {$ref: './schemas/common.schema.json#/$defs/dataset_id'}
+        title: {type: string}
+        versions:
+          type: array
+          items:
+            type: object
+            required: [dataset_version_id, version, created_at]
+            properties:
+              dataset_version_id: {$ref: './schemas/common.schema.json#/$defs/dataset_version_id'}
+              version: {type: string}
+              created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        data_card: {$ref: './schemas/dataset-version-manifest.schema.json#/properties/data_card'}
+
+    DatasetVersionCreate:
+      type: object
+      additionalProperties: false
+      required: [version, item_asset_ids, data_card]
+      properties:
+        version: {type: string, pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'}
+        item_asset_ids: {type: array, minItems: 1, uniqueItems: true, items: {$ref: './schemas/common.schema.json#/$defs/asset_id'}}
+        data_card: {$ref: './schemas/dataset-version-manifest.schema.json#/properties/data_card'}
+
+    JobAccepted:
+      type: object
+      required: [job_id, status_url]
+      properties:
+        job_id: {$ref: './schemas/common.schema.json#/$defs/job_id'}
+        status_url: {type: string}
+
+    AccessRequest:
+      type: object
+      required: [access_request_id, dataset_version_id, purpose, status, created_at]
+      properties:
+        access_request_id: {$ref: './schemas/common.schema.json#/$defs/access_request_id'}
+        dataset_version_id: {$ref: './schemas/common.schema.json#/$defs/dataset_version_id'}
+        purpose: {$ref: './schemas/common.schema.json#/$defs/purpose'}
+        status: {$ref: './schemas/common.schema.json#/$defs/grant_status'}
+        pending_provider_approvals: {type: integer, minimum: 0}
+        grant_id: {$ref: './schemas/common.schema.json#/$defs/grant_id'}
+        grant_expires_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+
+    AccessDecision:
+      type: object
+      additionalProperties: false
+      required: [decision, reason]
+      properties:
+        decision: {enum: [APPROVE, DENY]}
+        reason: {type: string, minLength: 2, maxLength: 1000}
+
+    DistributionCreate:
+      type: object
+      additionalProperties: false
+      required: [grant_id]
+      properties:
+        grant_id: {$ref: './schemas/common.schema.json#/$defs/grant_id'}
+        paths: {type: array, maxItems: 1000, items: {type: string, maxLength: 512}}
+
+    Distribution:
+      type: object
+      required: [distribution_id, grant_id, dataset_version_id, expires_at, files, manifest]
+      properties:
+        distribution_id: {$ref: './schemas/common.schema.json#/$defs/distribution_id'}
+        grant_id: {$ref: './schemas/common.schema.json#/$defs/grant_id'}
+        dataset_version_id: {$ref: './schemas/common.schema.json#/$defs/dataset_version_id'}
+        expires_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        files:
+          type: array
+          items:
+            type: object
+            required: [path, url, byte_size, checksum_sha256]
+            properties:
+              path: {type: string}
+              url: {type: string, format: uri, description: 사전 서명 URL (기본 5분). 로그에 남기지 않는다.}
+              byte_size: {type: integer, minimum: 0}
+              checksum_sha256: {$ref: './schemas/common.schema.json#/$defs/sha256'}
+        manifest: {$ref: './schemas/dataset-version-manifest.schema.json'}

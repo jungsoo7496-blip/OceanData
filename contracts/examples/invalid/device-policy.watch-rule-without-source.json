@@ -1,0 +1,85 @@
+{
+  "policy_version": "pv-12",
+  "collector_device_id": "dev_01JD0000000000000000001004",
+  "sources": [
+    {
+      "device_id": "dev_01JD0000000000000000001001",
+      "project_id": "prj_01JD0000000000000000000011",
+      "collection_mode": "C3_APPROVED_FULL",
+      "local_copy_policy": "RETAINED",
+      "local_retention_days": null,
+      "allowed_data_roles": [
+        "CORE"
+      ],
+      "expected_interval_s": 3600,
+      "source_timezone": "Asia/Seoul",
+      "observation_mapping_version": null
+    },
+    {
+      "device_id": "dev_01JD0000000000000000001005",
+      "project_id": "prj_01JD0000000000000000000011",
+      "collection_mode": "C3_APPROVED_FULL",
+      "local_copy_policy": "RETAINED",
+      "local_retention_days": null,
+      "allowed_data_roles": [
+        "CORE",
+        "BYPRODUCT"
+      ],
+      "expected_interval_s": 3600,
+      "source_timezone": "Asia/Seoul",
+      "observation_mapping_version": null
+    }
+  ],
+  "watch_rules": [
+    {
+      "rule_id": "bow_camera",
+      "path_pattern": "{session}/cam01/*",
+      "include": [
+        "*.mp4"
+      ],
+      "exclude": [
+        "*.tmp"
+      ],
+      "data_type": "VIDEO",
+      "variant": "ORIGINAL",
+      "data_role_default": "CORE",
+      "priority": 1
+    },
+    {
+      "rule_id": "env_camera",
+      "source_device_id": "dev_01JD0000000000000000001005",
+      "path_pattern": "{session}/cam_env/*",
+      "include": [
+        "*.mp4"
+      ],
+      "data_type": "VIDEO",
+      "variant": "ORIGINAL",
+      "data_role_default": "BYPRODUCT",
+      "priority": 2
+    }
+  ],
+  "transfer_windows": [
+    {
+      "days": [
+        "MON",
+        "TUE",
+        "WED",
+        "THU",
+        "FRI",
+        "SAT",
+        "SUN"
+      ],
+      "start_local": "18:00",
+      "end_local": "08:00",
+      "max_kbps": 20000
+    }
+  ],
+  "timezone": "Asia/Seoul",
+  "heartbeat_interval_s": 300,
+  "size_stable_s": 30,
+  "max_parallel_parts": 4,
+  "auto_update": {
+    "enabled": true,
+    "channel": "stable"
+  }
+}

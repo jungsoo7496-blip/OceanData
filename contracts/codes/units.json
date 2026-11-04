@@ -1,0 +1,251 @@
+{
+  "version": "1.0.0-draft",
+  "status": "초안 — 연계 카드로 확정",
+  "rule": "정규화 값 = 원래 값 × scale + offset. 원래 값과 단위는 함께 보존한다.",
+  "units": [
+    {
+      "code": "degC",
+      "quantity": "temperature",
+      "label": "섭씨 도",
+      "canonical": true,
+      "aliases": [
+        "°C",
+        "℃",
+        "celsius"
+      ]
+    },
+    {
+      "code": "degF",
+      "quantity": "temperature",
+      "label": "화씨 도",
+      "to_canonical": {
+        "unit": "degC",
+        "scale": 0.5555555556,
+        "offset": -17.7777777778
+      },
+      "aliases": [
+        "°F",
+        "℉"
+      ]
+    },
+    {
+      "code": "K",
+      "quantity": "temperature",
+      "label": "켈빈",
+      "to_canonical": {
+        "unit": "degC",
+        "scale": 1,
+        "offset": -273.15
+      },
+      "aliases": [
+        "kelvin"
+      ]
+    },
+    {
+      "code": "m",
+      "quantity": "length",
+      "label": "미터",
+      "canonical": true,
+      "aliases": [
+        "meter",
+        "metre"
+      ]
+    },
+    {
+      "code": "cm",
+      "quantity": "length",
+      "label": "센티미터",
+      "to_canonical": {
+        "unit": "m",
+        "scale": 0.01,
+        "offset": 0
+      }
+    },
+    {
+      "code": "mm",
+      "quantity": "length",
+      "label": "밀리미터",
+      "to_canonical": {
+        "unit": "m",
+        "scale": 0.001,
+        "offset": 0
+      }
+    },
+    {
+      "code": "km",
+      "quantity": "length",
+      "label": "킬로미터",
+      "to_canonical": {
+        "unit": "m",
+        "scale": 1000,
+        "offset": 0
+      }
+    },
+    {
+      "code": "ft",
+      "quantity": "length",
+      "label": "피트",
+      "to_canonical": {
+        "unit": "m",
+        "scale": 0.3048,
+        "offset": 0
+      }
+    },
+    {
+      "code": "nmi",
+      "quantity": "length",
+      "label": "해리",
+      "to_canonical": {
+        "unit": "m",
+        "scale": 1852,
+        "offset": 0
+      },
+      "aliases": [
+        "NM"
+      ]
+    },
+    {
+      "code": "m/s",
+      "quantity": "speed",
+      "label": "미터/초",
+      "canonical": true,
+      "aliases": [
+        "m/sec",
+        "mps"
+      ]
+    },
+    {
+      "code": "kn",
+      "quantity": "speed",
+      "label": "노트",
+      "to_canonical": {
+        "unit": "m/s",
+        "scale": 0.5144444444,
+        "offset": 0
+      },
+      "aliases": [
+        "knot",
+        "knots",
+        "kt",
+        "kts"
+      ]
+    },
+    {
+      "code": "km/h",
+      "quantity": "speed",
+      "label": "킬로미터/시",
+      "to_canonical": {
+        "unit": "m/s",
+        "scale": 0.2777777778,
+        "offset": 0
+      },
+      "aliases": [
+        "kph",
+        "km/hr"
+      ]
+    },
+    {
+      "code": "cm/s",
+      "quantity": "speed",
+      "label": "센티미터/초",
+      "to_canonical": {
+        "unit": "m/s",
+        "scale": 0.01,
+        "offset": 0
+      }
+    },
+    {
+      "code": "deg",
+      "quantity": "angle",
+      "label": "도(방위)",
+      "canonical": true,
+      "aliases": [
+        "°",
+        "degree",
+        "degrees"
+      ]
+    },
+    {
+      "code": "hPa",
+      "quantity": "pressure",
+      "label": "헥토파스칼",
+      "canonical": true,
+      "aliases": [
+        "mbar",
+        "mb"
+      ]
+    },
+    {
+      "code": "Pa",
+      "quantity": "pressure",
+      "label": "파스칼",
+      "to_canonical": {
+        "unit": "hPa",
+        "scale": 0.01,
+        "offset": 0
+      }
+    },
+    {
+      "code": "kPa",
+      "quantity": "pressure",
+      "label": "킬로파스칼",
+      "to_canonical": {
+        "unit": "hPa",
+        "scale": 10,
+        "offset": 0
+      }
+    },
+    {
+      "code": "PSU",
+      "quantity": "salinity",
+      "label": "실용염분단위",
+      "canonical": true,
+      "aliases": [
+        "psu"
+      ]
+    },
+    {
+      "code": "%",
+      "quantity": "ratio",
+      "label": "퍼센트",
+      "canonical": true,
+      "aliases": [
+        "percent"
+      ]
+    },
+    {
+      "code": "s",
+      "quantity": "time",
+      "label": "초",
+      "canonical": true,
+      "aliases": [
+        "sec",
+        "seconds"
+      ]
+    },
+    {
+      "code": "mm/h",
+      "quantity": "precipitation_rate",
+      "label": "밀리미터/시",
+      "canonical": true,
+      "aliases": [
+        "mm/hr"
+      ]
+    },
+    {
+      "code": "mg/L",
+      "quantity": "concentration",
+      "label": "밀리그램/리터",
+      "canonical": true,
+      "aliases": [
+        "mg/l"
+      ]
+    },
+    {
+      "code": "NTU",
+      "quantity": "turbidity",
+      "label": "탁도 단위",
+      "canonical": true
+    }
+  ]
+}

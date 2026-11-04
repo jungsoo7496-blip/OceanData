@@ -1,0 +1,26 @@
+{
+  "version": "1.0.0",
+  "source": "기준 문서 14.1장 공통 조항 (목적별 허용/금지)",
+  "purposes": [
+    {
+      "code": "JOINT_RESEARCH",
+      "label": "공동연구"
+    },
+    {
+      "code": "AI_TRAINING",
+      "label": "AI 학습"
+    },
+    {
+      "code": "MODEL_IMPROVEMENT",
+      "label": "모델 개선"
+    },
+    {
+      "code": "COMMERCIAL_SERVICE",
+      "label": "상용 서비스"
+    },
+    {
+      "code": "EXTERNAL_SALE",
+      "label": "외부 판매"
+    }
+  ]
+}

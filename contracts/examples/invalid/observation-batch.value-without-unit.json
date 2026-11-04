@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0.0",
+  "source_system_id": "dev_01JD0000000000000000001003",
+  "session_id": "ses_01JD0000000000000000000101",
+  "clock_offset_ms": 120,
+  "observations": [
+    {
+      "metric": "sea_water_temperature",
+      "observed_at": "2027-05-10T10:00:00+09:00",
+      "value": 18.4,
+      "unit": "°C",
+      "quality_flag": "GOOD",
+      "depth_m": 1.5
+    },
+    {
+      "metric": "significant_wave_height",
+      "observed_at": "2027-05-10T01:00:00Z",
+      "value": 0.8,
+      "quality_flag": "GOOD"
+    },
+    {
+      "metric": "sea_water_temperature",
+      "observed_at": "2027-05-10T10:10:00+09:00",
+      "value": null,
+      "quality_flag": "MISSING",
+      "depth_m": 1.5
+    },
+    {
+      "metric": "wind_speed",
+      "source_timestamp": "2027/05/10 10:20:00",
+      "value": 12.5,
+      "unit": "kn",
+      "quality_flag": "GOOD"
+    },
+    {
+      "metric": "air_pressure",
+      "observed_at": "2027-05-10T01:20:00Z",
+      "value": 1012.3,
+      "unit": "hPa",
+      "quality_flag": "SUSPECT",
+      "source_record_id": "buoy-a-000123"
+    }
+  ]
+}

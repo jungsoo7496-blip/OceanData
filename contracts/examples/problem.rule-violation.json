@@ -1,0 +1,23 @@
+{
+  "type": "/problems/rule-violation",
+  "title": "공유 조건을 충족하지 않습니다",
+  "status": 422,
+  "detail": "SANDBOX_PARTNERS로 올리려면 아래 조건이 필요합니다.",
+  "instance": "/v1/assets/ast_01JD0000000000000000010001/share-requests",
+  "code": "RULE_VIOLATION",
+  "request_id": "01JD0000000000000000050001",
+  "unmet_conditions": [
+    {
+      "condition": "data_role=BYPRODUCT",
+      "actual": "CORE"
+    },
+    {
+      "condition": "review_result=PASSED",
+      "actual": null
+    },
+    {
+      "condition": "제공기관 2단 약정 유효",
+      "actual": "없음"
+    }
+  ]
+}

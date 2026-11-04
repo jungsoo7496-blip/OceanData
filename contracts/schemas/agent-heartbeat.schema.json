@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "에이전트 하트비트 v1.0 (POST /v1/agents/heartbeat 요청 본문)",
+  "description": "수집기 단위로 보낸다. 원천 장비별 대기량은 sources에 나눠 담는다.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "collector_device_id", "agent_version", "policy_version", "sent_at", "queue", "disk_free_bytes"],
+  "properties": {
+    "schema_version": { "$ref": "common.schema.json#/$defs/schema_version" },
+    "collector_device_id": { "$ref": "common.schema.json#/$defs/device_id" },
+    "agent_version": { "type": "string", "maxLength": 64 },
+    "policy_version": { "type": "string", "maxLength": 64, "description": "지금 적용 중인 정책 버전" },
+    "sent_at": { "$ref": "common.schema.json#/$defs/utc_datetime" },
+    "last_success_at": { "oneOf": [{ "$ref": "common.schema.json#/$defs/utc_datetime" }, { "type": "null" }] },
+    "queue": { "$ref": "#/$defs/queue" },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["device_id", "queue"],
+        "properties": {
+          "device_id": { "$ref": "common.schema.json#/$defs/device_id" },
+          "queue": { "$ref": "#/$defs/queue" },
+          "last_success_at": { "oneOf": [{ "$ref": "common.schema.json#/$defs/utc_datetime" }, { "type": "null" }] }
+        }
+      }
+    },
+    "last_error_code": { "type": ["string", "null"], "maxLength": 64 },
+    "disk_free_bytes": { "type": "integer", "minimum": 0 },
+    "clock_offset_ms": { "type": ["integer", "null"] },
+    "rotation": {
+      "description": "캡처 플러그인이 순환 삭제한 내역 (ROTATING 원천 장비만, domain.md 9장)",
+      "type": "object", "additionalProperties": false, "required": ["deleted_files", "deleted_bytes", "since"],
+      "properties": {
+        "deleted_files": { "type": "integer", "minimum": 0 },
+        "deleted_bytes": { "type": "integer", "minimum": 0 },
+        "deleted_without_receipt": { "type": "integer", "minimum": 0, "description": "영수증 없이 현장 보존 기간 만료로 지운 파일 수" },
+        "since": { "$ref": "common.schema.json#/$defs/utc_datetime" }
+      }
+    },
+    "plugins": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["name", "version", "status"],
+        "properties": {
+          "name": { "type": "string", "maxLength": 64 },
+          "version": { "type": "string", "maxLength": 64 },
+          "status": { "enum": ["OK", "DEGRADED", "FAILED"] },
+          "detail_code": { "type": "string", "maxLength": 64 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "queue": {
+      "type": "object", "additionalProperties": false, "required": ["items", "bytes"],
+      "properties": {
+        "items": { "type": "integer", "minimum": 0 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "observations": { "type": "integer", "minimum": 0, "description": "Sensor_Plugin이 쌓아 둔 관측값 수" }
+      }
+    }
+  }
+}

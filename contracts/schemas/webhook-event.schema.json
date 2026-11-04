@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "웹훅 이벤트 v1.0",
+  "description": "구독자에게 보내는 본문. 헤더: X-Signature(HMAC-SHA256), X-Signature-Timestamp, X-Event-Id. 같은 event_id가 다시 오면 수신 측이 무시한다.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "type", "occurred_at", "organization_id", "data"],
+  "properties": {
+    "event_id": { "$ref": "common.schema.json#/$defs/ulid" },
+    "type": { "enum": ["upload.registered", "upload.quarantined", "asset.processed", "share.status_changed", "grant.revoked"] },
+    "occurred_at": { "$ref": "common.schema.json#/$defs/utc_datetime" },
+    "organization_id": { "$ref": "common.schema.json#/$defs/organization_id" },
+    "data": {
+      "type": "object",
+      "properties": {
+        "asset_id": { "$ref": "common.schema.json#/$defs/asset_id" },
+        "upload_id": { "$ref": "common.schema.json#/$defs/upload_id" },
+        "ingest_status": { "$ref": "common.schema.json#/$defs/ingest_status" },
+        "quarantine_reason": { "$ref": "common.schema.json#/$defs/quarantine_reason" },
+        "share_status": { "$ref": "common.schema.json#/$defs/share_status" },
+        "grant_id": { "$ref": "common.schema.json#/$defs/grant_id" }
+      }
+    }
+  },
+  "allOf": [
+    { "if": { "properties": { "type": { "const": "upload.quarantined" } } }, "then": { "properties": { "data": { "required": ["asset_id", "quarantine_reason"] } } } },
+    { "if": { "properties": { "type": { "const": "upload.registered" } } }, "then": { "properties": { "data": { "required": ["asset_id", "upload_id"] } } } },
+    { "if": { "properties": { "type": { "const": "grant.revoked" } } }, "then": { "properties": { "data": { "required": ["grant_id"] } } } }
+  ]
+}
