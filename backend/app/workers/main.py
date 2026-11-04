@@ -91,6 +91,30 @@ for _step in ("media_probe", "make_proxy", "make_thumbnail"):  # 05번
 register("sensor_parse", _pipeline_step("sensor_parse"))  # 07번 (실패해도 원본 자산 상태는 그대로)
 
 
+def _deidentify(c: Container, job: Job) -> Any:
+    from app.services import deid
+
+    result = deid.deidentify(c, job.payload["asset_id"], job.job_id, job.payload)
+    if result == "FAILED":
+        raise RetryableError("DEID_FAILED")
+    return result
+
+
+register("deidentify", _deidentify)  # 14번 (공유 심사 PROCESSING 원본만, 13번이 등록)
+
+
+def _tag_scenes(c: Container, job: Job) -> Any:
+    from app.services import pipeline, tagging
+
+    result = tagging.tag_scenes(c, job.payload["asset_id"])
+    if result == "OK":
+        pipeline.next_step(c, job.payload, job.organization_id)
+    return result
+
+
+register("tag_scenes", _tag_scenes)  # 14번 (PROCESSING_STEPS에 TAG가 있을 때 영상 처리 뒤)
+
+
 def run_once(c: Container, worker_id: str) -> bool:
     classes = tuple(c.settings.worker_resource_classes)
     job = c.queue.claim(list(HANDLERS), worker_id, classes)

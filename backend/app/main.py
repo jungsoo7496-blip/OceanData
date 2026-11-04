@@ -12,6 +12,7 @@ from app.api import (
     catalog,
     context,
     datasets,
+    deid,
     lifecycle,
     monitoring,
     observations,
@@ -50,6 +51,7 @@ def create_app(c: Container | None = None) -> FastAPI:
     app.include_router(reports.router)
     app.include_router(sharing.router)
     app.include_router(datasets.router)
+    app.include_router(deid.router)
     return app
 
 

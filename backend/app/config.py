@@ -87,6 +87,17 @@ class Settings(BaseSettings):
     clock_offset_warn_ms: int = 2000
     sensor_file_max_bytes: int = 512 * 1024 * 1024
 
+    # 비식별·태깅 (14번). 탐지기: synthetic(합성 시험용 모의) 또는 onnx:<모델>@<버전> (Model_Registry 등록 후)
+    deid_detector: str = "synthetic"
+    deid_classes: CsvList = Field(default_factory=lambda: ["FACE", "LICENSE_PLATE", "VESSEL_ID_TEXT", "SCREEN_TEXT"])
+    deid_method: str = "BLUR"  # BLUR / MOSAIC / FILL
+    deid_tracking: bool = True
+    deid_track_gap_s: float = 1.0
+    deid_sample_fps: float = 2.0
+    tag_sample_fps: float = 1.0
+    embed_interval_s: float = 2.0
+    night_luma_threshold: float = 50.0
+
     # 공유·배포 (13번)
     access_decision_days: int = 14  # 이용 신청 응답 기한, 지나면 거부 (요구사항 8.3)
 
@@ -106,7 +117,7 @@ class Settings(BaseSettings):
     worker_metrics_port: int = 9101
     idempotency_retention_s: int = 86400
 
-    @field_validator("processing_steps", "report_formats", "external_sources", "idp_mfa_acr_values",
+    @field_validator("processing_steps", "report_formats", "external_sources", "idp_mfa_acr_values", "deid_classes",
                      "worker_resource_classes",
                      mode="before")
     @classmethod

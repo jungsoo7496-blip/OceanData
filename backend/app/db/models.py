@@ -984,3 +984,73 @@ class Distribution(Base):
     file_count: Mapped[int] = mapped_column(Integer)
     expires_at: Mapped[datetime] = mapped_column(TS)
     created_at: Mapped[datetime] = mapped_column(TS)
+
+
+# ---- 14 비식별·검수·태깅·장면 검색
+
+
+class ReviewSamplingPolicy(Base):
+    """위험도별 검수 표본 비율과 태깅·임베딩 주기 (14번 요구사항 4.1, 6.1, 7.1). 값은 초안 — 운영기관이 조정."""
+
+    __tablename__ = "review_sampling_policies"
+    risk_level: Mapped[str] = mapped_column(String(10), primary_key=True)  # LOW / MEDIUM / HIGH
+    sample_ratio: Mapped[float] = mapped_column(Float)
+    min_samples: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(TS)
+
+
+class DeidReview(Base):
+    """비식별 결과 검수 배정·결정 (14번 요구사항 4, 5)."""
+
+    __tablename__ = "deid_reviews"
+    review_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ID, index=True)
+    session_id: Mapped[str | None] = mapped_column(ID, index=True)
+    original_asset_id: Mapped[str] = mapped_column(ForeignKey("assets.asset_id"))
+    deid_asset_id: Mapped[str] = mapped_column(ForeignKey("assets.asset_id"), index=True)
+    reviewer_id: Mapped[str] = mapped_column(ID, index=True)
+    risk_level: Mapped[str] = mapped_column(String(10))
+    samples: Mapped[list[Any]] = mapped_column(JSONB)
+    recheck: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    status: Mapped[str] = mapped_column(String(16))  # ASSIGNED / PASSED / MISSED / REJECTED / SUPERSEDED
+    missed: Mapped[list[Any]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    manual_regions: Mapped[list[Any]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    note: Mapped[str | None] = mapped_column(Text)
+    decided_at: Mapped[datetime | None] = mapped_column(TS)
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
+class AssetTag(Base):
+    """샘플링 태그 (14번 요구사항 6). 사람이 고친 것은 source=HUMAN, 이력은 asset_tag_edits."""
+
+    __tablename__ = "asset_tags"
+    __table_args__ = (UniqueConstraint("asset_id", "tag", "t_offset", name="asset_tag"),)
+    tag_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    asset_id: Mapped[str] = mapped_column(ForeignKey("assets.asset_id"), index=True)
+    organization_id: Mapped[str] = mapped_column(ID)
+    tag: Mapped[str] = mapped_column(String(40))
+    t_offset: Mapped[float] = mapped_column(Float, server_default="-1")  # 자산 전체 태그는 -1
+    confidence: Mapped[float | None] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(10))  # MODEL / HUMAN
+    model_ref: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
+class AssetTagEdit(Base):
+    __tablename__ = "asset_tag_edits"
+    edit_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    asset_id: Mapped[str] = mapped_column(ForeignKey("assets.asset_id"), index=True)
+    action: Mapped[str] = mapped_column(String(10))  # ADD / REMOVE
+    tag: Mapped[str] = mapped_column(String(40))
+    edited_by: Mapped[str] = mapped_column(String(64))
+    edited_at: Mapped[datetime] = mapped_column(TS)
+
+
+class TagEventRule(Base):
+    """태그 → 실증 이벤트 규칙 정책 표 (14번 요구사항 6.4)."""
+
+    __tablename__ = "tag_event_rules"
+    tag: Mapped[str] = mapped_column(String(40), primary_key=True)
+    event_code: Mapped[str] = mapped_column(String(80))
+    min_confidence: Mapped[float] = mapped_column(Float)
+    enabled: Mapped[bool] = mapped_column(Boolean, server_default="true")

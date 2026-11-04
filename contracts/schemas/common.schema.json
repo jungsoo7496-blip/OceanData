@@ -111,6 +111,10 @@
       "type": "string",
       "pattern": "^isp_[0-9A-HJKMNP-TV-Z]{26}$"
     },
+    "review_id": {
+      "type": "string",
+      "pattern": "^rvw_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
     "sha256": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"

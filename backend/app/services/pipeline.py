@@ -35,7 +35,7 @@ from app.services.ingest import Quota, append_integrity, object_key, zone_for
 log = logging.getLogger(__name__)
 VIDEO_STEPS = ("media_probe", "make_proxy", "make_thumbnail")
 STEP_FOR_JOB = {"media_probe": "META", "make_proxy": "PROXY", "make_thumbnail": "THUMBNAIL",
-                "sensor_parse": "SENSOR_PARSE"}
+                "sensor_parse": "SENSOR_PARSE", "tag_scenes": "TAG"}
 JOB_FOR_STEP = {v: k for k, v in STEP_FOR_JOB.items()}
 
 
@@ -345,7 +345,8 @@ def schedule_after_register(c: Container, asset: Asset) -> None:
     if not asset.has_binary:
         return
     if asset.data_type == "VIDEO" and asset.variant in ("ORIGINAL", "CLIP"):
-        c.queue.enqueue("media_probe", {"asset_id": asset.asset_id, "chain": list(VIDEO_STEPS[1:])},
+        chain = [*VIDEO_STEPS[1:], *(["tag_scenes"] if "TAG" in c.settings.processing_steps else [])]  # 14번
+        c.queue.enqueue("media_probe", {"asset_id": asset.asset_id, "chain": chain},
                         organization_id=asset.organization_id, dedupe_key=f"media_probe:{asset.asset_id}")
     elif asset.data_type == "SENSOR" and asset.mime_type.split(";")[0] in SENSOR_MIME:
         c.queue.enqueue("sensor_parse", {"asset_id": asset.asset_id}, organization_id=asset.organization_id,

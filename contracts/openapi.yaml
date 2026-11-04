@@ -39,6 +39,8 @@ tags:
     description: 회차 기록 (실증일지)
   - name: reports
     description: 지표·보고서 (10번)
+  - name: deid
+    description: 비식별 검수·태그·장면 검색 (14번)
   - name: agents
     description: 에이전트 등록·하트비트
   - name: status
@@ -1519,7 +1521,7 @@ paths:
               minProperties: 3
               properties:
                 sensitivity_class: {$ref: './schemas/common.schema.json#/$defs/sensitivity_class'}
-                privacy_status: {const: NOT_APPLICABLE}
+                privacy_status: {enum: [NOT_APPLICABLE, ANONYMIZED_VERIFIED], description: 'ANONYMIZED_VERIFIED는 파생본·legal_basis_ref 필수 (14번 요구사항 5.3)'}
                 basis_ref: {type: string, minLength: 2, maxLength: 200, description: 점검 기록 참조}
                 reason: {type: string, minLength: 2, maxLength: 1000}
       responses:
@@ -1538,6 +1540,256 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/deid-reviews:
+    get:
+      tags: [deid]
+      operationId: listDeidReviews
+      summary: 비식별 검수 (검수자는 배정된 것만, 운영자는 전체)
+      x-freeze: G4
+      x-status: draft
+      parameters:
+        - name: status
+          in: query
+          schema: {enum: [ASSIGNED, PASSED, MISSED, REJECTED]}
+      responses:
+        '200':
+          description: 검수 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/DeidReview'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /v1/deid-reviews/{review_id}:
+    parameters:
+      - name: review_id
+        in: path
+        required: true
+        schema: {$ref: './schemas/common.schema.json#/$defs/review_id'}
+    get:
+      tags: [deid]
+      operationId: getDeidReview
+      summary: 검수 상세 (표본 시각·처리 이력)
+      x-freeze: G4
+      x-status: draft
+      responses:
+        '200':
+          description: 검수
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DeidReview'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/deid-reviews/{review_id}/frame:
+    parameters:
+      - name: review_id
+        in: path
+        required: true
+        schema: {$ref: './schemas/common.schema.json#/$defs/review_id'}
+    get:
+      tags: [deid]
+      operationId: getDeidReviewFrame
+      summary: 표본 프레임 (원본 대비). 원본 열람은 감사 기록
+      x-freeze: G4
+      x-status: draft
+      parameters:
+        - name: t
+          in: query
+          required: true
+          schema: {type: number, minimum: 0}
+        - name: which
+          in: query
+          schema: {enum: [ORIGINAL, DEID], default: DEID}
+      responses:
+        '200':
+          description: JPEG
+          content:
+            image/jpeg: {schema: {type: string, format: binary}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/deid-reviews/{review_id}/decision:
+    parameters:
+      - name: review_id
+        in: path
+        required: true
+        schema: {$ref: './schemas/common.schema.json#/$defs/review_id'}
+    post:
+      tags: [deid]
+      operationId: decideDeidReview
+      summary: 통과·미탐(같은 회차 재검수, 수동 가림 영역이면 다시 렌더링)·반려(재처리)
+      x-freeze: G4
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [result]
+              properties:
+                result: {enum: [PASS, MISSED, REJECT]}
+                missed:
+                  type: array
+                  maxItems: 500
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [cls, t]
+                    properties:
+                      cls: {enum: [FACE, LICENSE_PLATE, VESSEL_ID_TEXT, SCREEN_TEXT]}
+                      t: {type: number, minimum: 0}
+                manual_regions:
+                  type: array
+                  maxItems: 500
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [t0, t1, x, y, w, h]
+                    properties:
+                      t0: {type: number, minimum: 0}
+                      t1: {type: number, minimum: 0}
+                      x: {type: integer, minimum: 0}
+                      y: {type: integer, minimum: 0}
+                      w: {type: integer, minimum: 2}
+                      h: {type: integer, minimum: 2}
+                note: {type: string, maxLength: 2000}
+      responses:
+        '200':
+          description: 결정된 검수 (재검수로 표시한 검수 ID 포함)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/DeidReview'
+                  - type: object
+                    properties:
+                      recheck_review_ids: {type: array, items: {$ref: './schemas/common.schema.json#/$defs/review_id'}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/deid-quality:
+    get:
+      tags: [deid]
+      operationId: getDeidQuality
+      summary: 클래스별 미탐률·재처리 비율 (운영자 전체, ORG_ADMIN 자기 기관)
+      x-freeze: G4
+      x-status: draft
+      responses:
+        '200':
+          description: 품질 집계
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reviews, reprocess_ratio, classes]
+                properties:
+                  reviews: {type: integer, minimum: 0}
+                  reprocess_ratio: {type: number}
+                  classes:
+                    type: array
+                    items:
+                      type: object
+                      required: [class, detected, missed, miss_rate]
+                      properties:
+                        class: {type: string}
+                        detected: {type: integer}
+                        missed: {type: integer}
+                        miss_rate: {type: number}
+                  note: {type: string, description: '처리 이력 안내 (적정성 보증 아님)'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /v1/assets/{asset_id}/tags:
+    parameters:
+      - {$ref: '#/components/parameters/AssetId'}
+    get:
+      tags: [deid]
+      operationId: getAssetTags
+      summary: 샘플링 태그와 사람 수정 이력
+      x-freeze: G4
+      x-status: draft
+      responses:
+        '200':
+          description: 태그
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetTags'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [deid]
+      operationId: editAssetTags
+      summary: 태그 사람 수정 (이력 기록)
+      x-freeze: G4
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                add: {type: array, maxItems: 50, items: {type: string}}
+                remove: {type: array, maxItems: 50, items: {type: string}}
+      responses:
+        '200':
+          description: 태그
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AssetTags'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/scenes/search:
+    get:
+      tags: [deid]
+      operationId: searchScenes
+      summary: 문장으로 장면 찾기 (권한 범위 안의 자산). 기준선은 태그 어휘 임베딩
+      x-freeze: G4
+      x-status: draft
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 200}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+      responses:
+        '200':
+          description: 비슷한 장면과 시각
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [query_tags, model, items]
+                properties:
+                  query_tags: {type: array, items: {type: string}}
+                  model: {type: string}
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [asset_id, t_offset, score]
+                      properties:
+                        asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+                        t_offset: {type: number}
+                        score: {type: number}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
 
   /v1/observations:
     get:
@@ -3348,6 +3600,54 @@ components:
         created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
         completed_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
         completed_by: {type: [string, 'null']}
+
+    DeidReview:
+      type: object
+      required: [review_id, original_asset_id, deid_asset_id, reviewer_id, risk_level, samples, status, created_at]
+      properties:
+        review_id: {$ref: './schemas/common.schema.json#/$defs/review_id'}
+        organization_id: {$ref: './schemas/common.schema.json#/$defs/organization_id'}
+        session_id: {type: [string, 'null']}
+        original_asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+        deid_asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+        reviewer_id: {type: string}
+        risk_level: {enum: [LOW, MEDIUM, HIGH]}
+        samples: {type: array, items: {type: number}, description: 표본 시각(초)}
+        recheck: {type: boolean}
+        status: {enum: [ASSIGNED, PASSED, MISSED, REJECTED]}
+        missed: {type: array, items: {type: object}}
+        manual_regions: {type: array, items: {type: object}}
+        note: {type: [string, 'null']}
+        decided_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+        created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        processing: {type: object, description: '처리 이력 — 모델·파라미터·탐지 수·처리 시각 (적정성 보증 아님)'}
+
+    AssetTags:
+      type: object
+      required: [asset_id, tags, edits]
+      properties:
+        asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+        tags:
+          type: array
+          items:
+            type: object
+            required: [tag, source]
+            properties:
+              tag: {type: string}
+              t_offset: {type: [number, 'null']}
+              confidence: {type: [number, 'null']}
+              source: {enum: [MODEL, HUMAN]}
+              model_ref: {type: [string, 'null']}
+        edits:
+          type: array
+          items:
+            type: object
+            required: [action, tag, edited_by, edited_at]
+            properties:
+              action: {enum: [ADD, REMOVE]}
+              tag: {type: string}
+              edited_by: {type: string}
+              edited_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
 
     Incident:
       type: object

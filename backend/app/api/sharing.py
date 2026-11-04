@@ -169,7 +169,7 @@ def act_share_review(asset_id: str, body: ReviewAction, request: Request, db: Se
 class Classification(BaseModel):
     model_config = ConfigDict(extra="forbid")
     sensitivity_class: Literal["INTERNAL", "RESTRICTED", "SECURITY"] | None = None
-    privacy_status: Literal["NOT_APPLICABLE"] | None = None
+    privacy_status: Literal["NOT_APPLICABLE", "ANONYMIZED_VERIFIED"] | None = None
     basis_ref: str = Field(min_length=2, max_length=200)
     reason: str = Field(min_length=2, max_length=1000)
 
@@ -182,6 +182,13 @@ def classify_asset(asset_id: str, body: Classification, request: Request, db: Se
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "", "code": "minProperties",
                                                         "message": "sensitivity_class나 privacy_status가 필요합니다"}])
     a = load_scoped(db, c, request, Asset, asset_id, p)
+    if body.privacy_status == "ANONYMIZED_VERIFIED":  # 14번 요구사항 5.3: 운영자 승인 + legal_basis_ref
+        if not a.legal_basis_ref:
+            raise ProblemError("RULE_VIOLATION", detail="ANONYMIZED_VERIFIED에는 legal_basis_ref가 필요합니다",
+                               unmet_conditions=[{"condition": "legal_basis_ref 존재", "actual": None}])
+        if a.variant == "ORIGINAL":
+            raise ProblemError("RULE_VIOLATION", detail="처리 결과는 파생본에만 기록합니다",
+                               unmet_conditions=[{"condition": "variant ≠ ORIGINAL", "actual": a.variant}])
     before = {"sensitivity_class": a.sensitivity_class, "privacy_status": a.privacy_status}
     if body.sensitivity_class:
         a.sensitivity_class = body.sensitivity_class

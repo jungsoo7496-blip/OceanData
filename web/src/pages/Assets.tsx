@@ -6,6 +6,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, ApiError, post, type Asset, type Device, type Me, type Page, type Session } from '../lib/api'
 import { bytes, kst, QUARANTINE_LABEL, SCOPE_LABEL, STATUS_LABEL } from '../lib/format'
 import { explain } from '../lib/problems'
+import { SceneSearch } from './Review'
 import { ShareCard } from './Sharing'
 
 // 촬영시각 미상은 업로드 시각과 구분해 표시한다 (요구사항 6.3)
@@ -39,6 +40,8 @@ export function Assets({ me }: { me: Me }) {
       options={options} onChange={(v: string | undefined) => set(k, v)} />
   )
   return (
+    <Space direction="vertical" size="large" style={{ width: '100%' }}>
+    <SceneSearch />
     <Card title="자산">
       <Space wrap style={{ marginBottom: 16 }}>
         {sel('session_id', '회차', (sessions.data?.items ?? []).map((s) => ({ value: s.session_id, label: s.label })))}
@@ -66,6 +69,7 @@ export function Assets({ me }: { me: Me }) {
           { title: '역할', key: 'r', render: (_, a) => ROLE_LABEL[a.data_role] ?? a.data_role },
         ]} />
     </Card>
+    </Space>
   )
 }
 

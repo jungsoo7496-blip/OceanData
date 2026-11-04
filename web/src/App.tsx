@@ -11,6 +11,7 @@ import { Dashboard } from './pages/Dashboard'
 import { Devices } from './pages/Devices'
 import { Monitoring } from './pages/Monitoring'
 import { ReportDetail, Reports, SessionRecords } from './pages/Reports'
+import { ReviewQueue } from './pages/Review'
 import { Catalog, ProviderAccess, SharingConsole } from './pages/Sharing'
 import { OperatorConsole } from './pages/Operator'
 import { ProgramBoard } from './pages/Program'
@@ -24,6 +25,7 @@ export function homeFor(roles: string[]): string {
   if (roles.includes('PLATFORM_OPERATOR')) return '/operator'
   if (roles.includes('PROGRAM_VIEWER')) return '/program'
   if (roles.includes('CONSUMER')) return '/catalog'
+  if (roles.includes('REVIEWER')) return '/review'
   return '/forbidden'
 }
 
@@ -40,6 +42,7 @@ function menuFor(roles: string[]) {
     add('/devices', '장비')
   }
   if (roles.includes('CONSUMER')) add('/catalog', '데이터셋 카탈로그')
+  if (roles.includes('REVIEWER') || roles.includes('PLATFORM_OPERATOR')) add('/review', '비식별 검수')
   if (roles.includes('PROGRAM_VIEWER')) {
     add('/program', '관리기관 보드')
     add('/reports', '제출된 보고서')
@@ -104,6 +107,7 @@ function Shell({ me }: { me: Me }) {
           <Route path="/access" element={<ProviderAccess me={me} />} />
           <Route path="/sharing" element={<SharingConsole />} />
           <Route path="/catalog" element={<Catalog />} />
+          <Route path="/review" element={<ReviewQueue me={me} />} />
           <Route path="/reports/:reportId" element={<ReportDetail me={me} />} />
           <Route path="/sessions/:sessionId/records" element={<SessionRecords me={me} />} />
           <Route path="*" element={<Result status="403" title="접근할 수 없는 화면입니다" />} />

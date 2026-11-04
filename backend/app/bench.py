@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from app.config import Settings
+from app.domain.deid import Region, filter_graph
 from app.services.pipeline import _run, proxy_args, thumbnail_args, tool_version
 
 
@@ -55,6 +56,14 @@ def main(argv: list[str] | None = None) -> int:
             "PROXY_CPU": proxy_args(s, src, os.path.join(tmp, "p.mp4"), "libx264"),
             "THUMBNAIL": thumbnail_args(s, src, os.path.join(tmp, "t.jpg"), float(a.seconds)),
         }
+        # 14번 비식별 가림 렌더링 (탐지 시간 제외 — 탐지 모델 확정 후 모델별로 더한다). 화면 1/4 영역 3곳
+        w, h = (int(x) for x in a.size.split("x"))
+        regions = [Region("FACE", 0, float(a.seconds), w // 8 + i * w // 4, h // 4, w // 6, h // 4) for i in range(3)]
+        for method in ("BLUR", "MOSAIC"):
+            steps[f"DEID_{method}_CPU"] = [s.ffmpeg_path, "-hide_banner", "-loglevel", "error", "-y", "-i", src,
+                                           "-filter_complex", filter_graph(regions, method, w, h), "-map", "[out]",
+                                           "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                                           os.path.join(tmp, f"d{method}.mp4")]
         if s.gpu_enabled and s.proxy_hw_encoder:
             steps["PROXY_GPU"] = proxy_args(s, src, os.path.join(tmp, "pg.mp4"), s.proxy_hw_encoder)
         for name, args in steps.items():

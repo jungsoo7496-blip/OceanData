@@ -97,6 +97,10 @@ PERMISSIONS: dict[str, Rule] = {
     "grant:confirm_destruction": Rule(frozenset({"CONSUMER"})),
     "distribution:create": Rule(frozenset({"CONSUMER"})),
     "usage_history:read": Rule(PROVIDER),
+    # 14 비식별·검수·태깅
+    "deid_review:read": Rule(frozenset({"REVIEWER", "PLATFORM_OPERATOR"})),
+    "deid_review:decide": Rule(frozenset({"REVIEWER", "PLATFORM_OPERATOR"})),
+    "deid_quality:read": Rule(frozenset({"PLATFORM_OPERATOR", "ORG_ADMIN"})),
     # 11 수집 모니터링
     "ingest_status:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
     "incident:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
