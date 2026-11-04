@@ -91,6 +91,19 @@ HANDOFF.md, AGENTS.md, .kiro/steering/*.md를 읽고 각 스펙 tasks.md의 남�
 먼저 docs/ACCEPTANCE-STATUS.md의 NOT_IMPLEMENTED 항목부터. 계약(contracts/)부터 고친 다음 구현해.
 ```
 
+### GPT(Codex·ChatGPT)로 이어서 할 때
+- Codex는 저장소 루트의 `AGENTS.md`를 자동으로 읽는다. ChatGPT(웹)라면 저장소를 연결하거나 아래 파일을 직접 올린다.
+- 첫 지시 예시:
+
+```
+저장소 https://github.com/jungsoo7496-blip/OceanData 를 이어서 개발해줘.
+먼저 AGENTS.md, HANDOFF.md(특히 0장 '남은 일'), .kiro/steering/*.md, docs/ROADMAP.md를 읽어.
+규칙: 한 번에 스펙 하나, 계약(contracts/) 먼저 고치고 make contracts-check 통과 후 구현,
+domain.md 코드값은 바꾸지 말고 제안만, 확인 안 된 외부 사양은 지어내지 말고 '확인 필요'+모의 구현,
+완료 = 코드+시험+마이그레이션(down 포함)+계약·문서 갱신, 시험이 실패하면 성공이라고 하지 마.
+0장 1번(전체 시험 재실행: make test-integration, make test-acceptance, make agent-test)부터 하고 결과를 보고해.
+```
+
 Kiro를 쓸 경우: Specs 패널에서 03번을 열고 README의 "Kiro에 줄 지시 예시"를 따른다. 01·02번 design.md·tasks.md는 이미 있다.
 
 ## 4. 구조 요약
