@@ -15,7 +15,8 @@
 | 05 처리 파이프라인 | 핵심 완료 | 대용량 임시 디스크 정책, Model_Registry 등록 API(14번과), GPU 인코더 실측 |
 | 07 센서·이벤트 | 핵심 완료 | 겹침 자산 조회 API, MQTT 계정 보안 저장, 하위코드 등록 API |
 | 08 저장·보존 | 일부 완료 | 보존·법적 보류·삭제 증명·쿼터 알림·사용량·일일 대조 완료. 백업·복원 시험(PoC 후)·Hot/Warm·용량 예측·SSE·월간 리포트 남음 |
-| 09~17 | 시작 전 | 다음 추천: 09(화면) → 10(보고서) → 13(공유) |
+| 09 포털 | 핵심 화면 완료 | 온보딩 마법사, 회차 타임라인, 클립 내보내기, 운영 콘솔 편집, 접근성 CI |
+| 10~17 | 시작 전 | 다음 추천: 10(증빙·보고서) → 11(수집 모니터링) → 13(공유·데이터셋) |
 
 **시험:** 백엔드 120건 + 에이전트(Go) 8개 패키지 통과 (MQTT 시험은 MQTT_TEST_BROKER 필요) (`cd backend && pytest`) — 단위 52, 통합·계약 24, T01 수용 15.
 수집 시험은 moto S3 서버와 실제 SeaweedFS(`TEST_S3_ENDPOINT`) 양쪽에서 통과.
@@ -35,7 +36,7 @@ make test-integration         # 통합 시험 (make up의 PostgreSQL 사용)
 make test-acceptance          # T01 수용시험
 ```
 
-- API 문서: http://localhost:8000/docs · 웹: http://localhost:5173 · Keycloak: http://localhost:8080 (admin / .env의 KEYCLOAK_ADMIN_PASSWORD)
+- API 문서: http://localhost:8000/docs · 웹 포털: http://localhost:5173 (member-a/dev-password로 로그인) · 포털 E2E: `cd web && node e2e/portal.mjs` · Keycloak: http://localhost:8080 (admin / .env의 KEYCLOAK_ADMIN_PASSWORD)
 - 시험 계정: `admin-a`, `member-a`, `admin-b`, `member-b`, `viewer`, `operator`, `operator2`, `reviewer`, `consumer` / 비밀번호 `dev-password` (admin·operator는 첫 로그인 때 OTP 등록)
 - 개발 토큰: `deploy/compose/keycloak/README.md`
 - 회사·기관망에 SSL 검사 프록시가 있어 이미지 빌드 중 인증서 오류가 나면: 프록시 CA를 `deploy/certs/proxy-ca.crt`로 넣는다 (커밋 안 됨).

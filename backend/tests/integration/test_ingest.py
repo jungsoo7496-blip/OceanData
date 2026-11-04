@@ -321,3 +321,21 @@ def test_source_location_is_transformed_to_4326(ictx) -> None:
     assert a["source_location"]["crs"] == "EPSG:3857" and a["location_precision"] == "EXACT_RESTRICTED"
     with ictx.c.sessionmaker() as db:
         assert db.get(Asset, created["asset_id"]).ingest_context["location_transform"]["from_crs"] == "EPSG:3857"
+
+
+def test_download_url_rules(ictx) -> None:
+    h = ictx.as_user(102)
+    data = mp4_bytes(5 * MB, seed=11)
+    created = upload_all(ictx, manifest(data), data, h)
+    r = ictx.client.post(f"/v1/assets/{created['asset_id']}/download-url", headers=h)
+    assert r.status_code == 409  # 검증 전
+    drain(ictx)
+    r = ictx.client.post(f"/v1/assets/{created['asset_id']}/download-url", headers=h)
+    check(r, "POST", "/v1/assets/{asset_id}/download-url")
+    assert httpx.get(r.json()["url"]).content == data
+    assert "DOWNLOAD_URL_ISSUED" in ictx.audit_actions()
+    assert "X-Amz-Signature" not in str(ictx.audit_actions())
+    # 관리기관 열람자·운영자·다른 기관은 받지 못한다
+    for n, code in ((105, 403), (106, 403), (104, 404)):
+        assert ictx.client.post(f"/v1/assets/{created['asset_id']}/download-url",
+                                headers=ictx.as_user(n)).status_code == code, n

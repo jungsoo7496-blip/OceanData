@@ -188,3 +188,23 @@ def reprocess_asset(asset_id: str, body: ReprocessRequest, request: Request, db:
     c.audit.record("REPROCESS_REQUESTED", principal=p, organization_id=a.organization_id, target_type="Asset",
                    target_id=a.asset_id, reason=body.reason, source_ip=client_ip(request), details={"steps": order})
     return {"asset_id": a.asset_id, "job_ids": [job_id]}
+
+
+@router.post("/v1/assets/{asset_id}/download-url")
+def create_download_url(asset_id: str, request: Request, db: Session = Depends(get_db),
+                        c: Container = Depends(container), p: Principal = Depends(require("asset:download"))) -> dict:
+    """프록시 재생·원본 다운로드용 단기 URL (09번 요구사항 7.1, 7.3). 발급 사실은 감사 로그에 남긴다 (security.md)."""
+    from datetime import timedelta
+
+    a = load_scoped(db, c, request, Asset, asset_id, p)
+    if a.organization_id != p.organization_id:  # 바이너리는 자기 기관만 (domain.md 2장)
+        raise ProblemError("FORBIDDEN", detail="다른 기관 자산의 바이너리는 받을 수 없습니다")
+    if not a.has_binary or not a.storage_key or a.ingest_status in ("UPLOADING", "RECEIVED", "VALIDATING"):
+        raise ProblemError("CONFLICT", detail="아직 내려받을 수 있는 바이너리가 없습니다")
+    if a.ingest_status == "QUARANTINED":
+        raise ProblemError("CONFLICT", detail="격리된 자산은 내려받을 수 없습니다")
+    ttl = c.settings.presign_download_ttl_s
+    url = c.storage.presign_get(c.settings.buckets[a.storage_zone or "RAW"], a.storage_key, ttl)
+    c.audit.record("DOWNLOAD_URL_ISSUED", principal=p, organization_id=a.organization_id, target_type="Asset",
+                   target_id=a.asset_id, source_ip=client_ip(request), details={"variant": a.variant})
+    return {"asset_id": a.asset_id, "url": url, "expires_at": iso(c.clock.now() + timedelta(seconds=ttl))}

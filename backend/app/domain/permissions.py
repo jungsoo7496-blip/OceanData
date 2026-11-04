@@ -53,6 +53,7 @@ PERMISSIONS: dict[str, Rule] = {
     "asset:read": Rule(PROVIDER | {"PROGRAM_VIEWER", "PLATFORM_OPERATOR"}, scope="asset:read"),
     "asset:receipt": Rule(PROVIDER, scope="upload:write"),
     "asset:write": Rule(PROVIDER),
+    "asset:download": Rule(PROVIDER),  # 운영자 원본 열람은 긴급 열람(02번 요구사항 8)으로만, 관리기관 열람자는 불가
     "asset:reprocess": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),
     "webhook:manage": Rule(frozenset({"ORG_ADMIN"}), scope="webhook:manage"),
     # 08 저장·보존

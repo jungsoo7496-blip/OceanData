@@ -1230,6 +1230,35 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
 
+  /v1/assets/{asset_id}/download-url:
+    parameters:
+      - {$ref: '#/components/parameters/AssetId'}
+    post:
+      tags: [assets]
+      operationId: createDownloadUrl
+      summary: 자산 바이너리 단기 사전 서명 URL (자기 기관 ORG 역할만, 발급 감사)
+      description: |
+        09번 요구사항 7. 관리기관 열람자는 어떤 등급이든 받지 않는다 (domain.md 2장). 운영자 원본 열람은 긴급 열람 승인으로만 (02번, 미구현 → 403).
+        격리 자산은 내려받지 않는다. URL은 로그에 남기지 않는다.
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 사전 서명 URL
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [asset_id, url, expires_at]
+                properties:
+                  asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+                  url: {type: string, format: uri}
+                  expires_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
   /v1/assets/{asset_id}/legal-hold:
     parameters:
       - {$ref: '#/components/parameters/AssetId'}

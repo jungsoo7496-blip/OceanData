@@ -10,6 +10,6 @@ if "${COMPOSE[@]}" up -d --build --wait --wait-timeout "$TIMEOUT"; then
   exit 0
 fi
 echo "헬스체크를 통과하지 못한 서비스:" >&2
-"${COMPOSE[@]}" ps -a --format '{{.Service}} {{.State}} {{.Health}} {{.ExitCode}}' | \
-  awk '($2!="running" && !($1=="migrate" && $4=="0")) || ($3!="" && $3!="healthy") {print "  - " $1 " (" $2 " " $3 ")"}' >&2
+"${COMPOSE[@]}" ps -a --format '{{.Service}}|{{.State}}|{{.Health}}|{{.ExitCode}}' | \
+  awk -F'|' '($2!="running" && !($1=="migrate" && $4=="0")) || ($3!="" && $3!="healthy") {print "  - " $1 " (" $2 " " $3 ")"}' >&2
 exit 1
