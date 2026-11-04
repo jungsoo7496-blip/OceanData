@@ -155,15 +155,14 @@ def _observation_problems(doc: dict[str, Any]) -> list[Problem]:
 
 
 SCHEMA_FOR_CONTRACT = {"upload-manifest": "upload-manifest", "observation-batch": "observation-batch",
-                       "event": "event", "asset-metadata": "asset-metadata"}
+                       "event": "event", "asset-metadata": "asset-metadata", "agent-heartbeat": "agent-heartbeat"}
 
 
 def validate_document(contract: str, doc: Any) -> tuple[list[Problem], bool]:
     """(문제 목록, 스키마 버전 거부 여부). 스키마 버전을 먼저 확인한다 (요구사항 4.3)."""
     if not isinstance(doc, dict):
         return [Problem("", "schema.type", "문서는 JSON 객체여야 합니다")], False
-    if "schema_version" in schema_files()[SCHEMA_FOR_CONTRACT[contract]].get("properties", {}) or \
-            "schema_version" in doc:
+    if "schema_version" in doc:  # 없으면 스키마 검증이 필수 필드 누락(400)으로 보고한다
         check = check_schema_version(doc.get("schema_version"), supported_schema_versions())
         if not check.ok:
             return [Problem("/schema_version", "UNSUPPORTED_SCHEMA_VERSION", check.reason or "")], True

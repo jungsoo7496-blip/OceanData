@@ -403,6 +403,16 @@ class IngestService:
                                     for n in sorted(got)],
                 "pending_parts": self._part_urls(up, pending), "expires_at": iso(up.expires_at)}
 
+    def sweep_expired(self, limit: int = 100) -> int:
+        """만료된 업로드 세션 정리: 멀티파트 정리·예약 해제 (요구사항 3.3). 워커가 주기적으로 부른다."""
+        rows = self.db.execute(select(Upload).where(Upload.status == "UPLOADING",
+                                                    Upload.expires_at <= self.c.clock.now())
+                               .order_by(Upload.expires_at).limit(limit).with_for_update(skip_locked=True)) \
+            .scalars().all()
+        for up in rows:
+            self._release(up, "EXPIRED")
+        return len(rows)
+
     def abort(self, up: Upload) -> None:
         if up.status != "UPLOADING":
             raise ProblemError("CONFLICT", detail="진행 중인 업로드만 취소할 수 있습니다")

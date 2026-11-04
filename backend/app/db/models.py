@@ -413,3 +413,19 @@ class IntegrityLogEntry(Base):
     registered_at: Mapped[datetime] = mapped_column(TS)
     prev_hash: Mapped[str] = mapped_column(String(64))
     entry_hash: Mapped[str] = mapped_column(String(64))
+
+
+class AgentStatus(Base):
+    """수집기 최근 하트비트 (04번 요구사항 11.2). 이력·지연 경보는 11번."""
+
+    __tablename__ = "agent_status"
+    collector_device_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), index=True)
+    last_heartbeat_at: Mapped[datetime] = mapped_column(TS)
+    agent_version: Mapped[str] = mapped_column(String(64))
+    policy_version: Mapped[str] = mapped_column(String(64))
+    last_success_at: Mapped[datetime | None] = mapped_column(TS)
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
+    queue_items: Mapped[int] = mapped_column(Integer)
+    queue_bytes: Mapped[int] = mapped_column(BigInteger)
+    heartbeat: Mapped[dict[str, Any]] = mapped_column(JSONB)

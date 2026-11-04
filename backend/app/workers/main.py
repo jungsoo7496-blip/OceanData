@@ -41,6 +41,17 @@ HANDLERS: dict[str, Handler] = {
 }
 
 
+def sweep(c: Container) -> int:
+    """주기 정리 작업 (만료 업로드 세션). 여러 워커가 돌아도 SKIP LOCKED로 겹치지 않는다."""
+    from app.services.ingest import IngestService
+
+    with c.sessionmaker.begin() as db:
+        n = IngestService(c, db).sweep_expired()
+    if n:
+        log.info("expired_uploads_swept", extra={"count": n})
+    return n
+
+
 def run_once(c: Container, worker_id: str) -> bool:
     job = c.queue.claim(list(HANDLERS), worker_id)
     if job is None:
@@ -78,8 +89,14 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
     log.info("worker_started", extra={"worker_id": worker_id, "job_types": sorted(HANDLERS)})
-    last_depth = 0.0
+    last_depth = last_sweep = 0.0
     while not stopping["flag"]:
+        if time.monotonic() - last_sweep > 300:
+            try:
+                sweep(c)
+            except Exception as exc:  # noqa: BLE001 - 정리 실패가 작업 처리를 막지 않게
+                log.error("sweep_failed", exc_info=exc)
+            last_sweep = time.monotonic()
         if time.monotonic() - last_depth > 10:
             for jt, n in c.queue.depth_by_type().items():
                 JOBS_QUEUED.labels(jt).set(n)

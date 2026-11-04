@@ -261,6 +261,15 @@ def test_quota_abort_and_expiry(ictx) -> None:
     r = ictx.client.get(f"/v1/uploads/{again['upload_id']}/parts", headers=h)
     assert r.status_code == 410 and r.json()["code"] == "GONE"
     assert quota(ictx).reserved_bytes == 5 * MB
+    # 클라이언트가 다시 오지 않아도 워커 주기 정리가 만료 세션을 정리한다
+    from app.workers.main import sweep
+
+    first = ictx.client.get("/v1/assets", headers=h).json()["items"]
+    with ictx.c.engine.begin() as conn:
+        conn.execute(text("UPDATE uploads SET expires_at = now() - interval '1 minute' WHERE status = 'UPLOADING'"))
+    assert sweep(ictx.c) == 1
+    assert quota(ictx).reserved_bytes == 0
+    assert len(ictx.client.get("/v1/assets", headers=h).json()["items"]) == len(first) - 1
 
 
 def test_device_principal_scope_and_cross_org(ictx) -> None:
