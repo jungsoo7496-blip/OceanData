@@ -28,7 +28,7 @@ import (
 const (
 	collector = "dev_00000000000000000000000301"
 	camera    = "dev_00000000000000000000000302"
-	sensor    = "dev_00000000000000000000000303"
+	sensorDev = "dev_00000000000000000000000303"
 )
 
 type fakeUpload struct {
@@ -59,11 +59,11 @@ func newFake(t *testing.T) *fakeServer {
 	f.policy = api.Policy{PolicyVersion: "pv-1", CollectorDeviceID: collector, Timezone: "Asia/Seoul",
 		HeartbeatIntervalS: 60, SizeStableS: 1, MaxParallelParts: 2,
 		Sources: []api.Source{{DeviceID: camera, CollectionMode: "C3_APPROVED_FULL", AllowedDataRoles: []string{"CORE"}},
-			{DeviceID: sensor, CollectionMode: "C3_APPROVED_FULL"}},
+			{DeviceID: sensorDev, CollectionMode: "C3_APPROVED_FULL"}},
 		WatchRules: []api.WatchRule{
 			{RuleID: "cam", SourceDeviceID: camera, PathPattern: "{session}/cam01/*", Include: []string{"*.mp4"},
 				DataType: "VIDEO", Variant: "ORIGINAL", DataRoleDefault: "CORE", Priority: 1},
-			{RuleID: "csv", SourceDeviceID: sensor, PathPattern: "{session}/sensor/*", Include: []string{"*.csv"},
+			{RuleID: "csv", SourceDeviceID: sensorDev, PathPattern: "{session}/sensor/*", Include: []string{"*.csv"},
 				DataType: "SENSOR", Variant: "ORIGINAL", DataRoleDefault: "CORE", Priority: 2}}}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.Close)
@@ -253,7 +253,7 @@ func TestT02FolderToServerWithoutHumanIntervention(t *testing.T) {
 		t.Fatalf("업로드가 끝나지 않았다: %+v", u)
 	}
 	m := u.manifest
-	if m["session_label"] != "A-2026-11-01" || m["watch_rule_id"] != "csv" || m["source_system_id"] != sensor {
+	if m["session_label"] != "A-2026-11-01" || m["watch_rule_id"] != "csv" || m["source_system_id"] != sensorDev {
 		t.Fatalf("매니페스트 %v", m)
 	}
 	if _, ok := m["capture_start_at"]; ok {

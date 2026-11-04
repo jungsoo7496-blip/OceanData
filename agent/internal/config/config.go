@@ -10,6 +10,7 @@ import (
 	"runtime"
 
 	"github.com/jungsoo7496-blip/oceandata/agent/internal/api"
+	"github.com/jungsoo7496-blip/oceandata/agent/internal/sensor"
 )
 
 type Config struct {
@@ -25,6 +26,8 @@ type Config struct {
 	LogKeep        int    `json:"log_keep"`
 	// UpdatePublicKey는 수동·자동 업데이트 서명 검증용 Ed25519 공개키(base64)다.
 	UpdatePublicKey string `json:"update_public_key,omitempty"`
+	// SensorPlugins는 MQTT 등 Sensor_Plugin 설정이다 (07번). 비어 있으면 쓰지 않는다.
+	SensorPlugins []sensor.Config `json:"sensor_plugins,omitempty"`
 }
 
 func (c *Config) Defaults() {

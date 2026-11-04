@@ -76,6 +76,11 @@ func (s *Store) migrate() error {
 	);
 	CREATE INDEX IF NOT EXISTS ix_files_queue ON files(status, priority, discovered_at);
 	CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+	-- Sensor_Plugin 관측값 대기열 (07번 요구사항 6.2: 오프라인이면 쌓아 두고 시간순으로 보낸다)
+	CREATE TABLE IF NOT EXISTS observations_queue (
+	  id INTEGER PRIMARY KEY AUTOINCREMENT, source_device_id TEXT NOT NULL, item TEXT NOT NULL, created_at INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS ix_obsq_source ON observations_queue(source_device_id, id);
 	`)
 	return err
 }
@@ -293,4 +298,75 @@ func (s *Store) KV(ctx context.Context, k string) (string, error) {
 		return "", fmt.Errorf("kv %s: %w", k, err)
 	}
 	return v, nil
+}
+
+// ---- 관측값 대기열
+
+type QueuedObservation struct {
+	ID   int64
+	Item string // JSON (observation-batch 항목)
+}
+
+func (s *Store) EnqueueObservation(ctx context.Context, sourceDeviceID, itemJSON string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO observations_queue (source_device_id, item, created_at) VALUES (?,?,?)`,
+		sourceDeviceID, itemJSON, now())
+	return err
+}
+
+// ObservationSources는 대기 관측값이 있는 원천 장비 목록이다.
+func (s *Store) ObservationSources(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT source_device_id FROM observations_queue ORDER BY 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// PeekObservations는 오래된 것부터 limit개를 돌려준다 (시간순 전송).
+func (s *Store) PeekObservations(ctx context.Context, sourceDeviceID string, limit int) ([]QueuedObservation, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, item FROM observations_queue WHERE source_device_id = ? ORDER BY id LIMIT ?`,
+		sourceDeviceID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []QueuedObservation
+	for rows.Next() {
+		var q QueuedObservation
+		if err := rows.Scan(&q.ID, &q.Item); err != nil {
+			return nil, err
+		}
+		out = append(out, q)
+	}
+	return out, rows.Err()
+}
+
+// DeleteObservations는 서버가 결과를 준 항목(ACCEPTED·DUPLICATE·REJECTED)을 지운다.
+func (s *Store) DeleteObservations(ctx context.Context, ids []int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM observations_queue WHERE id = ?`, id); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ObservationQueueSize(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM observations_queue`).Scan(&n)
+	return n, err
 }

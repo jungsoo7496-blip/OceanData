@@ -30,6 +30,7 @@ import (
 	"github.com/jungsoo7496-blip/oceandata/agent/internal/mediameta"
 	"github.com/jungsoo7496-blip/oceandata/agent/internal/rules"
 	"github.com/jungsoo7496-blip/oceandata/agent/internal/sched"
+	"github.com/jungsoo7496-blip/oceandata/agent/internal/sensor"
 	"github.com/jungsoo7496-blip/oceandata/agent/internal/state"
 	"github.com/jungsoo7496-blip/oceandata/agent/internal/sysinfo"
 )
@@ -64,6 +65,7 @@ type Agent struct {
 
 	mu         sync.Mutex
 	candidates map[string]candidate
+	plugins    sync.Map // 이름 → 상태(OK/DEGRADED/FAILED)
 }
 
 type candidate struct {
@@ -570,6 +572,7 @@ func (a *Agent) Heartbeat(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	obsQueued, _ := a.Store.ObservationQueueSize(ctx)
 	p := a.policy.Load()
 	pv := "unknown"
 	if p != nil {
@@ -584,8 +587,8 @@ func (a *Agent) Heartbeat(ctx context.Context) (map[string]any, error) {
 	hb := map[string]any{
 		"schema_version": SchemaVersion, "collector_device_id": a.Cfg.DeviceID, "agent_version": a.Version,
 		"policy_version": pv, "sent_at": a.Now().UTC().Format(time.RFC3339),
-		"queue":           map[string]any{"items": st.QueueItems, "bytes": st.QueueBytes},
-		"disk_free_bytes": free, "policy_excluded": st.Excluded, "plugins": []any{},
+		"queue":           map[string]any{"items": st.QueueItems, "bytes": st.QueueBytes, "observations": obsQueued},
+		"disk_free_bytes": free, "policy_excluded": st.Excluded, "plugins": a.pluginStatus(),
 	}
 	if v, _ := a.Store.KV(ctx, KeyLastSuccess); v != "" {
 		hb["last_success_at"] = v
@@ -606,6 +609,103 @@ func (a *Agent) Heartbeat(ctx context.Context) (map[string]any, error) {
 	_ = a.Store.SetKV(ctx, KeyLastHeartbeat, string(b)) // 연결이 없어도 로컬에 남긴다 (요구사항 9.2)
 	_, err = a.Client.Do(ctx, "POST", "/v1/agents/heartbeat", hb, nil, nil)
 	return hb, err
+}
+
+// ---------------------------------------------------------------- Sensor_Plugin (07번)
+
+func (a *Agent) pluginStatus() []any {
+	out := []any{}
+	a.plugins.Range(func(k, v any) bool {
+		out = append(out, map[string]any{"name": k, "version": "0.1.0", "status": v})
+		return true
+	})
+	return out
+}
+
+// startSensorPlugins는 설정된 MQTT 플러그인을 띄운다. 매핑 프로필은 서버에서 받는다.
+func (a *Agent) startSensorPlugins(ctx context.Context, wg *sync.WaitGroup) {
+	for _, pc := range a.Cfg.SensorPlugins {
+		pc := pc
+		name := "mqtt:" + pc.SourceDeviceID
+		a.plugins.Store(name, "DEGRADED")
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var rec struct { // contracts: ObservationMappingRecord
+				Version int            `json:"version"`
+				Mapping sensor.Mapping `json:"mapping"`
+			}
+			for attempt := 0; ; attempt++ {
+				_, err := a.Client.Do(ctx, "GET", "/v1/devices/"+pc.SourceDeviceID+"/observation-mapping", nil, nil, &rec)
+				if err == nil {
+					break
+				}
+				a.Log.Warn("MQTT 매핑 프로필을 받을 수 없습니다", "source", pc.SourceDeviceID, "error", err.Error())
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(sched.Backoff(attempt, 5*time.Minute)):
+				}
+			}
+			plug := &sensor.MQTTPlugin{Cfg: pc, Mapping: rec.Mapping, Log: a.Log}
+			a.plugins.Store(name, "OK")
+			err := plug.Run(ctx, func(item map[string]any) {
+				b, _ := json.Marshal(item)
+				if err := a.Store.EnqueueObservation(ctx, pc.SourceDeviceID, string(b)); err != nil {
+					a.Log.Error("관측값을 대기열에 넣지 못했습니다", "error", err.Error())
+				}
+			})
+			if err != nil {
+				a.plugins.Store(name, "FAILED")
+				a.Log.Error("MQTT 플러그인 종료", "error", err.Error())
+			}
+		}()
+	}
+}
+
+// SendObservations는 대기 관측값을 원천 장비별로 시간순 배치 전송한다 (요구사항 6.1, 6.2).
+func (a *Agent) SendObservations(ctx context.Context) (int, error) {
+	sources, err := a.Store.ObservationSources(ctx)
+	if err != nil {
+		return 0, err
+	}
+	sent := 0
+	for _, src := range sources {
+		for {
+			batch, err := a.Store.PeekObservations(ctx, src, 1000)
+			if err != nil || len(batch) == 0 {
+				break
+			}
+			items := make([]json.RawMessage, len(batch))
+			ids := make([]int64, len(batch))
+			for i, q := range batch {
+				items[i], ids[i] = json.RawMessage(q.Item), q.ID
+			}
+			body := map[string]any{"schema_version": SchemaVersion, "source_system_id": src, "observations": items}
+			var res struct {
+				Accepted, Duplicates, Rejected int
+			}
+			_, err = a.Client.Do(ctx, "POST", "/v1/observations", body,
+				map[string]string{"Idempotency-Key": fmt.Sprintf("obs-%s-%d-%d", src, ids[0], ids[len(ids)-1])}, &res)
+			if err != nil {
+				var pr *api.Problem
+				if errors.As(err, &pr) && pr.Status == 400 {
+					// 형식 오류 배치를 계속 붙잡으면 뒤 관측값이 막힌다. 기록하고 버린다
+					a.Log.Error("서버가 관측값 배치 형식을 거부해 버립니다", "source", src, "count", len(ids))
+					a.setErr(ctx, "OBSERVATION_BATCH_REJECTED")
+				} else {
+					return sent, err // 오프라인 등: 대기열 유지
+				}
+			} else if res.Rejected > 0 {
+				a.Log.Warn("일부 관측값이 거부되었습니다", "source", src, "rejected", res.Rejected)
+			}
+			if err := a.Store.DeleteObservations(ctx, ids); err != nil {
+				return sent, err
+			}
+			sent += len(ids)
+		}
+	}
+	return sent, nil
 }
 
 // ---------------------------------------------------------------- 실행 루프
@@ -675,6 +775,24 @@ func (a *Agent) Run(ctx context.Context) error {
 		func() error { _, err := a.Heartbeat(ctx); return err }, nil)
 	loop("policy", func() time.Duration { return time.Duration(a.Cfg.PolicyRefreshS) * time.Second },
 		func() error { return a.RefreshPolicy(ctx) }, nil)
+	if len(a.Cfg.SensorPlugins) > 0 {
+		a.startSensorPlugins(ctx, &wg)
+		obsBackoff := 0
+		loop("observations", func() time.Duration {
+			if obsBackoff > 0 {
+				return sched.Backoff(obsBackoff, time.Duration(a.Cfg.MaxBackoffS)*time.Second)
+			}
+			return 5 * time.Second
+		}, func() error {
+			_, err := a.SendObservations(ctx)
+			if errors.Is(err, api.ErrOffline) {
+				obsBackoff++
+			} else {
+				obsBackoff = 0
+			}
+			return err
+		}, nil)
+	}
 	<-ctx.Done()
 	wg.Wait()
 	return nil

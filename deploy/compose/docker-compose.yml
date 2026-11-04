@@ -138,6 +138,14 @@ services:
       timeout: 3s
       retries: 20
 
+  # --- 센서 시험용 MQTT 브로커 (현장 브로커 대역, 개발·시험만): docker compose --profile sensor up mosquitto
+  #     센터 운영 환경에는 MQTT 포트를 열지 않는다 (07번 요구사항 6.3)
+  mosquitto:
+    profiles: [sensor]
+    image: eclipse-mosquitto:2.0.20
+    command: ["mosquitto", "-c", "/mosquitto-no-auth.conf"]
+    ports: ["1883:1883"]
+
   # --- 선택 서비스: docker compose --profile ops up
   prometheus:
     profiles: [ops]

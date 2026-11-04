@@ -19,6 +19,9 @@ def main(argv: list[str] | None = None) -> int:
     sp = sub.add_parser("set-policy", help="수집기 정책 등록 (device-policy.schema.json 검증, 새 버전으로 저장)")
     sp.add_argument("device_id")
     sp.add_argument("policy_file")
+    sm = sub.add_parser("set-mapping", help="관측값 매핑 프로필 새 버전 저장 (감사, 화면은 09번)")
+    sm.add_argument("device_id")
+    sm.add_argument("mapping_file")
     vi = sub.add_parser("verify-integrity", help="무결성 로그 체인·표본 객체 해시 검증 (05번 요구사항 5.3)")
     vi.add_argument("--sample", type=int, default=None)
     ec = sub.add_parser("enrollment-code", help="운영자 대리 등록 코드 발급 (감사 기록, 화면은 09번)")
@@ -44,6 +47,8 @@ def main(argv: list[str] | None = None) -> int:
         return _set_policy(c, args.device_id, args.policy_file)
     if args.cmd == "enrollment-code":
         return _enrollment_code(c, args.device_id)
+    if args.cmd == "set-mapping":
+        return _set_mapping(c, args.device_id, args.mapping_file)
     if args.cmd == "verify-integrity":
         from app.services.integrity import anchor_previous_days, verify_integrity
 
@@ -102,6 +107,39 @@ def _set_policy(c, device_id: str, policy_file: str) -> int:  # type: ignore[no-
                    target_type="Device", target_id=device_id, details={"version": ver,
                                                                        "policy_version": doc["policy_version"]})
     print(f"정책 저장: {device_id} v{ver} ({doc['policy_version']})")
+    return 0
+
+
+def _set_mapping(c, device_id: str, mapping_file: str) -> int:  # type: ignore[no-untyped-def]
+    import json
+    from pathlib import Path
+
+    from pydantic import ValidationError
+
+    from app.api.observations import MappingBody
+    from app.db.models import Device, ObservationMapping
+    from app.services.observations import current_mapping, next_mapping_version
+
+    try:
+        body = MappingBody.model_validate(json.loads(Path(mapping_file).read_text(encoding="utf-8")))
+    except ValidationError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    with c.sessionmaker.begin() as db:
+        dev = db.get(Device, device_id)
+        if dev is None:
+            print("장비가 없습니다", file=sys.stderr)
+            return 1
+        before = current_mapping(db, device_id)
+        m = ObservationMapping(device_id=device_id, version=next_mapping_version(db, device_id),
+                               organization_id=dev.organization_id, mapping=body.model_dump(exclude_none=True),
+                               created_by="cli", created_at=c.clock.now())
+        db.add(m)
+        ver, org = m.version, dev.organization_id
+    c.audit.record("OBSERVATION_MAPPING_CHANGED", actor_kind="SYSTEM", actor_id="cli", organization_id=org,
+                   target_type="Device", target_id=device_id,
+                   details={"before": before.mapping if before else None, "version": ver})
+    print(f"매핑 저장: {device_id} v{ver}")
     return 0
 
 

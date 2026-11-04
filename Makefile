@@ -8,7 +8,7 @@ TEST_DATABASE_URL ?= postgresql+pg8000://marine_owner:change-me-owner@127.0.0.1:
 
 .PHONY: venv up down logs migrate seed verify-audit sample-video test test-unit test-integration test-acceptance \
         lint typecheck security license-check secrets-check web-check contracts-check traceability \
-        traceability-write ci agent-build agent-test bench verify-integrity
+        traceability-write ci agent-build agent-test bench verify-integrity sample-observations
 
 venv:
 	cd backend && uv venv -q .venv && uv pip install -q -p .venv -e ".[dev]" -r ../tools/requirements.txt
@@ -80,6 +80,7 @@ ci: contracts-check traceability lint typecheck test-unit security license-check
 agent-build:
 	cd agent && go build -o bin/marine-agent ./cmd/marine-agent && GOOS=windows go build -o bin/marine-agent.exe ./cmd/marine-agent
 
+# MQTT 시험은 MQTT_TEST_BROKER가 있을 때만 (docker compose --profile sensor up mosquitto)
 agent-test:
 	cd agent && go vet ./... && go test -race ./...
 
@@ -88,3 +89,6 @@ bench:
 
 verify-integrity:
 	$(COMPOSE) run --rm migrate python -m app.cli verify-integrity
+
+sample-observations:
+	$(PYTHON) tools/sample_observations.py --device $${DEVICE:-dev_00000000000000000000000303} --out var/samples/obs

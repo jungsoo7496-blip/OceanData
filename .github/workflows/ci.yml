@@ -79,7 +79,11 @@ jobs:
   agent:
     runs-on: ubuntu-latest
     defaults: {run: {working-directory: agent}}
+    env: {MQTT_TEST_BROKER: "tcp://127.0.0.1:1883"}
     steps:
+      - name: 개발용 MQTT 브로커 (07번 MQTT 플러그인 시험)
+        working-directory: .
+        run: docker run -d -p 1883:1883 eclipse-mosquitto:2.0.20 mosquitto -c /mosquitto-no-auth.conf
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: {go-version: "1.26.10", cache-dependency-path: agent/go.sum}
