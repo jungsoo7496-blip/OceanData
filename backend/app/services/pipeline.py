@@ -345,10 +345,14 @@ def schedule_after_register(c: Container, asset: Asset) -> None:
     if not asset.has_binary:
         return
     if asset.data_type == "VIDEO" and asset.variant in ("ORIGINAL", "CLIP"):
-        chain = [*VIDEO_STEPS[1:], *(["tag_scenes"] if "TAG" in c.settings.processing_steps else [])]  # 14번
+        chain = [*VIDEO_STEPS[1:], *(["tag_scenes"] if "TAG" in c.settings.processing_steps else []),
+                 "env_join"]  # 14번 태깅, 12번 환경 결합 (메타 추출로 촬영시각·위치가 생긴 뒤)
         c.queue.enqueue("media_probe", {"asset_id": asset.asset_id, "chain": chain},
                         organization_id=asset.organization_id, dedupe_key=f"media_probe:{asset.asset_id}")
-    elif asset.data_type == "SENSOR" and asset.mime_type.split(";")[0] in SENSOR_MIME:
+    elif asset.capture_start_at and asset.location:  # 12번: 촬영 구간·위치가 있으면 환경 결합
+        c.queue.enqueue("env_join", {"asset_id": asset.asset_id}, organization_id=asset.organization_id,
+                        dedupe_key=f"env_join:{asset.asset_id}")
+    if asset.data_type == "SENSOR" and asset.mime_type.split(";")[0] in SENSOR_MIME:
         c.queue.enqueue("sensor_parse", {"asset_id": asset.asset_id}, organization_id=asset.organization_id,
                         dedupe_key=f"sensor_parse:{asset.asset_id}")
 

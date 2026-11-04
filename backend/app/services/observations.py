@@ -43,7 +43,7 @@ OBS = Table(
     Column("value", Float), Column("unit", String(32)), Column("original_value", Float),
     Column("original_unit", String(32)), Column("quality_flag", String(20)), Column("source_timestamp", String(64)),
     Column("clock_offset_ms", Integer), Column("source_asset_id", String(30)), Column("session_id", String(30)),
-    Column("received_at", DateTime(timezone=True)),
+    Column("received_at", DateTime(timezone=True)), Column("source_ref", String(200)),
 )
 KEY_COLS = ("organization_id", "source_system_id", "metric", "observed_at", "depth_m", "channel")
 
@@ -78,7 +78,7 @@ class BatchResult:
 
 def ingest_items(c: Container, db: Session, *, organization_id: str, device: Device, items: list[dict[str, Any]],
                  session_id: str | None, clock_offset_ms: int | None, source_asset_id: str | None = None,
-                 time_format: str | None = None) -> BatchResult:
+                 time_format: str | None = None, source_ref: str | None = None) -> BatchResult:
     """항목별로 정규화·검증해 저장한다. 같은 키·같은 값은 DUPLICATE, 다른 값은 VALUE_CONFLICT (덮어쓰지 않음)."""
     s = c.settings
     now = c.clock.now()
@@ -109,7 +109,7 @@ def ingest_items(c: Container, db: Session, *, organization_id: str, device: Dev
                      "unit": n.unit, "original_value": n.original_value, "original_unit": n.original_unit,
                      "quality_flag": n.quality_flag, "source_timestamp": n.source_timestamp,
                      "clock_offset_ms": clock_offset_ms, "source_asset_id": source_asset_id,
-                     "session_id": session_id, "received_at": now})
+                     "session_id": session_id, "received_at": now, "source_ref": source_ref})
     inserted: set[tuple[Any, ...]] = set()
     for start in range(0, len(rows), 1000):
         chunk = rows[start:start + 1000]

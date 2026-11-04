@@ -98,6 +98,10 @@ class Settings(BaseSettings):
     embed_interval_s: float = 2.0
     night_luma_threshold: float = 50.0
 
+    # 환경 정보 결합 (12번)
+    env_join_radius_km: float = 30.0
+    env_join_window_min: int = 30
+
     # 공유·배포 (13번)
     access_decision_days: int = 14  # 이용 신청 응답 기한, 지나면 거부 (요구사항 8.3)
 

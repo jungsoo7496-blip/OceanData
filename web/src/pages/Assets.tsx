@@ -1,6 +1,6 @@
 // 자산 탐색·상세·영상 뷰어 (09번 요구사항 6, 7).
 import { useQuery } from '@tanstack/react-query'
-import { Alert, Button, Card, Descriptions, Select, Space, Table, Tag, Typography } from 'antd'
+import { Alert, Button, Card, Descriptions, Input, Select, Space, Table, Tag, Typography } from 'antd'
 import { useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, ApiError, post, type Asset, type Device, type Me, type Page, type Session } from '../lib/api'
@@ -51,6 +51,8 @@ export function Assets({ me }: { me: Me }) {
         {sel('quality_status', '품질', ['PASSED', 'WARNING', 'FAILED', 'PENDING'].map((v) => ({ value: v, label: v })))}
         {sel('ingest_status', '상태', Object.entries(STATUS_LABEL).map(([value, label]) => ({ value, label })))}
         {sel('sharing_scope', '공유 등급', Object.entries(SCOPE_LABEL).map(([value, label]) => ({ value, label })))}
+        {sel('env_metric', '환경 항목', ['significant_wave_height', 'wind_speed', 'sea_water_temperature', 'visibility'].map((v) => ({ value: v, label: v })))}
+        {filters.env_metric && <Input style={{ width: 120 }} placeholder="최솟값" aria-label="환경 최솟값" defaultValue={filters.env_min} onPressEnter={(e) => set('env_min', (e.target as HTMLInputElement).value || undefined)} />}
       </Space>
       <Table rowKey="asset_id" loading={assets.isLoading} dataSource={assets.data?.items ?? []} pagination={{ pageSize: 50 }}
         columns={[
@@ -99,6 +101,7 @@ export function AssetDetail({ me }: { me: Me }) {
     }
   }
   const a = asset.data
+  const env = (a as (Asset & { env_context?: { observations?: { metric: string; value: number; unit: string; station_name: string; distance_km: number; time_diff_s: number; attribution: string }[] } }) | undefined)?.env_context
   if (!a) return <Card loading={asset.isLoading}>{asset.error ? '자산을 찾을 수 없습니다' : null}</Card>
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
@@ -127,6 +130,15 @@ export function AssetDetail({ me }: { me: Me }) {
           <Typography.Paragraph type="secondary">구간 클립 내보내기는 준비 중입니다 (09번 요구사항 7.2).</Typography.Paragraph>
         </Card>
       )}
+      {env?.observations?.length ? (
+        <Card title="촬영 당시 환경 (가장 가까운 공공 관측)">
+          <Table size="small" pagination={false} rowKey="metric" dataSource={env.observations}
+            columns={[{ title: '항목', dataIndex: 'metric' }, { title: '값', key: 'v', render: (_, o) => `${o.value} ${o.unit}` },
+              { title: '관측소', dataIndex: 'station_name' }, { title: '거리', dataIndex: 'distance_km', render: (d: number) => `${d} km` },
+              { title: '시각 차이', dataIndex: 'time_diff_s', render: (t: number) => `${Math.round(t / 60)}분` }]} />
+          <Typography.Text type="secondary">출처: {[...new Set(env.observations.map((o) => o.attribution))].join(' / ')}</Typography.Text>
+        </Card>
+      ) : null}
       {(isOrg || me.roles.includes('PLATFORM_OPERATOR')) && <ShareCard asset={a} me={me} />}
       <Card title="계보">
         <Table size="small" rowKey="asset_id" pagination={false}

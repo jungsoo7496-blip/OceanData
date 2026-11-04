@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import Float, column, exists, func, literal, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from app.api.deps import client_ip, container, get_db, load_scoped, page_params, require
@@ -17,6 +19,7 @@ from app.domain import states
 from app.domain.normalize import generalize_location
 from app.domain.principal import Principal
 from app.errors import ProblemError
+from app.services.external import public_env
 from app.services.ingest import EXT_KEYS, receipt
 from app.services.tenant import scoped_select
 from app.timefmt import iso
@@ -46,7 +49,9 @@ def asset_view(a: Asset, p: Principal) -> dict[str, Any]:
     optional = {"dataset_id": a.dataset_id, "location": location,
                 "location_precision": precision if location else None, "area_code": a.area_code,
                 "legal_basis_ref": a.legal_basis_ref, "quarantine_reason": a.quarantine_reason,
-                "review_result": a.review_result, "env_context": a.env_context, "tags": a.tags}
+                "review_result": a.review_result,
+                "env_context": a.env_context if p.organization_id == a.organization_id else public_env(a.env_context),
+                "tags": a.tags}
     if p.organization_id == a.organization_id and a.source_location:
         optional["source_location"] = a.source_location
     out.update({k: v for k, v in optional.items() if v is not None})
@@ -58,6 +63,7 @@ def asset_view(a: Asset, p: Principal) -> dict[str, Any]:
 def list_assets(request: Request, session_id: str | None = None, source_system_id: str | None = None,
                 data_type: str | None = None, ingest_status: str | None = None, quality_status: str | None = None,
                 sharing_scope: str | None = None, variant: str | None = None, share_status: str | None = None,
+                env_metric: str | None = None, env_min: float | None = None, env_max: float | None = None,
                 captured_from: datetime | None = None,
                 captured_to: datetime | None = None, db: Session = Depends(get_db),
                 p: Principal = Depends(require("asset:read")), page: dict = Depends(page_params)) -> dict:
@@ -68,6 +74,14 @@ def list_assets(request: Request, session_id: str | None = None, source_system_i
                      (Asset.variant, variant), (Asset.share_status, share_status)):
         if val is not None:
             stmt = stmt.where(col == val)
+    if env_metric is not None:  # 12번 요구사항 7.2: 환경 조건으로 거르기 (env_context 관측값)
+        o = func.jsonb_array_elements(Asset.env_context["observations"]).table_valued(
+            column("value", JSONB)).alias("o")
+        val = o.c.value["value"].astext.cast(Float)
+        conds = [o.c.value["metric"].astext == env_metric]
+        conds += [val >= env_min] if env_min is not None else []
+        conds += [val <= env_max] if env_max is not None else []
+        stmt = stmt.where(exists(select(literal(1)).select_from(o).where(*conds)))
     if captured_from is not None:
         stmt = stmt.where(Asset.capture_start_at >= captured_from)
     if captured_to is not None:

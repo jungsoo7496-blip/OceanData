@@ -1054,3 +1054,36 @@ class TagEventRule(Base):
     event_code: Mapped[str] = mapped_column(String(80))
     min_confidence: Mapped[float] = mapped_column(Float)
     enabled: Mapped[bool] = mapped_column(Boolean, server_default="true")
+
+
+# ---- 12 공공 Open API 수집
+
+
+class ExternalSource(Base):
+    """Source_Registry (12번 요구사항 1). 인증키는 참조(환경 변수 이름)만 저장하고 값은 비밀 저장소에."""
+
+    __tablename__ = "external_sources"
+    source_id: Mapped[str] = mapped_column(String(60), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    adapter_kind: Mapped[str] = mapped_column(String(30))  # MOCK (명세 확인된 어댑터만 추가)
+    spec_status: Mapped[str] = mapped_column(String(30))  # VERIFIED / NEEDS_CONFIRMATION
+    endpoint: Mapped[str | None] = mapped_column(String(400))
+    secret_ref: Mapped[str | None] = mapped_column(String(120))
+    interval_s: Mapped[int] = mapped_column(Integer)
+    max_window_s: Mapped[int] = mapped_column(Integer)
+    rate_limit_per_min: Mapped[int | None] = mapped_column(Integer)
+    supports_backfill: Mapped[bool] = mapped_column(Boolean)
+    stations: Mapped[list[Any]] = mapped_column(JSONB)
+    field_mapping: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    attribution: Mapped[str] = mapped_column(String(500))
+    redistribution_allowed: Mapped[bool] = mapped_column(Boolean)
+    options: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    enabled: Mapped[bool] = mapped_column(Boolean, server_default="true")
+    collected_until: Mapped[datetime | None] = mapped_column(TS)
+    last_run_at: Mapped[datetime | None] = mapped_column(TS)
+    last_success_at: Mapped[datetime | None] = mapped_column(TS)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, server_default="0")
+    last_error: Mapped[str | None] = mapped_column(String(500))
+    format_error_at: Mapped[datetime | None] = mapped_column(TS)
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)

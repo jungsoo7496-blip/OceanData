@@ -112,7 +112,34 @@ def _tag_scenes(c: Container, job: Job) -> Any:
     return result
 
 
-register("tag_scenes", _tag_scenes)  # 14번 (PROCESSING_STEPS에 TAG가 있을 때 영상 처리 뒤)
+register("tag_scenes", _tag_scenes)
+
+
+def _collect_source(c: Container, job: Job) -> Any:
+    from app.domain.normalize import parse_rfc3339
+    from app.services import external
+
+    out = external.collect(c, job.payload["source_id"], parse_rfc3339(job.payload["since"]),
+                           parse_rfc3339(job.payload["until"]))
+    return out["status"]
+
+
+def _env_join(c: Container, job: Job) -> Any:
+    from app.db.models import Asset
+    from app.services import external
+
+    with c.sessionmaker.begin() as db:
+        a = db.get(Asset, job.payload["asset_id"], with_for_update=True)
+        if a is None:
+            return "SKIPPED"
+        env = external.join_env(c, db, a)
+        if env is not None:
+            a.env_context = env
+    return "OK" if env is not None else "NO_MATCH"
+
+
+register("collect_source", _collect_source)  # 12번 (실패는 큐의 지수 백오프)
+register("env_join", _env_join)  # 12번  # 14번 (PROCESSING_STEPS에 TAG가 있을 때 영상 처리 뒤)
 
 
 def run_once(c: Container, worker_id: str) -> bool:
@@ -170,6 +197,11 @@ def maintenance(c: Container) -> None:
         {"executed": [x.certificate_id for x in retention.execute_expired(c, db, c.clock.now())]}
         if c.settings.retention_auto_execute else retention.dry_run(db, c.clock.now())))
     retention.run_daily(c, "quota_reconcile", lambda db: {"diffs": retention.reconcile(c, db)})
+    # 공공 Open API 주기 수집·보충 (12번 요구사항 2)
+    from app.services import external
+
+    with c.sessionmaker.begin() as db:
+        external.schedule(c, db)
     # 이용 신청 응답 기한·권한 만료 (13번 요구사항 8.3, 10.1)
     from app.services import datasets
 

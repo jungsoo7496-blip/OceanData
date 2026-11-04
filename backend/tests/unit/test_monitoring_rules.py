@@ -55,7 +55,7 @@ def test_validate_params() -> None:
 
 def test_every_rule_has_text_params_and_evaluator_or_pending_source() -> None:
     assert set(RULES) == set(PARAM_TYPES)
-    assert set(RULES) - set(EVALUATORS) == {"OPENAPI_FAILURE"}  # 12번에서 신호원 연결
+    assert set(RULES) == set(EVALUATORS)  # OPENAPI_FAILURE도 12번에서 신호원 연결
 
 
 def test_heartbeat_threshold() -> None:

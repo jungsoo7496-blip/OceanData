@@ -32,7 +32,7 @@ def test_watch_rules_api(ctx) -> None:
     r = ctx.client.get("/v1/watch-rules", headers=ctx.as_user(OP))
     check(r, "GET", "/v1/watch-rules")
     rules = {x["rule_code"]: x for x in r.json()["items"]}
-    assert len(rules) == 13 and rules["OPENAPI_FAILURE"]["data_source_ready"] is False
+    assert len(rules) == 13 and all(r["data_source_ready"] for r in rules.values())  # 12번에서 Open API 신호원 연결
     assert rules["HEARTBEAT_MISSING"]["params"] == {"factor": 3, "min_silence_s": 300}
     assert ctx.client.get("/v1/watch-rules", headers=ctx.as_user(101)).status_code == 403
     path = "/v1/watch-rules/HEARTBEAT_MISSING"

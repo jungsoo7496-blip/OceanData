@@ -33,6 +33,7 @@ export function Monitoring() {
   const status = useQuery({ queryKey: ['ingest-status'], queryFn: () => api<IngestStatus>('/v1/ingest-status'), refetchInterval: 60_000 })
   const rules = useQuery({ queryKey: ['watch-rules'], queryFn: () => api<{ items: WatchRule[] }>('/v1/watch-rules') })
   const insp = useQuery({ queryKey: ['inspections'], queryFn: () => api<Page<Inspection>>('/v1/inspections?limit=500') })
+  const sources = useQuery({ queryKey: ['external-sources'], queryFn: () => api<{ items: { source_id: string; name: string; adapter_kind: string; spec_status: string; enabled: boolean; collected_until: string | null; consecutive_failures: number; last_error: string | null; redistribution_allowed: boolean }[] }>('/v1/external-sources') })
   const [org, setOrg] = useState<string | undefined>()
   const [open, setOpen] = useState<Inspection | null>(null)
   const [results, setResults] = useState<Record<string, string>>({})
@@ -79,6 +80,18 @@ export function Monitoring() {
       </Card>
       <Card title={`열린 장애 ${items.length}건`}>
         <IncidentTable items={items} canEdit showOrg loading={status.isLoading} />
+      </Card>
+      <Card title="공공 Open API 수집 소스">
+        <Table rowKey="source_id" size="small" pagination={false} dataSource={sources.data?.items ?? []} locale={{ emptyText: '등록된 소스가 없습니다' }}
+          columns={[
+            { title: '소스', dataIndex: 'name' },
+            { title: '어댑터', key: 'a', render: (_, x) => <Space>{x.adapter_kind}{x.spec_status !== 'VERIFIED' && <Tag color="orange">명세 확인 필요</Tag>}</Space> },
+            { title: '수집 기준점', dataIndex: 'collected_until', render: kst },
+            { title: '연속 실패', dataIndex: 'consecutive_failures', render: (n: number) => (n ? <Tag color="red">{n}</Tag> : 0) },
+            { title: '재배포', dataIndex: 'redistribution_allowed', render: (b: boolean) => (b ? '허용' : '내부만') },
+            { title: '상태', dataIndex: 'enabled', render: (b: boolean) => (b ? <Tag color="green">수집 중</Tag> : <Tag>꺼짐</Tag>) },
+            { title: '최근 오류', dataIndex: 'last_error', render: (e: string | null) => e ?? '-' },
+          ]} />
       </Card>
       <Card title="감시 규칙" extra={<Typography.Text type="secondary">조정은 다중 인증 후 API(PATCH /v1/watch-rules)로</Typography.Text>}>
         <Table rowKey="rule_code" size="small" pagination={false} dataSource={rules.data?.items ?? []}

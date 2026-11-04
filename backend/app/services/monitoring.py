@@ -538,8 +538,22 @@ def _hardware_signal(ctx: EvalCtx, p: dict[str, Any]) -> Iterable[Violation]:
                                     "value": s.value, "unit": s.unit, "observed_at": iso(s.observed_at)})
 
 
-# 신호원이 없는 규칙(OPENAPI_FAILURE: 12번)은 여기에 없다 → data_source_ready=false로 보이고 평가하지 않는다
+def _openapi_failure(ctx: EvalCtx, p: dict[str, Any]) -> Iterable[Violation]:
+    """12번 Open API 수집: 연속 실패 또는 응답 형식 변경 (12번 요구사항 3.1)."""
+    from app.db.models import ExternalSource
+
+    limit = int(p.get("consecutive_failures", 3))
+    for s in ctx.db.execute(select(ExternalSource).where(ExternalSource.enabled)).scalars():
+        if s.format_error_at is not None or s.consecutive_failures >= limit:
+            why = ("응답 형식이 필드 매핑과 다릅니다 (원 응답 격리)" if s.format_error_at
+                   else f"연속 {s.consecutive_failures}회 실패")
+            yield Violation("OPENAPI_FAILURE", s.source_id, f"외부 소스 '{s.name}': {why}",
+                            detail={"source_id": s.source_id, "consecutive_failures": s.consecutive_failures,
+                                    "last_error": s.last_error})
+
+
 EVALUATORS: dict[str, Evaluator] = {
+    "OPENAPI_FAILURE": _openapi_failure,
     "HEARTBEAT_MISSING": _heartbeat_missing,
     "INGEST_LAG": _ingest_lag,
     "SESSION_NO_DATA": _session_no_data,

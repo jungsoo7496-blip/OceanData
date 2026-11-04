@@ -101,6 +101,9 @@ PERMISSIONS: dict[str, Rule] = {
     "deid_review:read": Rule(frozenset({"REVIEWER", "PLATFORM_OPERATOR"})),
     "deid_review:decide": Rule(frozenset({"REVIEWER", "PLATFORM_OPERATOR"})),
     "deid_quality:read": Rule(frozenset({"PLATFORM_OPERATOR", "ORG_ADMIN"})),
+    # 12 공공 Open API
+    "external_source:read": Rule(frozenset({"PLATFORM_OPERATOR"})),
+    "external_source:write": Rule(frozenset({"PLATFORM_OPERATOR"})),
     # 11 수집 모니터링
     "ingest_status:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
     "incident:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),

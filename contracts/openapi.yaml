@@ -1190,6 +1190,16 @@ paths:
         - name: quality_status
           in: query
           schema: {$ref: './schemas/common.schema.json#/$defs/quality_status'}
+        - name: env_metric
+          in: query
+          description: env_context 관측 항목으로 거르기 (env_min·env_max와 함께, 12번)
+          schema: {$ref: './schemas/common.schema.json#/$defs/metric_code'}
+        - name: env_min
+          in: query
+          schema: {type: number}
+        - name: env_max
+          in: query
+          schema: {type: number}
         - name: share_status
           in: query
           schema: {$ref: './schemas/common.schema.json#/$defs/share_status'}
@@ -1790,6 +1800,123 @@ paths:
                         score: {type: number}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /v1/external-sources:
+    get:
+      tags: [status]
+      operationId: listExternalSources
+      summary: 공공 Open API 수집 소스 (운영자). 명세 미확인 소스는 NEEDS_CONFIRMATION
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 소스 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/ExternalSource'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      tags: [status]
+      operationId: createExternalSource
+      summary: 소스 등록 (운영자). 명세가 확인된 어댑터가 없으면 MOCK으로만
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ExternalSourceCreate'}
+      responses:
+        '201':
+          description: 등록된 소스
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExternalSource'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/external-sources/{source_id}:
+    parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema: {type: string, pattern: '^[a-z][a-z0-9_-]{1,59}$'}
+    patch:
+      tags: [status]
+      operationId: updateExternalSource
+      summary: 소스 켜고 끄기·주기·한도 조정 (운영자)
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                enabled: {type: boolean}
+                interval_s: {type: integer, minimum: 60}
+                rate_limit_per_min: {type: [integer, 'null'], minimum: 1}
+                attribution: {type: string, minLength: 1, maxLength: 500}
+                redistribution_allowed: {type: boolean}
+      responses:
+        '200':
+          description: 갱신된 소스
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ExternalSource'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/external-sources/{source_id}/backfill:
+    parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema: {type: string, pattern: '^[a-z][a-z0-9_-]{1,59}$'}
+    post:
+      tags: [status]
+      operationId: backfillExternalSource
+      summary: 과거 구간 보충 수집 등록 (운영자, 과거 조회를 지원하는 소스만)
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [from, to]
+              properties:
+                from: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+                to: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+      responses:
+        '202':
+          description: 등록한 수집 작업 수
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [jobs]
+                properties:
+                  jobs: {type: integer, minimum: 0}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
 
   /v1/observations:
     get:
@@ -3648,6 +3775,70 @@ components:
               tag: {type: string}
               edited_by: {type: string}
               edited_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+
+    ExternalSourceCreate:
+      allOf: [{$ref: '#/components/schemas/ExternalSourceBody'}]
+      unevaluatedProperties: false
+
+    ExternalSourceBody:
+      type: object
+      required: [source_id, name, adapter_kind, interval_s, stations, field_mapping, attribution, redistribution_allowed]
+      properties:
+        source_id: {type: string, pattern: '^[a-z][a-z0-9_-]{1,59}$'}
+        name: {type: string, minLength: 1, maxLength: 200}
+        adapter_kind: {enum: [MOCK], description: 명세가 확인된 실제 어댑터가 생기면 값을 더한다}
+        endpoint: {type: [string, 'null'], maxLength: 400}
+        secret_ref: {type: [string, 'null'], maxLength: 120, description: 인증키가 든 비밀 저장소·환경 변수 이름 (값 아님)}
+        interval_s: {type: integer, minimum: 60}
+        max_window_s: {type: integer, minimum: 600, default: 86400}
+        rate_limit_per_min: {type: [integer, 'null'], minimum: 1}
+        supports_backfill: {type: boolean, default: true}
+        stations:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            type: object
+            additionalProperties: false
+            required: [code, name, lat, lon]
+            properties:
+              code: {type: string, maxLength: 60}
+              name: {type: string, maxLength: 120}
+              lat: {type: number, minimum: -90, maximum: 90}
+              lon: {type: number, minimum: -180, maximum: 180}
+        field_mapping:
+          type: object
+          additionalProperties: false
+          required: [station_path, time_path, metrics]
+          properties:
+            station_path: {type: string}
+            time_path: {type: string}
+            metrics:
+              type: object
+              description: '관측 항목 코드(03번) → {path, unit}'
+              additionalProperties:
+                type: object
+                additionalProperties: false
+                required: [path, unit]
+                properties:
+                  path: {type: string}
+                  unit: {type: string}
+        attribution: {type: string, minLength: 1, maxLength: 500, description: 화면·보고서 출처 표기 문구}
+        redistribution_allowed: {type: boolean, description: false면 L2 이상 공유 산출물·데이터셋·DCAT에 넣지 않는다}
+        options: {type: object}
+
+    ExternalSource:
+      allOf:
+        - $ref: '#/components/schemas/ExternalSourceBody'
+        - type: object
+          required: [spec_status, enabled, consecutive_failures]
+          properties:
+            spec_status: {enum: [VERIFIED, NEEDS_CONFIRMATION]}
+            enabled: {type: boolean}
+            collected_until: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+            last_success_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+            consecutive_failures: {type: integer, minimum: 0}
+            last_error: {type: [string, 'null']}
 
     Incident:
       type: object

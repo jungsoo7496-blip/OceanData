@@ -60,6 +60,14 @@ def variables(db: Session, rep: Report) -> dict[str, str]:
     prj = db.get(Project, rep.project_id)
     v = {"organization.name": org.name if org else "", "project.name": prj.name if prj else "",
          "period.from": kst(rep.period_from), "period.to": kst(rep.period_to), "report.title": rep.title}
+    from app.services.external import env_summary
+
+    q = select(Asset).where(Asset.organization_id == rep.organization_id, Asset.deleted_at.is_(None),
+                            Asset.env_context.is_not(None))
+    q = q.where(Asset.session_id == rep.session_id) if rep.session_id else q.where(
+        Asset.project_id == rep.project_id, Asset.capture_start_at >= rep.period_from,
+        Asset.capture_start_at < rep.period_to)
+    v.update(env_summary(list(db.execute(q).scalars())))
     if rep.session_id:
         s = db.get(TrialSession, rep.session_id)
         if s:
