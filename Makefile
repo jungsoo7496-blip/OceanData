@@ -8,7 +8,7 @@ TEST_DATABASE_URL ?= postgresql+pg8000://marine_owner:change-me-owner@127.0.0.1:
 
 .PHONY: venv up down logs migrate seed verify-audit sample-video test test-unit test-integration test-acceptance \
         lint typecheck security license-check secrets-check web-check contracts-check traceability \
-        traceability-write ci
+        traceability-write ci agent-build agent-test
 
 venv:
 	cd backend && uv venv -q .venv && uv pip install -q -p .venv -e ".[dev]" -r ../tools/requirements.txt
@@ -76,3 +76,9 @@ traceability-write:
 	$(PYTHON) tools/check_traceability.py --write
 
 ci: contracts-check traceability lint typecheck test-unit security license-check secrets-check
+
+agent-build:
+	cd agent && go build -o bin/marine-agent ./cmd/marine-agent && GOOS=windows go build -o bin/marine-agent.exe ./cmd/marine-agent
+
+agent-test:
+	cd agent && go vet ./... && go test -race ./...

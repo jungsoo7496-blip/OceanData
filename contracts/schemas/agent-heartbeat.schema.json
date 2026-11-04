@@ -25,6 +25,7 @@
       }
     },
     "last_error_code": { "type": ["string", "null"], "maxLength": 64 },
+    "policy_excluded": { "type": "integer", "minimum": 0, "description": "정책이 바뀌어 보내지 않기로 표시한 대기 파일 수 (06번 요구사항 2.4)" },
     "disk_free_bytes": { "type": "integer", "minimum": 0 },
     "clock_offset_ms": { "type": ["integer", "null"] },
     "rotation": {

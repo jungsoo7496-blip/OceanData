@@ -16,6 +16,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("init-buckets", help="존별 버킷 생성 (01번 요구사항 1.5)")
     sub.add_parser("seed", help="시험 데이터 생성 (01번 요구사항 6)")
     sub.add_parser("verify-audit", help="감사 로그 해시 체인 검증 (02번 요구사항 7.4)")
+    sp = sub.add_parser("set-policy", help="수집기 정책 등록 (device-policy.schema.json 검증, 새 버전으로 저장)")
+    sp.add_argument("device_id")
+    sp.add_argument("policy_file")
+    ec = sub.add_parser("enrollment-code", help="운영자 대리 등록 코드 발급 (감사 기록, 화면은 09번)")
+    ec.add_argument("device_id")
     args = parser.parse_args(argv)
 
     settings = get_settings()
@@ -33,6 +38,10 @@ def main(argv: list[str] | None = None) -> int:
             seed(db)
         print("시험 데이터 준비됨 (기관 5, 사용자 9, 사업 2, 장비 5, 회차 2)")
         return 0
+    if args.cmd == "set-policy":
+        return _set_policy(c, args.device_id, args.policy_file)
+    if args.cmd == "enrollment-code":
+        return _enrollment_code(c, args.device_id)
     if args.cmd == "verify-audit":
         report = c.audit.verify_chain()
         if report.ok:
@@ -42,6 +51,66 @@ def main(argv: list[str] | None = None) -> int:
               f"(앞의 {report.checked}행은 정상)", file=sys.stderr)
         return 1
     return 2
+
+
+def _set_policy(c, device_id: str, policy_file: str) -> int:  # type: ignore[no-untyped-def]
+    import json
+    from pathlib import Path
+
+    from sqlalchemy import func, select
+
+    from app.db.models import Device, DevicePolicy
+    from app.services.contracts import schema_problems
+
+    doc = json.loads(Path(policy_file).read_text(encoding="utf-8"))
+    problems = schema_problems("device-policy", doc)
+    if problems:
+        for p in problems:
+            print(f"{p.pointer}: {p.message}", file=sys.stderr)
+        return 1
+    with c.sessionmaker.begin() as db:
+        dev = db.get(Device, device_id)
+        if dev is None or dev.kind != "COLLECTOR" or doc["collector_device_id"] != device_id:
+            print("수집기 장비가 아니거나 collector_device_id가 다릅니다", file=sys.stderr)
+            return 1
+        for src in doc["sources"]:  # 정책의 원천 장비는 그 수집기에 매핑된 같은 기관 장비여야 한다
+            s_dev = db.get(Device, src["device_id"])
+            if s_dev is None or s_dev.organization_id != dev.organization_id or \
+                    (s_dev.collector_device_id != device_id and s_dev.device_id != device_id):
+                print(f"매핑되지 않은 원천 장비: {src['device_id']}", file=sys.stderr)
+                return 1
+        ver = (db.execute(select(func.max(DevicePolicy.version)).where(DevicePolicy.device_id == device_id))
+               .scalar() or 0) + 1
+        db.add(DevicePolicy(device_id=device_id, version=ver, organization_id=dev.organization_id, policy=doc,
+                            created_by="cli", created_at=c.clock.now()))
+    c.audit.record("POLICY_CHANGED", actor_kind="SYSTEM", actor_id="cli", organization_id=dev.organization_id,
+                   target_type="Device", target_id=device_id, details={"version": ver,
+                                                                       "policy_version": doc["policy_version"]})
+    print(f"정책 저장: {device_id} v{ver} ({doc['policy_version']})")
+    return 0
+
+
+def _enrollment_code(c, device_id: str) -> int:  # type: ignore[no-untyped-def]
+    import secrets
+    from datetime import timedelta
+
+    from app.db.models import Device, EnrollmentCode
+    from app.services.tokens import hash_secret
+
+    code = secrets.token_urlsafe(18)
+    now = c.clock.now()
+    with c.sessionmaker.begin() as db:
+        dev = db.get(Device, device_id)
+        if dev is None or dev.kind != "COLLECTOR":
+            print("수집기 장비가 아닙니다", file=sys.stderr)
+            return 1
+        db.add(EnrollmentCode(code_hash=hash_secret(code), device_id=device_id, organization_id=dev.organization_id,
+                              expires_at=now + timedelta(seconds=c.settings.enrollment_code_ttl_s),
+                              created_by="cli", created_at=now))
+    c.audit.record("ENROLLMENT_CODE_ISSUED", actor_kind="SYSTEM", actor_id="cli", organization_id=dev.organization_id,
+                   target_type="Device", target_id=device_id)
+    print(code)
+    return 0
 
 
 if __name__ == "__main__":
