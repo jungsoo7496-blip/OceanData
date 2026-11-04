@@ -22,6 +22,7 @@ from app.services import deid, pipeline, sharing
 from app.services.ingest import IntegrityVerifier
 from tests.acceptance.test_t08_t15_sharing import CARD, access, decide, share, to_l3
 from tests.conftest import user_token
+from tests.contract.openapi_contract import assert_matches_contract as check
 from tests.integration.test_catalog import _asset
 from tests.integration.test_ingest import manifest, upload_all
 from tests.integration.test_pipeline import synth_video
@@ -55,7 +56,7 @@ def org_c(ctx) -> dict[str, str]:
     return ids
 
 
-@pytest.mark.covers("T06-d")
+@pytest.mark.covers("T06-d", "T06-b")
 def test_t06d_three_providers_full_journey(ictx, tmp_path: Path) -> None:
     ctx = ictx
     ha, hm = ctx.as_user(ADMIN_A), ctx.as_user(MEMBER_A)
@@ -161,5 +162,21 @@ def test_t06d_three_providers_full_journey(ictx, tmp_path: Path) -> None:
             AssetLineage.child_asset_id == a_deid)).scalar_one()
         assert parent == a_orig and db.get(Asset, a_orig).checksum_sha256 == hashlib.sha256(video).hexdigest()
     assert sharing.ancestors  # 공유 판단도 같은 계보를 쓴다
+
+    # T06-b: 데이터셋 → 원본·모델 버전·검수자를 한 번에 (운영자 전체, 제공기관은 자기 항목만, 이용기관 불가)
+    lpath = f"/v1/datasets/{ds}/versions/{v['dataset_version_id']}/lineage"
+    r = ctx.client.get(lpath, headers=ctx.as_user(OP))
+    check(r, "GET", "/v1/datasets/{dataset_id}/versions/{dataset_version_id}/lineage")
+    lin = {i["asset_id"]: i for i in r.json()["items"]}
+    assert r.json()["hidden_item_count"] == 0 and r.json()["manifest_sha256"] == v["manifest_sha256"]
+    item = lin[a_deid]
+    assert item["source_asset_id"] == a_orig and item["chain"][-1]["asset_id"] == a_orig
+    assert item["processing"]["model"]["name"] and item["processing"]["model"]["version"]
+    assert "sha256" in item["processing"]["model"] and item["processing"]["processed_at"]  # 모의 탐지기는 가중치 파일 없음 → null
+    assert [(x["reviewer_id"], x["status"]) for x in item["reviews"]] == [(rv["reviewer_id"], "PASSED")]
+    assert lin[ids_b[1]]["source_asset_id"] == ids_b[0]
+    r = ctx.client.get(lpath, headers=ha)
+    assert [i["asset_id"] for i in r.json()["items"]] == [a_deid] and r.json()["hidden_item_count"] == 1
+    assert ctx.client.get(lpath, headers=ctx.as_user(CONSUMER)).status_code == 403
     hist = ctx.client.get("/v1/usage-history", headers=ha).json()["items"]
     assert {"REQUESTED", "GRANTED", "DOWNLOAD_ISSUED"} <= {h["kind"] for h in hist}

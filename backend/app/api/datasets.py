@@ -135,6 +135,18 @@ def create_version(dataset_id: str, body: VersionCreate, request: Request, db: S
     return JSONResponse(resp, status_code=status, headers={"Idempotent-Replayed": "true"} if replayed else None)
 
 
+@router.get("/v1/datasets/{dataset_id}/versions/{dataset_version_id}/lineage")
+def get_version_lineage(dataset_id: str, dataset_version_id: str, db: Session = Depends(get_db),
+                        p: Principal = Depends(require("dataset:lineage"))) -> dict:
+    """항목별 원본·처리 모델·검수자 (13번 요구사항 5.3, 14번 요구사항 3.1). 제공기관은 자기 항목만."""
+    ds = _load_dataset(db, p, dataset_id)
+    v = db.get(DatasetVersion, dataset_version_id)
+    org = None if _operator(p) else p.organization_id
+    if v is None or v.dataset_id != ds.dataset_id or (org is not None and org not in v.provider_organization_ids):
+        raise ProblemError("NOT_FOUND")
+    return datasets.version_lineage(db, v, org)
+
+
 @router.post("/v1/datasets/{dataset_id}/publish")
 def publish_dataset(dataset_id: str, request: Request, db: Session = Depends(get_db),
                     c: Container = Depends(container), p: Principal = Depends(require("dataset:write"))) -> dict:

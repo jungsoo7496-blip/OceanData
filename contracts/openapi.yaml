@@ -2872,6 +2872,29 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '422': {$ref: '#/components/responses/Unprocessable'}
 
+  /v1/datasets/{dataset_id}/versions/{dataset_version_id}/lineage:
+    parameters:
+      - {$ref: '#/components/parameters/DatasetId'}
+      - {$ref: '#/components/parameters/DatasetVersionId'}
+    get:
+      tags: [datasets]
+      operationId: getDatasetVersionLineage
+      summary: 데이터셋 버전 계보 — 항목별 원본·처리 모델 버전·검수자 (PLATFORM_OPERATOR, 제공기관은 자기 항목만)
+      description: |
+        13번 요구사항 5.3, 14번 요구사항 3.1 (T06-b). 이용기관은 볼 수 없다 (원본 ID·검수자는 내부 정보).
+        제공기관이 보면 다른 기관 항목은 hidden_item_count로 개수만 준다.
+      x-freeze: G5
+      x-status: draft
+      responses:
+        '200':
+          description: 계보
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DatasetVersionLineage'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
   /v1/datasets/{dataset_id}/publish:
     parameters:
       - {$ref: '#/components/parameters/DatasetId'}
@@ -3259,6 +3282,11 @@ components:
       in: path
       required: true
       schema: {$ref: './schemas/common.schema.json#/$defs/dataset_id'}
+    DatasetVersionId:
+      name: dataset_version_id
+      in: path
+      required: true
+      schema: {$ref: './schemas/common.schema.json#/$defs/dataset_version_id'}
     AccessRequestId:
       name: access_request_id
       in: path
@@ -4594,6 +4622,64 @@ components:
         active: {type: boolean}
         created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
         secret: {type: string, description: 등록 응답에서만 한 번 보인다}
+
+    DatasetVersionLineage:
+      type: object
+      required: [dataset_id, dataset_version_id, version, manifest_sha256, items, hidden_item_count]
+      properties:
+        dataset_id: {$ref: './schemas/common.schema.json#/$defs/dataset_id'}
+        dataset_version_id: {$ref: './schemas/common.schema.json#/$defs/dataset_version_id'}
+        version: {type: string}
+        manifest_sha256: {$ref: './schemas/common.schema.json#/$defs/sha256'}
+        hidden_item_count: {type: integer, minimum: 0, description: 볼 권한이 없는 다른 기관 항목 수}
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/DatasetLineageItem'}
+
+    DatasetLineageItem:
+      type: object
+      required: [asset_id, path, organization_id, source_asset_id, chain, processing, reviews]
+      properties:
+        asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+        path: {type: string}
+        organization_id: {$ref: './schemas/common.schema.json#/$defs/organization_id'}
+        source_asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+        chain:
+          type: array
+          description: 데이터셋 항목에서 원본까지 (가까운 상위부터)
+          items:
+            type: object
+            required: [asset_id, relation]
+            properties:
+              asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+              relation: {type: string}
+              variant: {type: string}
+        processing:
+          type: [object, 'null']
+          description: 비식별 처리 기록 (모델 이름·버전·sha256·라이선스, 파라미터, 처리 시각). 처리 기록이 없는 항목은 null
+          properties:
+            model:
+              type: object
+              properties:
+                name: {type: string}
+                version: {type: string}
+                sha256: {type: [string, 'null']}
+                license: {type: [string, 'null']}
+            params: {type: object}
+            processed_at: {type: [string, 'null'], format: date-time}
+        reviews:
+          type: array
+          description: 이 항목(비식별본)의 검수 배정·결정 (시간순)
+          items:
+            type: object
+            required: [review_id, reviewer_id, status]
+            properties:
+              review_id: {$ref: './schemas/common.schema.json#/$defs/review_id'}
+              reviewer_id: {type: string}
+              status: {type: string}
+              recheck: {type: boolean}
+              decided_at: {type: [string, 'null'], format: date-time}
+        review_result: {type: [string, 'null']}
 
     Dataset:
       type: object

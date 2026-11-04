@@ -89,6 +89,7 @@ PERMISSIONS: dict[str, Rule] = {
     "asset:classify": Rule(frozenset({"PLATFORM_OPERATOR"})),
     "dataset:write": Rule(frozenset({"PLATFORM_OPERATOR"})),
     "dataset:read": Rule(PROVIDER | {"PLATFORM_OPERATOR", "CONSUMER"}),
+    "dataset:lineage": Rule(PROVIDER | {"PLATFORM_OPERATOR"}),  # 원본 ID·검수자는 내부 정보 (이용기관 제외)
     "access_request:create": Rule(frozenset({"CONSUMER"})),
     "access_request:read": Rule(PROVIDER | {"PLATFORM_OPERATOR", "CONSUMER"}),
     "access_request:decide": Rule(frozenset({"ORG_ADMIN", "PLATFORM_OPERATOR"})),

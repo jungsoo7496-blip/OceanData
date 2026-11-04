@@ -22,9 +22,11 @@ from app.db.models import (
     AccessDecision,
     AccessRequest,
     Asset,
+    AssetLineage,
     Dataset,
     DatasetVersion,
     DatasetVersionItem,
+    DeidReview,
     Distribution,
     Grant,
     User,
@@ -64,6 +66,48 @@ def _root(db: Session, a: Asset) -> str:
 
     roots = [x.asset_id for x in ancestors(db, a.asset_id) if x.variant == "ORIGINAL"]
     return roots[0] if roots else a.asset_id
+
+
+def _chain(db: Session, asset_id: str) -> list[dict[str, Any]]:
+    """데이터셋 항목에서 원본까지 가까운 상위부터 (13번 요구사항 5.3)."""
+    out: list[dict[str, Any]] = []
+    cur, seen = asset_id, {asset_id}
+    while True:
+        e = db.execute(select(AssetLineage).where(AssetLineage.child_asset_id == cur)
+                       .order_by(AssetLineage.parent_asset_id).limit(1)).scalar_one_or_none()
+        if e is None or e.parent_asset_id in seen:
+            return out
+        parent = db.get(Asset, e.parent_asset_id)
+        out.append({"asset_id": e.parent_asset_id, "relation": e.relation,
+                    "variant": parent.variant if parent else "UNKNOWN"})
+        cur = e.parent_asset_id
+        seen.add(cur)
+
+
+def version_lineage(db: Session, v: DatasetVersion, organization_id: str | None) -> dict[str, Any]:
+    """데이터셋 버전 → 항목별 원본·처리 모델 버전·검수자 (T06-b). organization_id가 있으면 그 기관 항목만."""
+    manifest_items = {i["asset_id"]: i for i in v.manifest.get("items", [])}
+    rows = list(db.execute(select(DatasetVersionItem).where(
+        DatasetVersionItem.dataset_version_id == v.dataset_version_id).order_by(DatasetVersionItem.path)).scalars())
+    visible = [r for r in rows if organization_id is None or r.organization_id == organization_id]
+    items = []
+    for r in visible:
+        a = db.get(Asset, r.asset_id)
+        deid = ((a.provenance or {}) if a else {}).get("deid")
+        reviews = db.execute(select(DeidReview).where(DeidReview.deid_asset_id == r.asset_id)
+                             .order_by(DeidReview.created_at, DeidReview.review_id)).scalars()
+        items.append({
+            "asset_id": r.asset_id, "path": r.path, "organization_id": r.organization_id,
+            "source_asset_id": manifest_items.get(r.asset_id, {}).get("source_asset_id", r.asset_id),
+            "chain": _chain(db, r.asset_id),
+            "processing": {"model": deid.get("model") or {}, "params": deid.get("params") or {},
+                           "processed_at": deid.get("processed_at")} if deid else None,
+            "reviews": [{"review_id": x.review_id, "reviewer_id": x.reviewer_id, "status": x.status,
+                         "recheck": x.recheck, "decided_at": iso(x.decided_at) if x.decided_at else None}
+                        for x in reviews],
+            "review_result": a.review_result if a else None})
+    return {"dataset_id": v.dataset_id, "dataset_version_id": v.dataset_version_id, "version": v.version,
+            "manifest_sha256": v.manifest_sha256, "hidden_item_count": len(rows) - len(visible), "items": items}
 
 
 def _copy(c: Container, src_bucket: str, src_key: str, dst_bucket: str, dst_key: str) -> None:

@@ -15,6 +15,12 @@ interface Review {
 }
 interface DatasetT { dataset_id: string; title: string; published: boolean; versions: { dataset_version_id: string; version: string; scope: string; item_count: number; total_bytes: number; created_at: string }[]; data_card?: Record<string, unknown> }
 interface AccessReq { access_request_id: string; dataset_version_id: string; purpose: string; status: string; pending_provider_approvals: number; deadline_at: string; grant_id?: string; grant_status?: string; grant_expires_at?: string }
+interface LineageT {
+  dataset_version_id: string; version: string; manifest_sha256: string; hidden_item_count: number
+  items: { asset_id: string; path: string; organization_id: string; source_asset_id: string; chain: { asset_id: string; relation: string; variant: string }[]
+    processing: { model: { name?: string; version?: string; sha256?: string | null; license?: string | null }; processed_at: string | null } | null
+    reviews: { review_id: string; reviewer_id: string; status: string; recheck?: boolean; decided_at: string | null }[]; review_result: string | null }[]
+}
 interface GrantT { grant_id: string; dataset_version_id: string; status: string; expires_at: string; notice?: string; destruction_confirmed_at: string | null }
 
 const SHARE_LABEL: Record<string, string> = {
@@ -119,6 +125,7 @@ export function SharingConsole() {
     onSuccess: refresh, onError: fail,
   })
   const [legal, setLegal] = useState('')
+  const [lineageOf, setLineageOf] = useState<{ ds: string; vid: string } | null>(null)
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <Card title="공유 심사 대기 (원본 단위)">
@@ -141,7 +148,10 @@ export function SharingConsole() {
         <Table rowKey="dataset_id" size="small" dataSource={sets.data?.items ?? []}
           columns={[
             { title: '이름', dataIndex: 'title' },
-            { title: '버전', key: 'v', render: (_, d) => d.versions.map((v) => <Tag key={v.dataset_version_id}>{v.version} · {SCOPE_LABEL[v.scope]} · {v.item_count}개</Tag>) },
+            { title: '버전 (눌러서 계보)', key: 'v', render: (_, d) => d.versions.map((v) => (
+              <Button key={v.dataset_version_id} size="small" type="link" aria-label={`${v.version} 계보 보기`} onClick={() => setLineageOf({ ds: d.dataset_id, vid: v.dataset_version_id })}>
+                {v.version} · {SCOPE_LABEL[v.scope]} · {v.item_count}개
+              </Button>)) },
             { title: '게시', dataIndex: 'published', render: (p: boolean) => (p ? <Tag color="green">게시</Tag> : '-') },
             { title: '', key: 'a', render: (_, d) => (
               <Space>
@@ -164,6 +174,7 @@ export function SharingConsole() {
             ) },
           ]} />
       </Card>
+      <LineageModal target={lineageOf} onClose={() => setLineageOf(null)} />
       <Modal open={!!versionFor} width={720} title={`새 버전 — ${versionFor?.title ?? ''}`} onCancel={() => setVersionFor(null)} footer={null} destroyOnClose>
         <Form layout="vertical" onFinish={addVersion.mutate} initialValues={{ card: JSON.stringify({ title: versionFor?.title ?? '', rights_holders: [], review_owner: '', source_summary: { organization_count: 1, session_count: 0, period_start: '', period_end: '', sea_areas_generalized: [] }, contents: { file_count: 1, total_bytes: 0, formats: [] }, conditions: { missing_data_note: '', bias_note: '', limitations: '' }, privacy: { risk_note: '', processing_methods: [], review_method: '' }, lineage: { model_versions: [] }, usage: { allowed_purposes: ['AI_TRAINING'], redistribution_allowed: false, commercial_use_allowed: false, revocation_terms: '' }, delivery: { methods: ['DOWNLOAD_URL'] } }, null, 2) }}>
           <Form.Item name="version" label="버전 (예: 1.0.0)" rules={[{ required: true, pattern: /^\d+\.\d+\.\d+$/ }]}><Input /></Form.Item>
@@ -173,6 +184,31 @@ export function SharingConsole() {
         </Form>
       </Modal>
     </Space>
+  )
+}
+
+// 데이터셋 버전 계보 (T06-b): 항목 → 원본 사슬·비식별 모델 버전·검수자
+function LineageModal({ target, onClose }: { target: { ds: string; vid: string } | null; onClose: () => void }) {
+  const q = useQuery({
+    queryKey: ['lineage', target?.vid], enabled: !!target,
+    queryFn: () => api<LineageT>(`/v1/datasets/${target?.ds}/versions/${target?.vid}/lineage`),
+  })
+  return (
+    <Modal open={!!target} width={960} title={`계보 — ${q.data?.version ?? ''}`} onCancel={onClose} footer={null} destroyOnClose>
+      {q.error && <Alert type="error" showIcon message={q.error instanceof ApiError ? explain(q.error.code).cause : String(q.error)} />}
+      {!!q.data?.hidden_item_count && <Alert type="info" showIcon style={{ marginBottom: 8 }} message={`다른 기관 항목 ${q.data.hidden_item_count}개는 보이지 않습니다`} />}
+      <Table rowKey="asset_id" size="small" loading={q.isLoading} pagination={false} dataSource={q.data?.items ?? []}
+        columns={[
+          { title: '파일', dataIndex: 'path' },
+          { title: '원본', key: 'src', render: (_, i) => (
+            <span>{i.chain.map((c) => `${c.relation}←${c.variant}`).join(' · ') || '-'}<br /><Link to={`/assets/${i.source_asset_id}`}>{i.source_asset_id}</Link></span>) },
+          { title: '처리 모델', key: 'm', render: (_, i) => (i.processing
+            ? <span>{i.processing.model.name} {i.processing.model.version}<br /><Typography.Text type="secondary">{i.processing.model.sha256 ? i.processing.model.sha256.slice(0, 12) : 'sha256 없음(모의)'} · {kst(i.processing.processed_at)}</Typography.Text></span>
+            : '-') },
+          { title: '검수', key: 'r', render: (_, i) => i.reviews.map((r) => <Tag key={r.review_id}>{r.status} · {r.reviewer_id}{r.recheck ? ' · 재검수' : ''}</Tag>) },
+        ]} />
+      <Typography.Text type="secondary">매니페스트 sha256 {q.data?.manifest_sha256}</Typography.Text>
+    </Modal>
   )
 }
 
