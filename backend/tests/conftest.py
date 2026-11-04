@@ -179,6 +179,7 @@ def ictx(db_url: str, engine: Engine, s3_endpoint: dict[str, str]) -> Iterator[C
     settings = test_settings(
         db_url, s3_endpoint_url=s3_endpoint["url"], s3_access_key_id=s3_endpoint["key"],
         s3_secret_access_key=s3_endpoint["secret"], upload_part_size=5 * 1024 * 1024,
+        report_formats=["XLSX", "HWPX", "PDF"],
         **{f"bucket_{z}": f"t{suffix}-{z}" for z in ("raw", "proc", "evidence", "datasets", "quarantine")})
     storage = S3Storage(settings)
     for b in settings.buckets.values():

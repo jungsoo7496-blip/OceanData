@@ -11,7 +11,7 @@ export function ProgramBoard() {
   const assets = useQuery({ queryKey: ['assets', 'program'], queryFn: () => api<Page<Asset>>('/v1/assets?limit=200') })
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <Alert type="info" showIcon message="관리기관 보드는 배정된 실증사업의 L1(관리기관 검토) 자료 메타데이터만 보여줍니다. 제출된 지표·보고서는 10번 보고서 기능에서 제공합니다." />
+      <Alert type="info" showIcon message="관리기관 보드는 배정된 실증사업의 L1(관리기관 검토) 자료 메타데이터만 보여줍니다. 제출된 지표·보고서는 '제출된 보고서' 메뉴에서 봅니다." />
       <Card title="담당 실증사업">
         <Table rowKey="project_id" size="small" pagination={false} dataSource={projects.data?.items ?? []}
           columns={[{ title: '사업', dataIndex: 'name' }, {

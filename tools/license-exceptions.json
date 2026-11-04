@@ -14,6 +14,20 @@
       "reason": "SQLAlchemy의 의존성. 일부 파일이 PSF-2.0이다.",
       "adr": "docs/adr/0011-psf-license-exception.md",
       "approved": false
+    },
+    {
+      "package": "pillow",
+      "license": "MIT-CMU",
+      "reason": "WeasyPrint(보고서 PDF)의 필수 의존성. MIT-CMU는 HPND 계열 허용형 라이선스다.",
+      "adr": "docs/adr/0018-report-rendering.md",
+      "approved": false
+    },
+    {
+      "package": "pyphen",
+      "license": "GPL-2.0-or-later OR LGPL-2.1-or-later OR MPL-1.1",
+      "reason": "WeasyPrint(보고서 PDF)의 필수 의존성. 세 라이선스 중 MPL-1.1을 택하고 수정 없이 배포한다.",
+      "adr": "docs/adr/0018-report-rendering.md",
+      "approved": false
     }
   ]
 }

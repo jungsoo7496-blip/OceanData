@@ -306,6 +306,7 @@ class Asset(Base):
     legal_hold_reason: Mapped[str | None] = mapped_column(Text)
     deleted_at: Mapped[datetime | None] = mapped_column(TS, index=True)  # 08: 삭제 표시 (기록은 남긴다)
     deletion_certificate_id: Mapped[str | None] = mapped_column(ID)
+    last_reprocessed_at: Mapped[datetime | None] = mapped_column(TS)  # 10: 근거 손상 감지(재처리)
     created_at: Mapped[datetime] = mapped_column(TS)
     updated_at: Mapped[datetime] = mapped_column(TS)
 
@@ -720,3 +721,126 @@ class Inspection(Base):
     created_at: Mapped[datetime] = mapped_column(TS)
     completed_at: Mapped[datetime | None] = mapped_column(TS)
     completed_by: Mapped[str | None] = mapped_column(String(64))
+
+
+# ---- 10 실증 기록·증빙·보고서
+
+
+class SessionRecord(Base):
+    """회차 기록 (10번 요구사항 1). 내용은 버전 표에, 수정은 항상 새 버전."""
+
+    __tablename__ = "session_records"
+    record_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), index=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.project_id"))
+    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.session_id"), index=True)
+    latest_version: Mapped[int] = mapped_column(Integer)
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+    updated_at: Mapped[datetime] = mapped_column(TS)
+
+
+class SessionRecordVersion(Base):
+    __tablename__ = "session_record_versions"
+    record_id: Mapped[str] = mapped_column(ForeignKey("session_records.record_id"), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(10))
+    title: Mapped[str] = mapped_column(String(200))
+    test_item: Mapped[str | None] = mapped_column(String(200))
+    conditions: Mapped[str | None] = mapped_column(Text)
+    result: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    evidence_refs: Mapped[list[Any]] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(String(10))  # DRAFT / APPROVED
+    approved_by: Mapped[str | None] = mapped_column(String(64))
+    approved_at: Mapped[datetime | None] = mapped_column(TS)
+    evidence_damaged: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    damage: Mapped[list[Any]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
+class EvidenceCitation(Base):
+    """증빙·보고서 버전이 인용한 자산 역색인 (근거 손상 감지, 08번 삭제 영향)."""
+
+    __tablename__ = "evidence_citations"
+    __table_args__ = (UniqueConstraint("citing_type", "citing_id", "citing_version", "asset_id", name="citation"),)
+    citation_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    organization_id: Mapped[str] = mapped_column(ID)
+    citing_type: Mapped[str] = mapped_column(String(10))  # RECORD / REPORT
+    citing_id: Mapped[str] = mapped_column(ID)
+    citing_version: Mapped[int] = mapped_column(Integer)
+    asset_id: Mapped[str] = mapped_column(ForeignKey("assets.asset_id"), index=True)
+    cited_at: Mapped[datetime] = mapped_column(TS)
+    damage_reason: Mapped[str | None] = mapped_column(String(20))  # 감지되면 DELETED / QUARANTINED / REPROCESSED
+
+
+class MetricDefinition(Base):
+    """지표 정의 (10번 요구사항 3.1). 코드별 버전."""
+
+    __tablename__ = "metric_definitions"
+    code: Mapped[str] = mapped_column(String(60), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str | None] = mapped_column(Text)
+    unit: Mapped[str | None] = mapped_column(String(32))
+    kind: Mapped[str] = mapped_column(String(30))
+    params: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
+class ReportTemplate(Base):
+    """보고서 양식 (10번 요구사항 4.6). 실제 관리기관 양식은 확보 후 등록."""
+
+    __tablename__ = "report_templates"
+    code: Mapped[str] = mapped_column(String(60), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    scope: Mapped[str] = mapped_column(String(10))  # SESSION / PERIOD
+    sections: Mapped[list[Any]] = mapped_column(JSONB)
+    hwpx_key: Mapped[str | None] = mapped_column(String(400))
+    hwpx_sha256: Mapped[str | None] = mapped_column(String(64))
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
+class Report(Base):
+    __tablename__ = "reports"
+    report_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), index=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.project_id"), index=True)
+    session_id: Mapped[str | None] = mapped_column(ForeignKey("sessions.session_id"))
+    period_from: Mapped[datetime | None] = mapped_column(TS)
+    period_to: Mapped[datetime | None] = mapped_column(TS)
+    title: Mapped[str] = mapped_column(String(200))
+    template_code: Mapped[str] = mapped_column(String(60))
+    template_version: Mapped[int] = mapped_column(Integer)
+    latest_version: Mapped[int] = mapped_column(Integer)
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+
+
+class ReportVersion(Base):
+    """보고서 버전 (report_status는 domain.md 5장). 승인본은 EVIDENCE 존 스냅숏과 sha256으로 고정."""
+
+    __tablename__ = "report_versions"
+    report_id: Mapped[str] = mapped_column(ForeignKey("reports.report_id"), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    status: Mapped[str] = mapped_column(String(12))
+    generated_at: Mapped[datetime] = mapped_column(TS)
+    data_as_of: Mapped[datetime] = mapped_column(TS)
+    variables: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    fields: Mapped[list[Any]] = mapped_column(JSONB)
+    metrics: Mapped[list[Any]] = mapped_column(JSONB)
+    record_refs: Mapped[list[Any]] = mapped_column(JSONB)
+    evidence_damaged: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    damage: Mapped[list[Any]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    approved_by: Mapped[str | None] = mapped_column(String(64))
+    approved_at: Mapped[datetime | None] = mapped_column(TS)
+    snapshot_key: Mapped[str | None] = mapped_column(String(400))
+    snapshot_sha256: Mapped[str | None] = mapped_column(String(64))
+    submitted_by: Mapped[str | None] = mapped_column(String(64))
+    submitted_at: Mapped[datetime | None] = mapped_column(TS)
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)

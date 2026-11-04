@@ -1,0 +1,7 @@
+/* KWCAG 명도 대비 4.5:1 (09번 요구사항 11.2): AntD 기본 색 태그 글자를 진하게 */
+.ant-tag-green, .ant-tag-success { color: #135200; }
+.ant-tag-orange, .ant-tag-warning { color: #873800; }
+.ant-tag-blue, .ant-tag-processing { color: #003a8c; }
+.ant-tag-red, .ant-tag-error { color: #820014; }
+.ant-tag-purple { color: #22075e; }
+.ant-tag-default { color: rgba(0, 0, 0, 0.78); }

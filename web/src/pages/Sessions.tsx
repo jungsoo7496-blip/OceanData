@@ -2,6 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { App, Button, Card, DatePicker, Form, Input, Modal, Select, Space, Table, Typography } from 'antd'
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api, ApiError, patch, post, type Asset, type Me, type Page, type Session } from '../lib/api'
 import { kst } from '../lib/format'
 import { explain } from '../lib/problems'
@@ -48,6 +49,7 @@ export function Sessions({ me }: { me: Me }) {
             { title: '종료', dataIndex: 'ends_at', render: kst },
             { title: '장소', dataIndex: 'site' },
             { title: '장비 수', key: 'n', render: (_, s) => s.device_ids.length },
+            { title: '', key: 'rec', render: (_, s) => <Link to={`/sessions/${s.session_id}/records`}>기록</Link> },
           ]} />
         <Typography.Text type="secondary">폴더 이름을 회차 표시값과 같게 두면 에이전트가 회차를 자동으로 찾습니다.</Typography.Text>
       </Card>

@@ -70,6 +70,16 @@ PERMISSIONS: dict[str, Rule] = {
     "mapping:write": Rule(frozenset({"ORG_ADMIN", "PLATFORM_OPERATOR"})),
     "event:write": Rule(PROVIDER, scope="event:write"),
     "event:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
+    # 10 실증 기록·증빙·보고서
+    "record:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
+    "record:write": Rule(PROVIDER, scope="upload:write"),
+    "record:approve": Rule(frozenset({"ORG_ADMIN"})),
+    "report:read": Rule(PROVIDER | {"PROGRAM_VIEWER", "PLATFORM_OPERATOR"}, scope="status:read"),
+    "report:write": Rule(PROVIDER),
+    "report:approve": Rule(frozenset({"ORG_ADMIN"})),
+    "report:submit": Rule(frozenset({"ORG_ADMIN"})),
+    "metric_definition:write": Rule(frozenset({"PLATFORM_OPERATOR"})),
+    "report_template:write": Rule(frozenset({"PLATFORM_OPERATOR"})),
     # 11 수집 모니터링
     "ingest_status:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
     "incident:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),

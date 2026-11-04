@@ -11,7 +11,17 @@ from sqlalchemy import update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from app.db.models import Device, Organization, Project, ProjectAssignment, SessionDevice, TrialSession, User
+from app.db.models import (
+    Device,
+    MetricDefinition,
+    Organization,
+    Project,
+    ProjectAssignment,
+    ReportTemplate,
+    SessionDevice,
+    TrialSession,
+    User,
+)
 
 
 def fid(prefix: str, n: int) -> str:
@@ -105,3 +115,31 @@ def seed(db: Session) -> None:
     _upsert(db, SessionDevice, [{"session_id": SES_A, "device_id": DEV_A_CAMERA},
                                 {"session_id": SES_A, "device_id": DEV_A_SENSOR},
                                 {"session_id": SES_B, "device_id": DEV_B_CAMERA}], ["session_id", "device_id"])
+    # 10번 예시 지표·보고서 양식 (합성 예시 — 실제 실증지표·관리기관 양식은 확보 후 운영자가 등록)
+    _upsert(db, MetricDefinition, [
+        {"code": "EXAMPLE_VESSEL_EVENTS", "version": 1, "name": "선박 이벤트 수 (예시)", "unit": "건",
+         "description": "예시 지표", "kind": "EVENT_COUNT", "params": {"event_codes": ["VESSEL"]},
+         "created_by": "seed", "created_at": t},
+        {"code": "EXAMPLE_FAULT_EVENTS", "version": 1, "name": "장비 장애 이벤트 수 (예시)", "unit": "건",
+         "description": "예시 지표", "kind": "EVENT_COUNT", "params": {"event_codes": ["EQUIPMENT_FAULT"]},
+         "created_by": "seed", "created_at": t},
+        {"code": "EXAMPLE_MEAN_WATER_TEMP", "version": 1, "name": "평균 수온 (예시)", "unit": "degC",
+         "description": "예시 지표", "kind": "OBSERVATION_STAT",
+         "params": {"metric": "sea_water_temperature", "stat": "mean"}, "created_by": "seed", "created_at": t},
+        {"code": "EXAMPLE_VIDEO_HOURS", "version": 1, "name": "원본 영상 시간 (예시)", "unit": "h",
+         "description": "예시 지표", "kind": "VIDEO_HOURS", "params": {}, "created_by": "seed", "created_at": t},
+    ], ["code", "version"])
+    _upsert(db, ReportTemplate, [{
+        "code": "EXAMPLE_SESSION_LOG", "version": 1, "name": "실증일지 (예시 양식)", "scope": "SESSION",
+        "created_by": "seed", "created_at": t, "hwpx_key": None, "hwpx_sha256": None,
+        "sections": [
+            {"kind": "TEXT", "title": "개요",
+             "text": "{{organization.name}} · {{project.name}}\n회차 {{session.label}} {{session.title}}\n"
+                     "기간 {{session.starts_at}} ~ {{session.ends_at}} · 장소 {{session.site}}"},
+            {"kind": "FIELDS", "title": "작성 항목", "fields": [
+                {"key": "summary", "label": "요약", "auto": "회차 {{session.label}} 실증 결과 요약"},
+                {"key": "issues", "label": "특이사항"}]},
+            {"kind": "METRICS", "title": "지표", "metrics": ["EXAMPLE_VESSEL_EVENTS", "EXAMPLE_FAULT_EVENTS",
+                                                           "EXAMPLE_MEAN_WATER_TEMP", "EXAMPLE_VIDEO_HOURS"]},
+            {"kind": "RECORDS", "title": "시험 기록"},
+        ]}], ["code", "version"])

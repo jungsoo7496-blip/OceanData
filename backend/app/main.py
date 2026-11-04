@@ -5,7 +5,19 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from app import API_VERSION
-from app.api import agents, assets, auth, catalog, context, lifecycle, monitoring, observations, system, uploads
+from app.api import (
+    agents,
+    assets,
+    auth,
+    catalog,
+    context,
+    lifecycle,
+    monitoring,
+    observations,
+    reports,
+    system,
+    uploads,
+)
 from app.config import get_settings
 from app.container import Container, build_container
 from app.errors import install_error_handlers
@@ -33,6 +45,7 @@ def create_app(c: Container | None = None) -> FastAPI:
     app.include_router(observations.router)
     app.include_router(lifecycle.router)
     app.include_router(monitoring.router)
+    app.include_router(reports.router)
     return app
 
 

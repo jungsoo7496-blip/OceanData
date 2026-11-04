@@ -182,6 +182,12 @@ def reprocess_asset(asset_id: str, body: ReprocessRequest, request: Request, db:
     order = [s for s in ("META", "PROXY", "THUMBNAIL", "SENSOR_PARSE") if s in body.steps]
     jobs = [JOB_FOR_STEP[s] for s in order]
     run = new_ulid()
+    # 10번 근거 손상 감지: 원 자산과 지금 있는 파생본을 '재처리됨'으로 표시 (인용한 증빙·보고서에 알림)
+    from app.services.retention import with_descendants
+
+    now = c.clock.now()
+    for x in with_descendants(db, [a]):
+        x.last_reprocessed_at = now
     db.flush()
     job_id = c.queue.enqueue(jobs[0], {"asset_id": a.asset_id, "chain": jobs[1:], "run": run, "reprocess": True},
                              organization_id=a.organization_id, dedupe_key=f"{jobs[0]}:{a.asset_id}:{run}")

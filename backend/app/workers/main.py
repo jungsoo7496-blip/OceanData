@@ -154,16 +154,21 @@ def maintenance(c: Container) -> None:
 
 
 def watch(c: Container) -> Any:
-    """감시 규칙 평가 (11번). 워커가 여럿이어도 한 번에 하나만 평가한다."""
+    """감시 규칙 평가 (11번)와 근거 손상 감지 (10번). 워커가 여럿이어도 한 번에 하나만 한다."""
     from sqlalchemy import text
 
     from app.metrics import INCIDENTS_OPENED, INGEST_LAG, WATCH_ACTIVE, WATCH_EVALS
-    from app.services import monitoring
+    from app.services import evidence, monitoring
 
     with c.sessionmaker.begin() as db:
         if not db.execute(text("SELECT pg_try_advisory_xact_lock(hashtext('watch_rules'))")).scalar():
             return None
         res = monitoring.evaluate(c, db)
+    with c.sessionmaker.begin() as db:  # 10번 근거 손상 감지 (Evidence_Integrity_Checker)
+        if db.execute(text("SELECT pg_try_advisory_xact_lock(hashtext('evidence_check'))")).scalar():
+            flagged = evidence.check_damage(c, db)
+            if flagged:
+                log.warning("evidence_damaged", extra={"documents": len(flagged)})
     WATCH_EVALS.inc()
     for code in monitoring.RULES:
         WATCH_ACTIVE.labels(code).set(res.active_by_rule.get(code, 0))

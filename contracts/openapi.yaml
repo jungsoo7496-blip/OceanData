@@ -37,6 +37,8 @@ tags:
     description: 실증 이벤트
   - name: records
     description: 회차 기록 (실증일지)
+  - name: reports
+    description: 지표·보고서 (10번)
   - name: agents
     description: 에이전트 등록·하트비트
   - name: status
@@ -363,6 +365,24 @@ paths:
   /v1/sessions/{session_id}/records:
     parameters:
       - {$ref: '#/components/parameters/SessionId'}
+    get:
+      tags: [records]
+      operationId: listSessionRecords
+      summary: 회차 기록 목록 (각 기록의 최신 버전)
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 기록 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/SessionRecord'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
     post:
       tags: [records]
       operationId: createSessionRecord
@@ -382,6 +402,435 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/SessionRecord'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/records/{record_id}:
+    parameters:
+      - {$ref: '#/components/parameters/RecordId'}
+    get:
+      tags: [records]
+      operationId: getSessionRecord
+      summary: 회차 기록 (최신 버전, version으로 특정 버전)
+      x-freeze: G1
+      x-status: draft
+      parameters:
+        - name: version
+          in: query
+          schema: {type: integer, minimum: 1}
+      responses:
+        '200':
+          description: 기록
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SessionRecord'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [records]
+      operationId: updateSessionRecord
+      summary: 기록 수정 — 항상 새 버전으로 남고 이전 버전(승인본 포함)은 그대로 보존
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SessionRecordUpdate'}
+      responses:
+        '200':
+          description: 새 버전
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SessionRecord'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/records/{record_id}/versions:
+    parameters:
+      - {$ref: '#/components/parameters/RecordId'}
+    get:
+      tags: [records]
+      operationId: listSessionRecordVersions
+      summary: 기록 수정 이력 (모든 버전)
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 버전 목록 (오래된 것부터)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/SessionRecord'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/records/{record_id}/approve:
+    parameters:
+      - {$ref: '#/components/parameters/RecordId'}
+    post:
+      tags: [records]
+      operationId: approveSessionRecord
+      summary: 증빙 승인 (ORG_ADMIN). 최신 버전을 고정하고 인용 자산을 PROTECTED로
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 승인된 버전
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SessionRecord'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/metric-definitions:
+    get:
+      tags: [reports]
+      operationId: listMetricDefinitions
+      summary: 지표 정의 (코드별 모든 버전)
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 지표 정의
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/MetricDefinition'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      tags: [reports]
+      operationId: createMetricDefinition
+      summary: 지표 정의 등록 (운영자). 같은 코드면 새 버전
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MetricDefinitionCreate'}
+      responses:
+        '201':
+          description: 등록된 버전
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MetricDefinition'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /v1/report-templates:
+    get:
+      tags: [reports]
+      operationId: listReportTemplates
+      summary: 보고서 양식 (코드별 모든 버전)
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 양식
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/ReportTemplate'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      tags: [reports]
+      operationId: createReportTemplate
+      summary: 보고서 양식 등록 (운영자). 같은 코드면 새 버전. 실제 관리기관 양식은 확보 후 등록
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReportTemplateCreate'}
+      responses:
+        '201':
+          description: 등록된 버전
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReportTemplate'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /v1/report-templates/{template_code}/versions/{version}/hwpx:
+    parameters:
+      - name: template_code
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/TemplateCode'}
+      - name: version
+        in: path
+        required: true
+        schema: {type: integer, minimum: 1}
+    put:
+      tags: [reports]
+      operationId: putReportTemplateHwpx
+      summary: 양식 버전에 HWPX 원본 파일 첨부 (운영자). 본문의 {{변수}} 자리를 내보낼 때 치환한다
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary, maxLength: 10485760}
+      responses:
+        '200':
+          description: 첨부된 양식
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReportTemplate'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/reports:
+    get:
+      tags: [reports]
+      operationId: listReports
+      summary: 보고서 목록 (제공기관은 자기 기관, 관리기관 열람자는 배정 사업의 제출본)
+      x-freeze: G1
+      x-status: draft
+      parameters:
+        - name: session_id
+          in: query
+          schema: {$ref: './schemas/common.schema.json#/$defs/session_id'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
+      responses:
+        '200':
+          description: 보고서 목록 (각 보고서의 보이는 최신 버전)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/Report'}}
+                  next_cursor: {type: [string, 'null']}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      tags: [reports]
+      operationId: createReport
+      summary: 보고서 초안 생성 (회차 또는 사업·기간). 지표를 계산해 근거와 함께 저장한다
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [template_code]
+              properties:
+                template_code: {$ref: '#/components/schemas/TemplateCode'}
+                template_version: {type: integer, minimum: 1, description: 없으면 최신}
+                session_id: {$ref: './schemas/common.schema.json#/$defs/session_id'}
+                project_id: {$ref: './schemas/common.schema.json#/$defs/project_id'}
+                from: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+                to: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+                title: {type: string, maxLength: 200}
+      responses:
+        '201':
+          description: 초안 (버전 1)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Report'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/reports/{report_id}:
+    parameters:
+      - {$ref: '#/components/parameters/ReportId'}
+    get:
+      tags: [reports]
+      operationId: getReport
+      summary: 보고서 (최신 버전, version으로 특정 버전)
+      x-freeze: G1
+      x-status: draft
+      parameters:
+        - name: version
+          in: query
+          schema: {type: integer, minimum: 1}
+      responses:
+        '200':
+          description: 보고서
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Report'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/reports/{report_id}/versions:
+    parameters:
+      - {$ref: '#/components/parameters/ReportId'}
+    post:
+      tags: [reports]
+      operationId: createReportVersion
+      summary: 최신 데이터로 새 초안 버전을 만든다 (이전 버전은 보존)
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '201':
+          description: 새 초안
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Report'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/reports/{report_id}/fields:
+    parameters:
+      - {$ref: '#/components/parameters/ReportId'}
+    patch:
+      tags: [reports]
+      operationId: updateReportFields
+      summary: 초안의 입력 항목 수정. 자동값과 수정값을 나눠 저장하고 수정자·시각·이전 값을 남긴다
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [fields]
+              properties:
+                fields:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [key, value]
+                    properties:
+                      key: {type: string}
+                      value: {type: [string, 'null'], maxLength: 10000, description: null이면 자동값으로 되돌린다}
+      responses:
+        '200':
+          description: 갱신된 초안
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Report'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/reports/{report_id}/approve:
+    parameters:
+      - {$ref: '#/components/parameters/ReportId'}
+    post:
+      tags: [reports]
+      operationId: approveReport
+      summary: 보고서 승인 (ORG_ADMIN). 최신 초안을 고정해 EVIDENCE 존에 저장하고 sha256 기록, 인용 자산 PROTECTED
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 승인본
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Report'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/reports/{report_id}/submit:
+    parameters:
+      - {$ref: '#/components/parameters/ReportId'}
+    post:
+      tags: [reports]
+      operationId: submitReport
+      summary: 승인본 제출 (ORG_ADMIN). 근거 손상 표시가 있으면 거부. 인용 자산의 sharing_scope는 바꾸지 않는다
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 제출본
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Report'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+
+  /v1/reports/{report_id}/export:
+    parameters:
+      - {$ref: '#/components/parameters/ReportId'}
+    get:
+      tags: [reports]
+      operationId: exportReport
+      summary: 보고서 내보내기 (켜진 형식만, /v1/capabilities의 report_formats). 초안은 "초안" 표시
+      x-freeze: G1
+      x-status: draft
+      parameters:
+        - name: format
+          in: query
+          required: true
+          schema: {enum: [PDF, XLSX, HWPX]}
+        - name: version
+          in: query
+          schema: {type: integer, minimum: 1}
+      responses:
+        '200':
+          description: 파일
+          content:
+            application/pdf: {schema: {type: string, format: binary}}
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: {schema: {type: string, format: binary}}
+            application/hwp+zip: {schema: {type: string, format: binary}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/reports/{report_id}/metrics/{metric_code}/trace:
+    parameters:
+      - {$ref: '#/components/parameters/ReportId'}
+      - name: metric_code
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/TemplateCode'}
+    get:
+      tags: [reports]
+      operationId: traceReportMetric
+      summary: 지표 → 회차 기록 → 이벤트·관측값 → 자산 → 원본 경로 (권한 범위 안, T06-a)
+      x-freeze: G1
+      x-status: draft
+      parameters:
+        - name: version
+          in: query
+          schema: {type: integer, minimum: 1}
+      responses:
+        '200':
+          description: 근거 경로
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MetricTrace'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {$ref: '#/components/responses/NotFound'}
 
@@ -2038,6 +2487,16 @@ components:
       in: path
       required: true
       schema: {$ref: './schemas/common.schema.json#/$defs/session_id'}
+    RecordId:
+      name: record_id
+      in: path
+      required: true
+      schema: {$ref: './schemas/common.schema.json#/$defs/record_id'}
+    ReportId:
+      name: report_id
+      in: path
+      required: true
+      schema: {$ref: './schemas/common.schema.json#/$defs/report_id'}
     DeviceId:
       name: device_id
       in: path
@@ -2630,17 +3089,239 @@ components:
         note: {type: string, maxLength: 4000}
         evidence_refs: {type: array, maxItems: 500, items: {$ref: '#/components/schemas/EvidenceRef'}}
 
+    SessionRecordUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        kind: {enum: [LOG, TEST, NOTE]}
+        title: {type: string, minLength: 1, maxLength: 200}
+        test_item: {type: [string, 'null'], maxLength: 200}
+        conditions: {type: [string, 'null'], maxLength: 2000}
+        result: {type: [string, 'null'], maxLength: 4000}
+        note: {type: [string, 'null'], maxLength: 4000}
+        evidence_refs: {type: array, maxItems: 500, items: {$ref: '#/components/schemas/EvidenceRef'}}
+
+    EvidenceDamage:
+      type: object
+      required: [asset_id, reason, detected_at]
+      properties:
+        asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+        reason: {enum: [DELETED, QUARANTINED, REPROCESSED]}
+        detected_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+
     SessionRecord:
+      type: object
+      required: [record_id, session_id, kind, title, evidence_refs, created_at, created_by, version, status,
+                 evidence_damaged]
+      properties:
+        record_id: {$ref: './schemas/common.schema.json#/$defs/record_id'}
+        session_id: {$ref: './schemas/common.schema.json#/$defs/session_id'}
+        kind: {enum: [LOG, TEST, NOTE]}
+        title: {type: string}
+        test_item: {type: [string, 'null']}
+        conditions: {type: [string, 'null']}
+        result: {type: [string, 'null']}
+        note: {type: [string, 'null']}
+        evidence_refs: {type: array, items: {$ref: '#/components/schemas/EvidenceRef'}}
+        created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        created_by: {type: string, description: 이 버전을 쓴 주체}
+        version: {type: integer, minimum: 1}
+        latest_version: {type: integer, minimum: 1}
+        status: {enum: [DRAFT, APPROVED], description: 버전 상태. 승인된 버전은 바뀌지 않는다}
+        approved_by: {type: [string, 'null']}
+        approved_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+        evidence_damaged: {type: boolean}
+        damage: {type: array, items: {$ref: '#/components/schemas/EvidenceDamage'}}
+
+    TemplateCode:
+      type: string
+      pattern: '^[A-Z][A-Z0-9_]{1,59}$'
+
+    MetricDefinitionCreate:
+      allOf: [{$ref: '#/components/schemas/MetricDefinitionBody'}]
+      unevaluatedProperties: false
+
+    MetricDefinitionBody:
+      type: object
+      required: [code, name, kind, params]
+      properties:
+        code: {$ref: '#/components/schemas/TemplateCode'}
+        name: {type: string, maxLength: 200}
+        description: {type: [string, 'null'], maxLength: 2000}
+        unit: {type: [string, 'null'], maxLength: 32}
+        kind:
+          enum: [EVENT_COUNT, EVENT_RATIO, OBSERVATION_STAT, VIDEO_HOURS]
+          description: >-
+            EVENT_COUNT(params.event_codes), EVENT_RATIO(numerator_codes / denominator_codes),
+            OBSERVATION_STAT(metric, stat=mean|min|max|count), VIDEO_HOURS(원본 영상 길이 합)
+        params: {type: object}
+
+    MetricDefinition:
       allOf:
-        - $ref: '#/components/schemas/SessionRecordCreate'
+        - $ref: '#/components/schemas/MetricDefinitionBody'
         - type: object
-          required: [record_id, session_id, created_at, created_by, version]
+          required: [version, formula, created_at]
           properties:
-            record_id: {$ref: './schemas/common.schema.json#/$defs/record_id'}
-            session_id: {$ref: './schemas/common.schema.json#/$defs/session_id'}
-            created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
-            created_by: {$ref: './schemas/common.schema.json#/$defs/user_id'}
             version: {type: integer, minimum: 1}
+            formula: {type: string, description: 사람이 읽는 계산식}
+            created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+
+    MetricResult:
+      type: object
+      required: [metric_code, metric_version, status, value, formula, input_count, missing_count, sources]
+      properties:
+        metric_code: {$ref: '#/components/schemas/TemplateCode'}
+        metric_version: {type: integer}
+        name: {type: string}
+        unit: {type: [string, 'null']}
+        status:
+          enum: [OK, NO_DATA, NEEDS_VERIFICATION]
+          description: NO_DATA=값을 추정하지 않음, NEEDS_VERIFICATION=모델 결과만으로 계산(확정값으로 내보내지 않음)
+        value: {type: [number, 'null']}
+        formula: {type: string}
+        input_count: {type: integer, minimum: 0}
+        missing_count: {type: integer, minimum: 0}
+        sources:
+          type: object
+          properties:
+            event_ids: {type: array, items: {$ref: './schemas/common.schema.json#/$defs/event_id'}}
+            asset_ids: {type: array, items: {$ref: './schemas/common.schema.json#/$defs/asset_id'}}
+            observation_ranges: {type: array, items: {type: object}}
+        computed_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+
+    ReportTemplateCreate:
+      allOf: [{$ref: '#/components/schemas/ReportTemplateBody'}]
+      unevaluatedProperties: false
+
+    ReportTemplateBody:
+      type: object
+      required: [code, name, sections]
+      properties:
+        code: {$ref: '#/components/schemas/TemplateCode'}
+        name: {type: string, maxLength: 200}
+        scope: {enum: [SESSION, PERIOD], default: SESSION}
+        sections:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [kind, title]
+            properties:
+              kind: {enum: [TEXT, FIELDS, METRICS, RECORDS]}
+              title: {type: string, maxLength: 200}
+              text: {type: string, maxLength: 10000, description: 'TEXT: {{session.label}} 같은 변수 사용'}
+              fields:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [key, label]
+                  properties:
+                    key: {type: string, pattern: '^[a-z][a-z0-9_]{0,59}$'}
+                    label: {type: string, maxLength: 200}
+                    auto: {type: string, maxLength: 2000, description: 자동값 식 (변수 치환)}
+              metrics: {type: array, items: {$ref: '#/components/schemas/TemplateCode'}}
+
+    ReportTemplate:
+      allOf:
+        - $ref: '#/components/schemas/ReportTemplateBody'
+        - type: object
+          required: [version, has_hwpx, created_at]
+          properties:
+            version: {type: integer, minimum: 1}
+            has_hwpx: {type: boolean}
+            hwpx_sha256: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/sha256'}, {type: 'null'}]}
+            created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+
+    ReportField:
+      type: object
+      required: [key, label, auto_value, value, edited]
+      properties:
+        key: {type: string}
+        label: {type: string}
+        auto_value: {type: [string, 'null']}
+        value: {type: [string, 'null']}
+        edited: {type: boolean}
+        history:
+          type: array
+          items:
+            type: object
+            required: [previous, value, edited_by, edited_at]
+            properties:
+              previous: {type: [string, 'null']}
+              value: {type: [string, 'null']}
+              edited_by: {type: string}
+              edited_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+
+    Report:
+      type: object
+      required: [report_id, organization_id, project_id, title, template_code, template_version, version, status,
+                 generated_at, data_as_of, fields, metrics, evidence_damaged, created_at]
+      properties:
+        report_id: {$ref: './schemas/common.schema.json#/$defs/report_id'}
+        organization_id: {$ref: './schemas/common.schema.json#/$defs/organization_id'}
+        project_id: {$ref: './schemas/common.schema.json#/$defs/project_id'}
+        session_id: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/session_id'}, {type: 'null'}]}
+        period_from: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+        period_to: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+        title: {type: string}
+        template_code: {$ref: '#/components/schemas/TemplateCode'}
+        template_version: {type: integer}
+        version: {type: integer, minimum: 1}
+        latest_version: {type: integer, minimum: 1}
+        status: {$ref: './schemas/common.schema.json#/$defs/report_status'}
+        generated_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        data_as_of: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        fields: {type: array, items: {$ref: '#/components/schemas/ReportField'}}
+        metrics: {type: array, items: {$ref: '#/components/schemas/MetricResult'}}
+        record_ids: {type: array, items: {$ref: './schemas/common.schema.json#/$defs/record_id'}}
+        evidence_damaged: {type: boolean}
+        damage: {type: array, items: {$ref: '#/components/schemas/EvidenceDamage'}}
+        approved_by: {type: [string, 'null']}
+        approved_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+        snapshot_sha256: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/sha256'}, {type: 'null'}]}
+        submitted_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+        created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+
+    MetricTrace:
+      type: object
+      required: [metric, records, events, observation_ranges, assets, hidden_count]
+      properties:
+        metric: {$ref: '#/components/schemas/MetricResult'}
+        records:
+          type: array
+          items:
+            type: object
+            required: [record_id, version, title]
+            properties:
+              record_id: {$ref: './schemas/common.schema.json#/$defs/record_id'}
+              version: {type: integer}
+              title: {type: string}
+        events:
+          type: array
+          items:
+            type: object
+            required: [event_id, event_code, asset_ids]
+            properties:
+              event_id: {$ref: './schemas/common.schema.json#/$defs/event_id'}
+              event_code: {type: string}
+              source: {type: string}
+              human_verified: {type: boolean}
+              asset_ids: {type: array, items: {$ref: './schemas/common.schema.json#/$defs/asset_id'}}
+        observation_ranges: {type: array, items: {type: object}}
+        assets:
+          type: array
+          items:
+            type: object
+            required: [asset_id, variant, originals]
+            properties:
+              asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
+              variant: {type: string}
+              ingest_status: {type: string}
+              originals: {type: array, items: {$ref: './schemas/common.schema.json#/$defs/asset_id'}, description: 계보를 거슬러 올라간 원본}
+        hidden_count: {type: integer, minimum: 0, description: 권한 범위 밖이라 보이지 않는 근거 수}
 
     DeviceCreate:
       type: object

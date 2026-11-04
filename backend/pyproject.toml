@@ -20,6 +20,9 @@ dependencies = [
   "jsonschema>=4.18,<5",
   "pyyaml>=6.0",
   "referencing>=0.35",
+  # 보고서 내보내기 (10번): XLSX는 openpyxl(MIT), PDF는 WeasyPrint(BSD-3, 시스템 pango 필요) — ADR-0018
+  "openpyxl>=3.1,<4",
+  "weasyprint>=70,<71",
 ]
 
 [project.optional-dependencies]

@@ -10,6 +10,7 @@ import { AssetDetail, Assets } from './pages/Assets'
 import { Dashboard } from './pages/Dashboard'
 import { Devices } from './pages/Devices'
 import { Monitoring } from './pages/Monitoring'
+import { ReportDetail, Reports, SessionRecords } from './pages/Reports'
 import { OperatorConsole } from './pages/Operator'
 import { ProgramBoard } from './pages/Program'
 import { Sessions } from './pages/Sessions'
@@ -32,9 +33,13 @@ function menuFor(roles: string[]) {
     add('/upload', '업로드')
     add('/assets', '자산')
     add('/sessions', '실증회차')
+    add('/reports', '보고서')
     add('/devices', '장비')
   }
-  if (roles.includes('PROGRAM_VIEWER')) add('/program', '관리기관 보드')
+  if (roles.includes('PROGRAM_VIEWER')) {
+    add('/program', '관리기관 보드')
+    add('/reports', '제출된 보고서')
+  }
   if (roles.includes('PLATFORM_OPERATOR')) {
     add('/operator', '운영 콘솔')
     add('/monitoring', '수집 모니터링')
@@ -90,6 +95,9 @@ function Shell({ me }: { me: Me }) {
           <Route path="/program" element={<ProgramBoard />} />
           <Route path="/operator" element={<OperatorConsole />} />
           <Route path="/monitoring" element={<Monitoring />} />
+          <Route path="/reports" element={<Reports me={me} />} />
+          <Route path="/reports/:reportId" element={<ReportDetail me={me} />} />
+          <Route path="/sessions/:sessionId/records" element={<SessionRecords me={me} />} />
           <Route path="*" element={<Result status="403" title="접근할 수 없는 화면입니다" />} />
         </Routes>
       </Layout.Content>

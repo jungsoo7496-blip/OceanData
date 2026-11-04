@@ -11,7 +11,7 @@
 - [ ] 9. DATASET 존 사본을 원 자산 만료와 별도로 — 요구사항 3.5 (13번에서 데이터셋 생기면, 정책 표에는 DATASET KEEP 있음)
 - [x] 10. 법적 보류 설정·해제(운영자·사유·감사)·삭제 제외 — 요구사항 4.1, 4.2
 - [x] 11. 자산·회차 삭제·파생본 포함·삭제 증명·백업 소멸일 — 요구사항 5.1, 5.2 · 시험 `test_asset_deletion_*`, `test_session_deletion_and_cross_org`
-- [ ] 12. GRANTED 데이터셋 포함 시 409·증빙 인용 영향 목록과 근거 손상 표시 — 요구사항 5.3, 5.4 (자리만 있음: `retention.affected_by()`, 10·13번)
+- [ ] 12. GRANTED 데이터셋 포함 시 409·증빙 인용 영향 목록과 근거 손상 표시 — 요구사항 5.3, 5.4 (증빙·보고서 인용은 10번에서 완료: `retention.affected_by()` → 409·영향 목록, 근거 손상 표시. 데이터셋은 13번)
 - [ ] 13. 계층형 백업 작업(DB·감사·EVIDENCE·DEID·DATASET·PROTECTED·설정 → 별도 S3) — 요구사항 6.1~6.3, 6.5 (OSS PoC 3순위: pgBackRest + rclone (+restic) 후 결정)
 - [ ] 14. ROTATING 등 원천 장비 자산 백업 신청 → PROTECTED·예상 용량·사용량 반영 — 요구사항 6.4 (org_quotas.backup_bytes 항목은 있음)
 - [ ] 15. `make restore-test`·복원 Runbook — 요구사항 7.1, 7.2 (T10, 13번 작업 이후)

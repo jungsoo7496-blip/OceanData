@@ -116,9 +116,11 @@ def with_descendants(db: Session, roots: list[Asset]) -> list[Asset]:
 def affected_by(db: Session, assets: list[Asset]) -> list[dict[str, Any]]:
     """승인된 증빙·보고서(10번)·이용 권한이 있는 데이터셋 버전(13번)의 인용 목록.
 
-    확인 필요: 10·13번이 아직 없어 빈 목록이다. 그 스펙에서 이 함수에 조회를 더한다.
+    10번: 승인된 회차 기록 버전과 승인·제출된 보고서 버전. 13번 데이터셋은 그 스펙에서 더한다.
     """
-    return []
+    from app.services.evidence import citing_approved
+
+    return citing_approved(db, [a.asset_id for a in assets])
 
 
 def delete_assets(c: Container, db: Session, *, organization_id: str, assets: list[Asset], scope: str,
