@@ -135,7 +135,7 @@ def _env_join(c: Container, job: Job) -> Any:
         env = external.join_env(c, db, a)
         if env is not None:
             a.env_context = env
-    return "OK" if env is not None else "NO_MATCH"
+    return "OK" if env is not None and env["observations"] else "NO_MATCH"
 
 
 register("collect_source", _collect_source)  # 12번 (실패는 큐의 지수 백오프)

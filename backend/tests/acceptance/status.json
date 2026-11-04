@@ -59,10 +59,6 @@
     "status": "NEEDS_INPUT",
     "reason": "GitHub Actions security 작업(SBOM·Trivy·ZAP) 결과로 판정 — 클라우드 세션에서는 결과 미확인"
   },
-  "T17-b": {
-    "status": "NOT_IMPLEMENTED",
-    "reason": "반경·시간 창 밖이면 결합하지 않음(구현), '경고' 표시는 미구현"
-  },
   "T18": {
     "status": "NEEDS_HARDWARE",
     "reason": "노드·디스크 추가 전후 비교"

@@ -55,7 +55,7 @@ def asset_at(ctx, captured: datetime | None, lon: float = 126.52, lat: float = 3
         return a.asset_id
 
 
-@pytest.mark.covers("T17-a", "T17-c")
+@pytest.mark.covers("T17-a", "T17-b", "T17-c")
 def test_t17_collect_join_backfill_and_alert(ictx) -> None:
     ctx = ictx
     assert ctx.client.post("/v1/external-sources", json=SOURCE, headers=ctx.as_user(101)).status_code == 403
@@ -94,8 +94,24 @@ def test_t17_collect_join_backfill_and_alert(ictx) -> None:
     assert wave["station_name"] == "시험 부이 1" and 1.0 < wave["distance_km"] < 3.0 and wave["time_diff_s"] <= 300
     assert wave["attribution"] == "모의 해양 관측(시험용)"
 
-    # 보충 수집 (요구사항 2.2, 5.3): 수집 전 구간 자산은 처음엔 결합 없음 → 보충 후 갱신
-    old = asset_at(ctx, NOW - timedelta(hours=3))
+    # T17-b: 시간·해역이 맞지 않으면 결합하지 않고 경고 (이유·가장 가까운 관측소/관측)
+    far = asset_at(ctx, NOW - timedelta(minutes=33), lon=124.5, lat=33.5)  # 반경 밖 (모든 관측소에서 200km 넘게)
+    old = asset_at(ctx, NOW - timedelta(hours=3))  # 시간 창 밖 (아직 수집 전 구간)
+    with ctx.c.sessionmaker.begin() as db:
+        for aid, code in ((far, "NO_STATION_IN_RADIUS"), (old, "NO_OBSERVATION_IN_WINDOW")):
+            env = external.join_env(ctx.c, db, db.get(Asset, aid))
+            assert env["observations"] == [] and [w["code"] for w in env["warnings"]] == [code], env
+            assert env["warnings"][0]["nearest"]["station_name"].startswith("시험 부이")
+            db.get(Asset, aid).env_context = env
+        assert env["warnings"][0]["nearest"]["time_diff_s"] > 2 * 3600 - 600
+    r = ctx.client.get(f"/v1/assets/{old}", headers=ctx.as_user(102))
+    check(r, "GET", "/v1/assets/{asset_id}")
+    assert r.json()["env_context"]["warnings"][0]["code"] == "NO_OBSERVATION_IN_WINDOW"
+    r = ctx.client.get("/v1/assets", params={"env_metric": "significant_wave_height", "env_min": 0},
+                       headers=ctx.as_user(102))
+    assert old not in r.text and far not in r.text  # 경고만 있는 자산은 환경 조건 검색에 걸리지 않는다
+
+    # 보충 수집 (요구사항 2.2, 5.3): 수집 전 구간 자산은 처음엔 결합 없음(경고) → 보충 후 갱신
     r = ctx.client.post("/v1/external-sources/mock-ocean/backfill", headers=ctx.as_user(OP),
                         json={"from": (NOW - timedelta(hours=4)).strftime("%Y-%m-%dT%H:%M:%SZ"),
                               "to": (NOW - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")})
@@ -104,6 +120,7 @@ def test_t17_collect_join_backfill_and_alert(ictx) -> None:
     run_jobs(ctx)
     with ctx.c.sessionmaker() as db:
         assert db.get(Asset, old).env_context["observations"][0]["station_name"] == "시험 부이 1"
+        assert "warnings" not in db.get(Asset, old).env_context  # 보충 뒤 결합되면 경고는 사라진다
 
     # 재배포 제한 (요구사항 6.1): 소유 기관은 보지만 다른 기관 주체에게는 빠진다
     own = ctx.client.get(f"/v1/assets/{near}", headers=ctx.as_user(102)).json()

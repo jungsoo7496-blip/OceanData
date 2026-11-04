@@ -149,14 +149,17 @@ def join_env(c: Container, db: Session, a: Asset) -> dict[str, Any] | None:
     s = c.settings
     mid = a.capture_start_at + ((a.capture_end_at - a.capture_start_at) / 2 if a.capture_end_at else timedelta(0))
     window = timedelta(minutes=s.env_join_window_min)
-    near = []
+    near, everywhere = [], []
     for src in db.execute(select(ExternalSource)).scalars():
         for st in src.stations:
             if not st.get("device_id"):
                 continue
             d = _km(lat, lon, float(st["lat"]), float(st["lon"]))
+            everywhere.append((d, src, st))
             if d <= s.env_join_radius_km:
                 near.append((d, src, st))
+    if not everywhere:
+        return None  # 관측소가 하나도 없으면 결합 대상이 아니다 (경고도 없음)
     entries: dict[str, dict[str, Any]] = {}
     best: dict[str, tuple[float, float]] = {}  # 비교는 반올림 전 값으로 (거리 우선, 다음은 시각 차이)
     for d, src, st in sorted(near, key=lambda x: x[0]):
@@ -173,10 +176,32 @@ def join_env(c: Container, db: Session, a: Asset) -> dict[str, Any] | None:
                                    "station_device_id": st["device_id"], "station_name": st["name"],
                                    "distance_km": round(d, 3), "time_diff_s": int(dt), "source_id": src.source_id,
                                    "attribution": src.attribution, "redistribution_allowed": src.redistribution_allowed}
-    if not entries:
-        return None
-    return {"joined_at": iso(c.clock.now()), "radius_km": s.env_join_radius_km, "window_min": s.env_join_window_min,
-            "observations": sorted(entries.values(), key=lambda e: e["metric"])}
+    head = {"joined_at": iso(c.clock.now()), "radius_km": s.env_join_radius_km, "window_min": s.env_join_window_min}
+    if not entries:  # 결합하지 않고 이유를 남긴다 (T17-b)
+        return {**head, "observations": [], "warnings": [_no_join_warning(db, near, everywhere, mid, s)]}
+    return {**head, "observations": sorted(entries.values(), key=lambda e: e["metric"])}
+
+
+def _no_join_warning(db: Session, near: list[Any], everywhere: list[Any], mid: datetime, s: Any) -> dict[str, Any]:
+    if not near:
+        d, _, st = min(everywhere, key=lambda x: x[0])
+        msg = f"반경 {s.env_join_radius_km:g}km 안에 관측소가 없습니다 (가장 가까운 {st['name']} {d:.1f}km)"
+        return {"code": "NO_STATION_IN_RADIUS", "message": msg,
+                "nearest": {"station_device_id": st["device_id"], "station_name": st["name"],
+                            "distance_km": round(d, 3)}}
+    best: tuple[float, float, dict[str, Any]] | None = None
+    for d, _, st in near:
+        dt = db.execute(select(func.min(func.abs(func.extract("epoch", OBS.c.observed_at - mid))))
+                        .where(OBS.c.source_system_id == st["device_id"], OBS.c.value.is_not(None))).scalar()
+        if dt is not None and (best is None or float(dt) < best[1]):
+            best = (d, float(dt), st)
+    msg = f"촬영 시각 ±{s.env_join_window_min:g}분 안에 반경 안 관측소의 관측값이 없습니다"
+    if best is None:
+        return {"code": "NO_OBSERVATION_IN_WINDOW", "message": msg + " (관측값 없음)"}
+    d, dt, st = best
+    return {"code": "NO_OBSERVATION_IN_WINDOW", "message": msg + f" (가장 가까운 관측은 {dt / 60:.0f}분 차이)",
+            "nearest": {"station_device_id": st["device_id"], "station_name": st["name"], "distance_km": round(d, 3),
+                        "time_diff_s": int(dt)}}
 
 
 def refresh_env(c: Container, since: datetime, until: datetime) -> int:
@@ -192,7 +217,7 @@ def refresh_env(c: Container, since: datetime, until: datetime) -> int:
             env = join_env(c, db, a)
             if env is not None:
                 a.env_context = env
-                n += 1
+                n += 1 if env["observations"] else 0
     return n
 
 

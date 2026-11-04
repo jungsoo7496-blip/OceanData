@@ -101,7 +101,7 @@ export function AssetDetail({ me }: { me: Me }) {
     }
   }
   const a = asset.data
-  const env = (a as (Asset & { env_context?: { observations?: { metric: string; value: number; unit: string; station_name: string; distance_km: number; time_diff_s: number; attribution: string }[] } }) | undefined)?.env_context
+  const env = (a as (Asset & { env_context?: { observations?: { metric: string; value: number; unit: string; station_name: string; distance_km: number; time_diff_s: number; attribution: string }[]; warnings?: { code: string; message: string }[] } }) | undefined)?.env_context
   if (!a) return <Card loading={asset.isLoading}>{asset.error ? '자산을 찾을 수 없습니다' : null}</Card>
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
@@ -138,6 +138,8 @@ export function AssetDetail({ me }: { me: Me }) {
               { title: '시각 차이', dataIndex: 'time_diff_s', render: (t: number) => `${Math.round(t / 60)}분` }]} />
           <Typography.Text type="secondary">출처: {[...new Set(env.observations.map((o) => o.attribution))].join(' / ')}</Typography.Text>
         </Card>
+      ) : env?.warnings?.length ? (
+        <Alert type="warning" showIcon message="촬영 당시 환경 정보를 붙이지 않았습니다" description={env.warnings.map((w) => w.message).join(' / ')} />
       ) : null}
       {(isOrg || me.roles.includes('PLATFORM_OPERATOR')) && <ShareCard asset={a} me={me} />}
       <Card title="계보">

@@ -212,7 +212,50 @@
         "object",
         "null"
       ],
-      "description": "12번 Env_Joiner가 붙인 관측값 요약 (출처·거리·시간차 포함)"
+      "description": "12번 Env_Joiner가 붙인 관측값 요약 (출처·거리·시간차 포함). 반경·시간 창 안 관측값이 없으면 observations는 비고 warnings에 이유 (T17-b)",
+      "properties": {
+        "joined_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "radius_km": {
+          "type": "number"
+        },
+        "window_min": {
+          "type": "number"
+        },
+        "observations": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "enum": [
+                  "NO_STATION_IN_RADIUS",
+                  "NO_OBSERVATION_IN_WINDOW"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "nearest": {
+                "type": "object",
+                "description": "가장 가까운 관측소(거리)·관측(시각 차이). 없으면 생략"
+              }
+            }
+          }
+        }
+      }
     },
     "tags": {
       "type": "array",
