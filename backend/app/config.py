@@ -79,6 +79,16 @@ class Settings(BaseSettings):
 
     # 저장·보존 (08번)
     backup_retention_days: int = 90
+    # 계층형 백업 (08번 요구사항 6·7, ADR-0021). 대상 S3를 비우면 같은 S3의 backup_bucket (개발용)
+    backup_enabled: bool = False  # 워커가 backup_interval_h마다 백업. 켜기 전에 pg_dump 주버전·대상 S3 확인
+    backup_interval_h: int = 24
+    backup_bucket: str = "backup"
+    backup_s3_endpoint_url: str | None = None
+    backup_s3_access_key_id: SecretStr | None = None
+    backup_s3_secret_access_key: SecretStr | None = None
+    backup_database_url: SecretStr | None = None  # pg_dump·복원 시험용 (소유자 계정). 비우면 DATABASE_URL
+    pg_dump_bin: str = "pg_dump"
+    pg_restore_bin: str = "pg_restore"
     retention_auto_execute: bool = False  # 기본은 운영자가 dry-run을 보고 실행 (요구사항 3.6)
 
     # 센서·관측값 (07번, 정책값)

@@ -59,6 +59,8 @@ PERMISSIONS: dict[str, Rule] = {
     # 08 저장·보존
     "usage:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
     "retention:run": Rule(frozenset({"PLATFORM_OPERATOR"})),
+    "backup:read": Rule(frozenset({"PLATFORM_OPERATOR"})),
+    "backup:run": Rule(frozenset({"PLATFORM_OPERATOR"})),
     "legal_hold:set": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),
     "asset:delete": Rule(frozenset({"ORG_ADMIN"}), mfa=True),
     "deletion_certificate:read": Rule(frozenset({"ORG_ADMIN", "PLATFORM_OPERATOR"})),

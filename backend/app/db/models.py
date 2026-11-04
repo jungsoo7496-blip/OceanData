@@ -1087,3 +1087,25 @@ class ExternalSource(Base):
     format_error_at: Mapped[datetime | None] = mapped_column(TS)
     created_by: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(TS)
+
+
+class BackupRun(Base):
+    """계층형 백업 회차 (08번 요구사항 6.3, 7.1). 대상·방법은 ADR-0021."""
+
+    __tablename__ = "backup_runs"
+    backup_run_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    status: Mapped[str] = mapped_column(String(12))  # RUNNING / SUCCEEDED / FAILED
+    started_at: Mapped[datetime] = mapped_column(TS, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(TS)
+    object_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    copied_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    skipped_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    total_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    copied_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    table_count: Mapped[int | None] = mapped_column(Integer)
+    manifest_key: Mapped[str | None] = mapped_column(String(400))
+    db_dump_key: Mapped[str | None] = mapped_column(String(400))
+    db_dump_sha256: Mapped[str | None] = mapped_column(String(64))
+    failed_objects: Mapped[list[Any]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    error: Mapped[str | None] = mapped_column(String(1000))
+    restore_test: Mapped[dict[str, Any] | None] = mapped_column(JSONB)

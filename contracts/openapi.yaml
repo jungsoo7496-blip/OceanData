@@ -2224,6 +2224,48 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
 
+  /v1/backup-runs:
+    get:
+      tags: [status]
+      operationId: listBackupRuns
+      summary: 백업 회차 (PLATFORM_OPERATOR). 최근 것부터, 복원 시험 결과 포함
+      description: 08번 요구사항 6.3·7.1. 백업 대상·방법은 ADR-0021.
+      x-freeze: G1
+      x-status: draft
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+      responses:
+        '200':
+          description: 백업 회차
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/BackupRun'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      tags: [status]
+      operationId: startBackupRun
+      summary: 지금 백업 (PLATFORM_OPERATOR). 작업 큐에 넣고 바로 돌려준다
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '202':
+          description: 작업 등록됨
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [job_id]
+                properties:
+                  job_id: {type: string}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
   /v1/retention/dry-run:
     post:
       tags: [status]
@@ -3610,6 +3652,42 @@ components:
             quarantine_bytes: {type: integer, minimum: 0}
             reserved_bytes: {type: integer, minimum: 0, description: 진행 중 업로드 예약량}
             backup_bytes: {type: integer, minimum: 0, description: 기관이 신청한 백업 용량}
+
+    BackupRun:
+      type: object
+      required: [backup_run_id, status, started_at, object_count, copied_count, skipped_count, total_bytes, copied_bytes]
+      properties:
+        backup_run_id: {$ref: './schemas/common.schema.json#/$defs/backup_run_id'}
+        status: {enum: [RUNNING, SUCCEEDED, FAILED]}
+        started_at: {type: string, format: date-time}
+        finished_at: {type: [string, 'null'], format: date-time}
+        object_count: {type: integer, description: 백업 대상 객체 수 (backup_class=NONE인 RAW 제외)}
+        copied_count: {type: integer, description: 이번에 복사한 객체 수 (증분)}
+        skipped_count: {type: integer, description: 이미 같은 sha256으로 백업돼 있어 건너뛴 수}
+        total_bytes: {type: integer}
+        copied_bytes: {type: integer}
+        table_count: {type: [integer, 'null']}
+        db_dump_sha256: {type: [string, 'null']}
+        failed_objects:
+          type: array
+          items:
+            type: object
+            required: [key, reason]
+            properties:
+              key: {type: string}
+              reason: {type: string}
+        error: {type: [string, 'null']}
+        restore_test:
+          type: [object, 'null']
+          description: 최근 복원 시험 (make restore-test)
+          properties:
+            tested_at: {type: string, format: date-time}
+            ok: {type: boolean}
+            tables_checked: {type: integer}
+            table_mismatches: {type: array, items: {type: object}}
+            objects_checked: {type: integer}
+            object_mismatches: {type: array, items: {type: object}}
+            audit_chain_ok: {type: [boolean, 'null']}
 
     RetentionDryRun:
       type: object

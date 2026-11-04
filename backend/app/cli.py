@@ -44,6 +44,11 @@ def main(argv: list[str] | None = None) -> int:
     hw.add_argument("--status", default="WARNING", choices=["OK", "WARNING", "CRITICAL"])
     hw.add_argument("--value", type=float, default=None)
     hw.add_argument("--unit", default=None)
+    sub.add_parser("backup", help="계층형 백업 한 회차 (08번 요구사항 6, ADR-0021)")
+    rt = sub.add_parser("restore-test", help="최근 백업을 임시 DB·위치에 복원해 행 수·해시 대조 (T10-a)")
+    rt.add_argument("--run", default=None, help="백업 회차 ID (기본: 최근 성공)")
+    rt.add_argument("--sample", type=int, default=None, help="객체는 앞에서 N개만 (기본: 전부)")
+    rt.add_argument("--out", default=None, help="결과 JSON 파일")
     args = parser.parse_args(argv)
 
     settings = get_settings()
@@ -79,6 +84,30 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "set-mapping":
         return _set_mapping(c, args.device_id, args.mapping_file)
+    if args.cmd == "backup":
+        import json
+
+        from app.db.models import BackupRun
+        from app.services import backup
+
+        rid = backup.run(c)
+        with c.sessionmaker() as db:
+            r = db.get(BackupRun, rid)
+            print(json.dumps(backup.run_view(r), ensure_ascii=False, indent=1) if r else rid)
+            return 0 if r is not None and r.status == "SUCCEEDED" else 1
+    if args.cmd == "restore-test":
+        import json
+        from pathlib import Path
+
+        from app.services import backup
+
+        rtr = backup.restore_test(c, args.run, args.sample)
+        text = json.dumps(rtr, ensure_ascii=False, indent=1)
+        if args.out:
+            Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.out).write_text(text, encoding="utf-8")
+        print(text)
+        return 0 if rtr["ok"] else 1
     if args.cmd == "verify-integrity":
         from app.services.integrity import anchor_previous_days, verify_integrity
 

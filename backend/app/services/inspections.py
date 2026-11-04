@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import (
     Asset,
+    BackupRun,
     DailyTask,
     HardwareSignalState,
     Incident,
@@ -48,6 +49,21 @@ def _hardware(db: Session, kinds: tuple[str, ...] | None = None) -> tuple[str, d
     return ("FAIL" if bad else "PASS"), {"signals": len(rows), "not_ok": bad[:20]}
 
 
+def _backup_check(c: Container, db: Session, now: datetime) -> tuple[str, dict[str, Any]]:
+    """D_BACKUP: 최근 백업 회차 (08번 요구사항 6.3, ADR-0021)."""
+    last = db.execute(select(BackupRun).order_by(BackupRun.started_at.desc()).limit(1)).scalar_one_or_none()
+    if last is None:
+        if not c.settings.backup_enabled:
+            return "AUTO_UNAVAILABLE", {"reason": "정기 백업이 꺼져 있습니다 (BACKUP_ENABLED=false)"}
+        return "FAIL", {"reason": "백업 기록이 없습니다"}
+    late = now - last.started_at > timedelta(hours=2 * c.settings.backup_interval_h)
+    rt = last.restore_test or {}
+    detail = {"backup_run_id": last.backup_run_id, "status": last.status, "started_at": iso(last.started_at),
+              "object_count": last.object_count, "failed_objects": len(last.failed_objects or []),
+              "restore_test_ok": rt.get("ok"), "restore_tested_at": rt.get("tested_at")}
+    return ("PASS" if last.status == "SUCCEEDED" and not late else "FAIL"), detail
+
+
 def auto_fill(c: Container, db: Session, cycle: str, now: datetime) -> dict[str, tuple[str, dict[str, Any]]]:
     """자동 확인 가능한 항목의 결과 (요구사항 6.4)."""
     since = now - timedelta(hours=24)
@@ -77,7 +93,7 @@ def auto_fill(c: Container, db: Session, cycle: str, now: datetime) -> dict[str,
         out["D_STORAGE"] = ("FAIL" if top >= 90 else "PASS",
                             {"max_usage_pct": top, "orgs_over_80": [o for o, p in usage if p >= 80]})
     if "D_BACKUP" in codes:
-        out["D_BACKUP"] = ("AUTO_UNAVAILABLE", {"reason": "백업 기능이 아직 없습니다 (08번 요구사항 6 미완료)"})
+        out["D_BACKUP"] = _backup_check(c, db, now)
     if "D_HARDWARE" in codes:
         out["D_HARDWARE"] = _hardware(db)
     if "W_SMART" in codes:

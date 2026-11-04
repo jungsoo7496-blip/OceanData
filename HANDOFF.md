@@ -1,7 +1,40 @@
 # 인수인계 (클라우드 → 로컬)
 
 이 파일은 클라우드 세션에서 만든 작업을 로컬에서 이어가기 위한 안내다. 작업이 진행될 때마다 갱신한다.
-최종 갱신: 2026-11-04 (17번 수용시험·릴리스 게이트까지)
+최종 갱신: 2026-11-04 (클라우드 세션 종료 — 17번 + 후속 T06-b·T17-b·T10까지)
+
+## 0. 남은 일 (우선순위 순) — 로컬에서 여기부터
+**바로 확인할 것 (클라우드에서 못 함)**
+1. 마지막 커밋(백업) 뒤 전체 시험을 다시 돌리지 못했다 → `make test-integration`, `make test-acceptance`, `make agent-test`. 관련 시험 112건은 통과.
+2. GitHub Actions(ci·security) 결과 확인 — 클라우드에서는 gh 토큰이 없어 한 번도 못 봤다. 실패하면 고친다 (T01-h).
+3. API 이미지에 pg_dump 16이 없다 → `make backup`·`make restore-test`가 컨테이너에서 실패한다. Dockerfile에 PGDG `postgresql-client-16` 추가(또는 `PG_DUMP_BIN`) 후 확인.
+4. 라이선스 예외 승인 대기: ADR-0011(PSF-2.0), ADR-0018(Pillow·Pyphen) — 사람 승인.
+
+**미구현 (수용시험 NOT_IMPLEMENTED)**
+5. T02-g 웹 업로드 재개 자동 E2E (Playwright → 수용 보고 JSON Lines 연결, 17번 tasks 4b)
+6. T03-b 에이전트 강제 종료·72시간 오프라인 재개 시험 (06번)
+7. 15번 엣지 수집기(T02-e·f) / 16번 NGSI-LD(T19) — 조건부, 하드웨어·요구 확정 후
+
+**사람·현장 입력이 필요한 것 (NEEDS_INPUT·HARDWARE)**
+8. T11-f 실제 관리기관 보고서 양식(HWPX) 확보 → 템플릿 등록
+9. T13-a 외부 개발자 시험, T14 스테이징 Runbook 수행 기록(`docs/runbook/records/`)
+10. T03-a 10GB 단절·재개, T12-b 부하 실측, T18 확장 실측 — 운영 하드웨어에서 (`loadtest/`)
+
+**스펙별 남은 [ ] (자세히는 각 tasks.md)**
+- 02: Keycloak MFA 단계 인증, 긴급 열람(break-glass), 구성원 관리
+- 03: 약정·연계 카드 등록 API (지금은 CLI), 기관 하위코드 추가 API, 품질 재평가 명령
+- 04: 웹훅, 악성코드 검사 어댑터, 예제 클라이언트·Schemathesis
+- 05: Model_Registry 등록 API, GPU 인코더 실측, 대용량 임시 디스크 정책
+- 06: Windows DPAPI, 자동 업데이트, oapi-codegen 타입 생성, 실제 PC 서비스 설치 확인
+- 08: 백업 도구 PoC → ADR-0021 갱신, PITR·암호화·회차 정리, ROTATING 장비 백업 신청(6.4), Hot/Warm, 용량 예측, SSE, 월간 사용량 리포트
+- 09: 온보딩 마법사, 회차 타임라인, 클립 내보내기, 운영 콘솔 편집, 접근성 CI
+- 10: 실제 HWPX 양식, 정답 데이터로 '검증 필요' 해제
+- 11: 운영 메신저 연동, 실제 하드웨어 신호 어댑터
+- 12: 실제 기관 Open API 어댑터 (명세·이용조건 확인 후)
+- 13: 대용량 데이터셋 버전 작업 큐 처리, 썸네일 샘플
+- 14: 실제 탐지·임베딩 모델 선정(라이선스 검토) 후 교체 (ADR-0020), 날씨 태그
+
+**사람이 결정할 것:** 5장 표 그대로 (운영 메신저, 모델, 백업 도구, 보고서 양식 등).
 
 ## 1. 지금 상태 한눈에
 | 스펙 | 상태 | 남은 것 (자세히는 각 tasks.md) |
@@ -14,7 +47,7 @@
 | 06 동기화 에이전트 | 핵심 완료 | Windows DPAPI, 자동 업데이트, 순환 삭제(15번과), oapi-codegen 타입 생성. 서비스 설치는 실제 PC에서 확인 필요 |
 | 05 처리 파이프라인 | 핵심 완료 | 대용량 임시 디스크 정책, Model_Registry 등록 API(14번과), GPU 인코더 실측 |
 | 07 센서·이벤트 | 핵심 완료 | 겹침 자산 조회 API, MQTT 계정 보안 저장, 하위코드 등록 API |
-| 08 저장·보존 | 일부 완료 | 보존·법적 보류·삭제 증명·쿼터 알림·사용량·일일 대조 완료. 백업·복원 시험(PoC 후)·Hot/Warm·용량 예측·SSE·월간 리포트 남음 |
+| 08 저장·보존 | 핵심 완료 | 보존·법적 보류·삭제 증명·쿼터 알림·사용량·일일 대조·계층형 백업·복원 시험(T10, ADR-0021 기준선) 완료. 백업 도구 PoC(pgBackRest·rclone·restic)·PITR·암호화·Hot/Warm·용량 예측·SSE·월간 리포트·ROTATING 장비 백업 신청 남음 |
 | 09 포털 | 핵심 화면 완료 | 온보딩 마법사, 회차 타임라인, 클립 내보내기, 운영 콘솔 편집, 접근성 CI |
 | 11 수집 모니터링 | 핵심 완료 | 감시 규칙 13종·장애 기록·메일/웹훅 알림·정기 점검·하드웨어 모의 신호·T07 완료. Open API 실패 신호원(12번), 운영 메신저, 실제 하드웨어 어댑터 남음 |
 | 10 증빙·보고서 | 핵심 완료 | 회차 기록 버전·증빙 승인·지표 4종·양식·보고서 초안/승인/제출·PDF·XLSX·HWPX·근거 손상·역추적·T11 완료. 실제 관리기관 양식(T11-f), 정답 데이터로 검증 필요 해제(14번) 남음 |
@@ -26,7 +59,7 @@
 
 **시험:** 백엔드 179건(단위·속성 기반·통합·계약·수용 T01·T05·T06-d·T07·T08·T09·T11·T12·T15·T16·T17) + 에이전트(Go) 8개 패키지 통과 (수용 T02-a·b·c 연결) (MQTT 시험은 MQTT_TEST_BROKER 필요) (`cd backend && pytest`).
 수집 시험은 moto S3 서버와 실제 SeaweedFS(`TEST_S3_ENDPOINT`) 양쪽에서 통과.
-**수용시험 (2026-11-04):** PASS 65 · NOT_IMPLEMENTED 12 · NEEDS_INPUT 5 · NEEDS_HARDWARE 2 — 세부 ID별 표는 `docs/ACCEPTANCE-STATUS.md`. M1 릴리스 게이트 통과 (`make release-gate MILESTONE=M1`).
+**수용시험 (2026-11-04):** PASS 69 · NOT_IMPLEMENTED 8 · NEEDS_INPUT 5 · NEEDS_HARDWARE 2 (T06-b·T17-b·T10-a·b 추가 후 추정 — 마지막 커밋 뒤 `make test-acceptance`를 다시 돌리지 못했다) — 세부 ID별 표는 `docs/ACCEPTANCE-STATUS.md`. M1 릴리스 게이트 통과 (`make release-gate MILESTONE=M1`).
 **개발 환경:** `make up` 7개 서비스 healthy. 실제 Keycloak 로그인 → 업로드 생성 → localhost:8333 사전 서명 URL로 파트 전송 → 워커 무결성 검증 → READY_PRIVATE → 영수증까지 확인.
 
 ## 2. 로컬에서 시작하기
@@ -42,6 +75,7 @@ make seed                     # 시험 기관 5·사용자 9·사업 2·장비 5
 make test-integration         # 통합 시험 (make up의 PostgreSQL 사용)
 make test-acceptance          # 수용시험 → var/acceptance.{json,md} (세부 ID별)
 make release-gate MILESTONE=M1   # 계약·추적성·비밀값·라이선스·시험·마일스톤 케이스
+make backup && make restore-test # 계층형 백업·복원 시험 (pg_dump 16 필요)
 ```
 
 - API 문서: http://localhost:8000/docs · 웹 포털: http://localhost:5173 (member-a/dev-password로 로그인) · 포털 E2E: `cd web && node e2e/portal.mjs` · Keycloak: http://localhost:8080 (admin / .env의 KEYCLOAK_ADMIN_PASSWORD)
@@ -109,6 +143,7 @@ tools/         validate_contracts.py, check_traceability.py, check_licenses.py, 
 - ADR-0017 수집 경보 상태·장애 자동 해결·ACK 시 재알림 중지·알림 수신 주소(`users.contact_email`)
 - ADR-0020 비식별·태깅·검색 기준선(모의 탐지기·밝기 주야·태그 어휘 임베딩), 모델은 포트 뒤 — 선정 후 교체
 - ADR-0019 공유 조건은 순수 함수 하나 + ORM 상향 가드, 데이터셋 항목 표·버전 등급은 현재 항목 등급으로
+- ADR-0021 계층형 백업·복원 시험 기준선(대상 술어·증분 복사·스냅샷 행 수·pg_dump), 도구는 PoC 후 교체
 - ADR-0018 보고서 내보내기: PDF(WeasyPrint)·XLSX(openpyxl)·HWPX(양식 XML 치환), Pillow·Pyphen 예외 승인 대기
 
 ## 7. 알아 둘 점

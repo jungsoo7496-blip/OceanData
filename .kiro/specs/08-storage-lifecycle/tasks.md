@@ -12,7 +12,8 @@
 - [x] 10. 법적 보류 설정·해제(운영자·사유·감사)·삭제 제외 — 요구사항 4.1, 4.2
 - [x] 11. 자산·회차 삭제·파생본 포함·삭제 증명·백업 소멸일 — 요구사항 5.1, 5.2 · 시험 `test_asset_deletion_*`, `test_session_deletion_and_cross_org`
 - [ ] 12. GRANTED 데이터셋 포함 시 409·증빙 인용 영향 목록과 근거 손상 표시 — 요구사항 5.3, 5.4 (증빙·보고서 인용은 10번에서 완료: `retention.affected_by()` → 409·영향 목록, 근거 손상 표시. 데이터셋은 13번)
-- [ ] 13. 계층형 백업 작업(DB·감사·EVIDENCE·DEID·DATASET·PROTECTED·설정 → 별도 S3) — 요구사항 6.1~6.3, 6.5 (OSS PoC 3순위: pgBackRest + rclone (+restic) 후 결정)
+- [x] 13. 계층형 백업 작업(DB 스냅샷 pg_dump·EVIDENCE·DEID·DATASET·PROTECTED → 별도 S3 증분·해시 확인, 결과 기록·실패 알림·D_BACKUP) — 요구사항 6.1~6.3, 6.5 · ADR-0021 · 시험 `test_t10_tiered_backup_and_restore`. 운영 도구(pgBackRest·rclone·restic)는 PoC 후 교체, PITR·암호화·오래된 회차 정리 없음
+- [x] 13b. `make restore-test`: 임시 DB·임시 위치 복원 → 행 수·감사 체인·sha256 대조 — 요구사항 7.1 (T10-a)
 - [ ] 14. ROTATING 등 원천 장비 자산 백업 신청 → PROTECTED·예상 용량·사용량 반영 — 요구사항 6.4 (org_quotas.backup_bytes 항목은 있음)
 - [ ] 15. `make restore-test`·복원 Runbook — 요구사항 7.1, 7.2 (T10, 13번 작업 이후)
 - [ ] 16. 용량 예측(일별 추세·70% 도달 예상일·리드타임 알림) — 요구사항 8.1, 8.2

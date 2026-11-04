@@ -107,6 +107,10 @@
       "type": "string",
       "pattern": "^inc_[0-9A-HJKMNP-TV-Z]{26}$"
     },
+    "backup_run_id": {
+      "type": "string",
+      "pattern": "^bkr_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
     "inspection_id": {
       "type": "string",
       "pattern": "^isp_[0-9A-HJKMNP-TV-Z]{26}$"

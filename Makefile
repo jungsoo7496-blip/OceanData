@@ -9,7 +9,7 @@ TEST_DATABASE_URL ?= postgresql+pg8000://marine_owner:change-me-owner@127.0.0.1:
 .PHONY: venv up down logs migrate seed verify-audit sample-video test test-unit test-integration test-acceptance \
         lint typecheck security license-check secrets-check web-check contracts-check traceability \
         traceability-write ci agent-build agent-test bench verify-integrity sample-observations \
-        release-gate release-notes sbom vuln-scan loadtest
+        release-gate release-notes sbom vuln-scan loadtest backup restore-test
 
 venv:
 	cd backend && uv venv -q .venv && uv pip install -q -p .venv -e ".[dev]" -r ../tools/requirements.txt
@@ -111,6 +111,13 @@ agent-test:
 
 bench:
 	cd backend && .venv/bin/python -m app.bench --out ../var/bench.json
+
+# 계층형 백업·복원 시험 (08번, ADR-0021). pg_dump·pg_restore는 DB 서버와 같은 주버전이어야 한다
+backup:
+	$(COMPOSE) run --rm migrate python -m app.cli backup
+
+restore-test:
+	$(COMPOSE) run --rm migrate python -m app.cli restore-test --out /tmp/restore-test.json
 
 verify-integrity:
 	$(COMPOSE) run --rm migrate python -m app.cli verify-integrity

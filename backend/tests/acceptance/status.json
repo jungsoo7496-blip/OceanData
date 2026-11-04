@@ -19,14 +19,6 @@
     "status": "NOT_IMPLEMENTED",
     "reason": "72시간 오프라인은 에이전트 Go 시험(06번) 축소판만, 엣지는 15번"
   },
-  "T10-a": {
-    "status": "NOT_IMPLEMENTED",
-    "reason": "08번 백업·복원 (PoC 후)"
-  },
-  "T10-b": {
-    "status": "NOT_IMPLEMENTED",
-    "reason": "08번 백업 대상 작업 (PoC 후)"
-  },
   "T11-f": {
     "status": "NEEDS_INPUT",
     "reason": "실제 관리기관 보고서 양식(HWPX) 확보 후"

@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import client_ip, container, get_db, load_scoped, require
 from app.container import Container
-from app.db.models import Asset, DeletionCertificate, OrgQuota, TrialSession
+from app.db.models import Asset, BackupRun, DeletionCertificate, OrgQuota, TrialSession
 from app.domain.principal import Principal
 from app.errors import ProblemError
-from app.services import retention
+from app.services import backup, retention
 
 router = APIRouter()
 
@@ -28,6 +28,24 @@ def get_usage(db: Session = Depends(get_db), c: Container = Depends(container),
         rows = [OrgQuota(organization_id=p.organization_id, quota_bytes=c.settings.default_org_quota_bytes,
                          used_bytes=0, quarantine_bytes=0, reserved_bytes=0, backup_bytes=0)]
     return {"items": [retention.usage_view(q) for q in rows]}
+
+
+@router.get("/v1/backup-runs", tags=["status"])
+def list_backup_runs(limit: int = Query(20, ge=1, le=100), db: Session = Depends(get_db),
+                     _: Principal = Depends(require("backup:read"))) -> dict:
+    rows = db.execute(select(BackupRun).order_by(BackupRun.started_at.desc()).limit(limit)).scalars()
+    return {"items": [backup.run_view(r) for r in rows]}
+
+
+@router.post("/v1/backup-runs", tags=["status"], status_code=202)
+def start_backup_run(request: Request, db: Session = Depends(get_db), c: Container = Depends(container),
+                     p: Principal = Depends(require("backup:run"))) -> dict:
+    """지금 백업 (요구사항 6.1). 실행 중이면 409. 작업은 워커가 한다."""
+    if db.execute(select(BackupRun.backup_run_id).where(BackupRun.status == "RUNNING")).first():
+        raise ProblemError("CONFLICT", detail="백업이 이미 실행 중입니다")
+    job_id = c.queue.enqueue("backup", {"requested_by": p.principal_id}, dedupe_key="backup")
+    c.audit.record("BACKUP_REQUESTED", principal=p, target_type="Job", target_id=job_id, source_ip=client_ip(request))
+    return {"job_id": job_id}
 
 
 @router.post("/v1/retention/dry-run", tags=["status"])

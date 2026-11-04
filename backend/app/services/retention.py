@@ -26,6 +26,7 @@ from app.db.models import (
 )
 from app.domain.ids import new_id
 from app.ports.notifier import Notification
+from app.services.backup import is_backup_target
 from app.timefmt import iso
 
 log = logging.getLogger(__name__)
@@ -162,7 +163,7 @@ def delete_assets(c: Container, db: Session, *, organization_id: str, assets: li
                     q.quarantine_bytes = max(0, q.quarantine_bytes - a.byte_size)
                 else:
                     q.used_bytes = max(0, q.used_bytes - a.byte_size)
-        if a.backup_class == "PROTECTED" or a.storage_zone in ("EVIDENCE", "DATASET") or a.variant == "DEID":
+        if is_backup_target(a):
             backed_up = True
         a.deleted_at, a.deletion_certificate_id, a.storage_key, a.updated_at = now, cert_id, None, now
     cert = DeletionCertificate(

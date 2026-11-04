@@ -138,6 +138,17 @@ def _env_join(c: Container, job: Job) -> Any:
     return "OK" if env is not None and env["observations"] else "NO_MATCH"
 
 
+def _backup(c: Container, job: Job) -> Any:
+    from app.services import backup
+
+    try:
+        rid = backup.run(c)
+    except backup.BackupBusy as exc:
+        return {"status": "SKIPPED", "running": str(exc)}
+    return {"backup_run_id": rid}
+
+
+register("backup", _backup)  # 08번 계층형 백업 (ADR-0021)
 register("collect_source", _collect_source)  # 12번 (실패는 큐의 지수 백오프)
 register("env_join", _env_join)  # 12번  # 14번 (PROCESSING_STEPS에 TAG가 있을 때 영상 처리 뒤)
 
@@ -209,6 +220,12 @@ def maintenance(c: Container) -> None:
         changed = datasets.expire(c, db)
         if any(changed.values()):
             log.info("grants_expired", extra=changed)
+    # 정기 백업 (08번 요구사항 6.1): BACKUP_ENABLED일 때 BACKUP_INTERVAL_H마다
+    from app.services import backup
+
+    with c.sessionmaker.begin() as db:
+        if backup.due(c, db):
+            c.queue.enqueue("backup", {"requested_by": "schedule"}, dedupe_key="backup")
     # 하루 한 번: 기한 지난 정기 점검 알림 (11번 요구사항 6.3)
     from app.services import inspections
 
