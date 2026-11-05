@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import delete, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -388,7 +388,11 @@ class IngestService:
                 # 바이너리 없는 C0 자산으로 되돌린다 (domain.md 5장 표에 없는 역전이 — 확인 필요, tasks 참고)
                 asset.ingest_status, asset.has_binary, asset.variant = "READY_PRIVATE", False, "ORIGINAL"
             else:
-                # 받은 것이 없는 새 자산 기록은 지운다. 같은 파일을 다시 올릴 수 있게 한다
+                # 받은 것이 없는 새 자산 기록은 지운다. 같은 파일을 다시 올릴 수 있게 한다.
+                # parent_ref로 만든 계보 행(이 자산이 파생본이거나, 진행 중인 다른 업로드가 이 자산을 원본으로
+                # 지목한 경우)이 남아 있으면 외래 키 때문에 지울 수 없으므로 먼저 지운다 (받은 바이트가 없는 계보)
+                self.db.execute(delete(AssetLineage).where(or_(AssetLineage.child_asset_id == asset.asset_id,
+                                                               AssetLineage.parent_asset_id == asset.asset_id)))
                 self.db.delete(asset)
         self.db.flush()
 
@@ -433,14 +437,27 @@ class IngestService:
                 "pending_parts": self._part_urls(up, pending), "expires_at": iso(up.expires_at)}
 
     def sweep_expired(self, limit: int = 100) -> int:
-        """만료된 업로드 세션 정리: 멀티파트 정리·예약 해제 (요구사항 3.3). 워커가 주기적으로 부른다."""
+        """만료된 업로드 세션 정리: 멀티파트 정리·예약 해제 (요구사항 3.3). 워커가 주기적으로 부른다.
+
+        세션마다 SAVEPOINT 안에서 정리한다. 한 행이 실패해도(기록하고 넘어간다) 같은 묶음의 다른 기관 세션
+        정리와 그 뒤 주기 작업이 막히지 않는다. 돌려주는 값은 정리에 성공한 세션 수다.
+        """
         rows = self.db.execute(select(Upload).where(Upload.status == "UPLOADING",
                                                     Upload.expires_at <= self.c.clock.now())
                                .order_by(Upload.expires_at).limit(limit).with_for_update(skip_locked=True)) \
             .scalars().all()
+        done = 0
         for up in rows:
-            self._release(up, "EXPIRED")
-        return len(rows)
+            upload_id = up.upload_id
+            try:
+                with self.db.begin_nested():
+                    self._release(up, "EXPIRED")
+            except Exception as exc:  # noqa: BLE001 - 한 세션의 실패가 묶음 전체를 막지 않게 한다
+                log.error("expired_upload_release_failed", extra={"upload_id": upload_id,
+                                                                  "error_type": type(exc).__name__})
+                continue
+            done += 1
+        return done
 
     def abort(self, up: Upload) -> None:
         if up.status != "UPLOADING":
