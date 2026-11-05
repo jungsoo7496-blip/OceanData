@@ -7966,6 +7966,8 @@ export interface operations {
         parameters: {
             query: {
                 source_system_id?: components["schemas"]["device_id"];
+                /** @description 이 회차로 표시된 관측값만 (07번 배치 제출의 session_id). 회차 없이 들어온 관측값은 빠진다 — 시간 창 전체가 필요하면 쓰지 않는다 */
+                session_id?: components["schemas"]["session_id"];
                 metric?: components["schemas"]["metric_code"];
                 from: components["schemas"]["utc_datetime"];
                 to: components["schemas"]["utc_datetime"];

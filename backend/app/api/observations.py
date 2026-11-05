@@ -159,7 +159,7 @@ def _cursor_decode(cur: str) -> list[Any]:
 
 
 @router.get("/v1/observations", tags=["observations"])
-def list_observations(source_system_id: str | None = None, metric: str | None = None,
+def list_observations(source_system_id: str | None = None, metric: str | None = None, session_id: str | None = None,
                       from_: datetime = Query(alias="from"), to: datetime = Query(),
                       quality_flag: str | None = None, channel: str | None = None,
                       interval: str | None = Query(default=None, pattern=r"^PT[1-9][0-9]{0,5}[MH]$"),
@@ -170,6 +170,7 @@ def list_observations(source_system_id: str | None = None, metric: str | None = 
                                                         "message": "from < to, 시각은 UTC(Z)"}])
     conds = [_obs_scope(p), OBS.c.observed_at >= from_, OBS.c.observed_at < to]
     for col, val in ((OBS.c.source_system_id, source_system_id), (OBS.c.metric, metric),
+                     (OBS.c.session_id, session_id),  # 09번 요구사항 5.2: 회차로 표시된 관측값만
                      (OBS.c.quality_flag, quality_flag), (OBS.c.channel, channel)):
         if val is not None:
             conds.append(col == val)

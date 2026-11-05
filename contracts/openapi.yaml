@@ -2482,6 +2482,10 @@ paths:
         - name: source_system_id
           in: query
           schema: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+        - name: session_id
+          in: query
+          description: 이 회차로 표시된 관측값만 (07번 배치 제출의 session_id). 회차 없이 들어온 관측값은 빠진다 — 시간 창 전체가 필요하면 쓰지 않는다
+          schema: {$ref: './schemas/common.schema.json#/$defs/session_id'}
         - name: metric
           in: query
           schema: {$ref: './schemas/common.schema.json#/$defs/metric_code'}
