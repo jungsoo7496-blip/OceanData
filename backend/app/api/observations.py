@@ -162,7 +162,7 @@ def _cursor_decode(cur: str) -> list[Any]:
 def list_observations(source_system_id: str | None = None, metric: str | None = None,
                       from_: datetime = Query(alias="from"), to: datetime = Query(),
                       quality_flag: str | None = None, channel: str | None = None,
-                      interval: str | None = Query(default=None, pattern=r"^PT[0-9]+[MH]$"),
+                      interval: str | None = Query(default=None, pattern=r"^PT[1-9][0-9]{0,5}[MH]$"),
                       db: Session = Depends(get_db), p: Principal = Depends(require("observation:read")),
                       page: dict = Depends(page_params)) -> dict:
     if from_.tzinfo is None or to.tzinfo is None or to <= from_:
@@ -178,6 +178,9 @@ def list_observations(source_system_id: str | None = None, metric: str | None = 
             raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/query/metric", "code": "required",
                                                             "message": "집계에는 metric이 필요합니다"}])
         n, unit = int(interval[2:-1]), interval[-1]
+        if n > (525_600 if unit == "M" else 8_760):  # 1년 넘는 간격은 집계 의미가 없고 DB 간격 범위를 넘을 수 있다
+            raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/query/interval", "code": "range",
+                                                            "message": "집계 간격은 1분~1년입니다"}])
         step = f"{n} {'minutes' if unit == 'M' else 'hours'}"
         bucket = func.date_bin(text(f"interval '{step}'"), OBS.c.observed_at, from_).label("bucket")
         rows = db.execute(select(bucket, func.min(OBS.c.value), func.max(OBS.c.value), func.avg(OBS.c.value),

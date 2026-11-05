@@ -139,7 +139,7 @@ def install_error_handlers(app: FastAPI) -> None:
         if code in ("22021", "22P05"):
             return problem_response("VALIDATION_ERROR", request, errors=[{
                 "pointer": "", "code": "invalid_character", "message": "문자열에 쓸 수 없는 문자(NUL 등)가 있습니다"}])
-        if code in ("22003", "22007", "22008"):  # 숫자 범위 초과·시각 형식/범위 오류 (예: 32비트를 넘는 version)
+        if code in ("22003", "22007", "22008", "22015"):  # 숫자·시각·간격 범위 초과 (예: 32비트를 넘는 version)
             return problem_response("VALIDATION_ERROR", request, errors=[{
                 "pointer": "", "code": "out_of_range", "message": "숫자나 시각이 저장할 수 있는 범위를 벗어났습니다"}])
         raise exc

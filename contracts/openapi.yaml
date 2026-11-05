@@ -2502,7 +2502,7 @@ paths:
         - name: interval
           in: query
           description: 집계 간격 (예 PT10M). 결측은 평균에 넣지 않고 missing_count로 센다.
-          schema: {type: string, pattern: '^PT[0-9]+[MH]$'}
+          schema: {type: string, pattern: '^PT[1-9][0-9]{0,5}[MH]$', description: '집계 간격 1분~1년 (최대 PT525600M·PT8760H, 넘으면 400)'}
         - {$ref: '#/components/parameters/Cursor'}
         - {$ref: '#/components/parameters/Limit'}
       responses:

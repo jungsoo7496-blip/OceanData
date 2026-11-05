@@ -259,6 +259,10 @@ def test_fixed_full_exploration_findings(contract_env: ContractEnv) -> None:
     r = env.client.post("/v1/report-templates", headers=op, json={
         "code": "NULLCHK", "name": "null 검사", "sections": [{"kind": "TEXT", "title": "본문", "metrics": None}]})
     assert r.status_code == 400 and r.json()["errors"][0]["pointer"] == "/sections/0/metrics", r.text
+    for interval in ("PT95519096848682913101224M", "PT600000M", "PT9000H"):  # 깊은 탐색: 거대한 간격이 DB 범위를 넘어 500
+        r = env.client.get(f"/v1/observations?metric=sea_water_temperature&interval={interval}"
+                           "&from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z", headers=env.headers)
+        assert r.status_code == 400 and r.json()["errors"][0]["pointer"] == "/query/interval", (interval, r.text)
     for path in ("/v1/datasets?limit=abc", "/v1/datasets?limit=0", "/v1/sessions?limit=5.0"):
         r = env.client.get(path, headers=env.headers)
         assert r.status_code in (400, 403), (path, r.text)
