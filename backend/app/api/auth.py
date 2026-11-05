@@ -148,10 +148,18 @@ def revoke_device_credentials(device_id: str, request: Request, db: Session = De
                                                           DeviceCredential.status == "ACTIVE")).scalars():
         cred.status, cred.revoked_at = "REVOKED", now
         n += 1
+    # 폐기 전에 발급했지만 쓰지 않은 등록 코드도 무효로 한다 — 장비가 재등록 대기로 돌아가므로 남은 코드(최대 24시간)로
+    # 다시 등록되면 폐기가 무력해진다 (02번 요구사항 5.4). 재등록은 폐기 뒤 새로 발급한 코드로만.
+    codes = 0
+    for rec in db.execute(select(EnrollmentCode).where(EnrollmentCode.device_id == device.device_id,
+                                                       EnrollmentCode.used_at.is_(None),
+                                                       EnrollmentCode.expires_at > now)).scalars():
+        rec.expires_at = now
+        codes += 1
     device.status = "PENDING_ENROLLMENT"
     c.audit.record("DEVICE_CREDENTIAL_REVOKED", principal=p, organization_id=device.organization_id,
                    target_type="Device", target_id=device.device_id, source_ip=client_ip(request),
-                   details={"revoked": n})
+                   details={"revoked": n, "enrollment_codes_invalidated": codes})
     return {"device_id": device.device_id, "revoked_credentials": n}
 
 

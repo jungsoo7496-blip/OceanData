@@ -100,6 +100,25 @@ def test_device_enrollment_token_and_revocation(ctx) -> None:
     assert _token(ctx, e["client_id"], e["client_secret"]).status_code == 401
 
 
+def test_revocation_invalidates_unused_enrollment_codes(ctx) -> None:
+    """폐기 전에 발급해 두고 쓰지 않은 등록 코드로는 폐기된 수집기를 다시 등록할 수 없다 (02번 요구사항 5.4)."""
+    admin = ctx.as_user(101, mfa=True)
+    _enroll(ctx)
+    spare = ctx.client.post(f"/v1/devices/{DEV_A_COLLECTOR}/enrollment-codes", headers=admin).json()["code"]
+    r = ctx.client.post(f"/v1/devices/{DEV_A_COLLECTOR}/credentials/revoke", headers=admin)
+    assert r.status_code == 200 and r.json()["revoked_credentials"] == 1
+    r = ctx.client.post("/v1/agents/enroll", json={"enrollment_code": spare, "agent_version": "0.1.0", "os": "linux"})
+    assert r.status_code == 410 and r.json()["reason"] == "EXPIRED", r.text
+    with ctx.c.engine.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM device_credentials WHERE status = 'ACTIVE'")).scalar_one() == 0
+        details = conn.execute(text("SELECT details FROM audit_log WHERE action = 'DEVICE_CREDENTIAL_REVOKED'")) \
+            .scalar_one()
+    assert details["enrollment_codes_invalidated"] == 1
+    # 폐기 뒤 새로 발급한 코드로는 재등록된다
+    fresh = _enroll(ctx)
+    assert fresh["device_id"] == DEV_A_COLLECTOR
+
+
 def test_enrollment_code_only_for_own_collectors(ctx) -> None:
     h = ctx.as_user(101, mfa=True)
     assert ctx.client.post(f"/v1/devices/{DEV_B_COLLECTOR}/enrollment-codes", headers=h).status_code == 404
