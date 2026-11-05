@@ -92,7 +92,7 @@ def capacity_forecast(db: Session = Depends(get_db), c: Container = Depends(cont
 
 
 @router.get("/v1/usage-reports", tags=["status"])
-def usage_report(month: str = Query(pattern=r"^[0-9]{4}-(0[1-9]|1[0-2])$"), db: Session = Depends(get_db),
+def usage_report(month: str = Query(pattern=r"^(19|20)[0-9]{2}-(0[1-9]|1[0-2])$"), db: Session = Depends(get_db),
                  p: Principal = Depends(require("usage_report:read"))) -> dict:
     """기관별 월간 자원 사용량 (08번 요구사항 10). 기관 범위는 인증 정보로만: 운영자는 전체, ORG_ADMIN은 자기 기관."""
     from app.services import capacity

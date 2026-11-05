@@ -7,7 +7,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, Header, Query, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -264,6 +264,14 @@ class TemplateSection(BaseModel):
     text: str | None = Field(None, max_length=10000)
     fields: list[TemplateField] | None = None
     metrics: list[Annotated[str, Field(pattern=CODE)]] | None = None
+
+    @field_validator("text", "fields", "metrics", mode="before")
+    @classmethod
+    def _no_explicit_null(cls, v: Any) -> Any:
+        # 계약은 이 항목들을 null 없이 정의한다 — 쓰지 않을 때는 빼고 보낸다 (전체 작업 탐색, ADR-0035)
+        if v is None:
+            raise ValueError("null 대신 항목을 빼고 보내세요")
+        return v
 
 
 class TemplateCreate(BaseModel):

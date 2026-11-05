@@ -92,7 +92,7 @@ def test_batch_errors_limit_scope_and_idempotency(ctx) -> None:
     assert ctx.client.post("/v1/observations", json=other, headers=h).status_code == 404  # T01
     assert ctx.client.post("/v1/observations", json={**batch(other["observations"]), "session_id": SES_B},
                            headers=h).status_code == 404
-    k = {**h, "Idempotency-Key": "obs-1"}
+    k = {**h, "Idempotency-Key": "obs-batch-1"}  # 계약: 8~128자
     b = batch([{"metric": "air_pressure", "observed_at": z(T), "value": 1012.3, "unit": "hPa", "quality_flag": "GOOD"}])
     first = ctx.client.post("/v1/observations", json=b, headers=k).json()
     again = ctx.client.post("/v1/observations", json=b, headers=k)

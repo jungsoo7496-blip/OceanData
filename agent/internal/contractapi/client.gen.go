@@ -2482,6 +2482,11 @@ type GetAssetReceiptResponse401Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
+// GetAssetReceiptResponse403Headers the declared response headers of an HTTP 403 response for GetAssetReceipt
+type GetAssetReceiptResponse403Headers struct {
+	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
+}
+
 // GetAssetReceiptResponse404Headers the declared response headers of an HTTP 404 response for GetAssetReceipt
 type GetAssetReceiptResponse404Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
@@ -2500,12 +2505,16 @@ type GetAssetReceiptResponse struct {
 	JSON200 *Receipt
 	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
 	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
 	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
 	ApplicationproblemJSON404 *NotFound
 	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
 	ApplicationproblemJSON429 *TooManyRequests
 	// Headers401 the parsed response headers for an HTTP 401 response
 	Headers401 *GetAssetReceiptResponse401Headers
+	// Headers403 the parsed response headers for an HTTP 403 response
+	Headers403 *GetAssetReceiptResponse403Headers
 	// Headers404 the parsed response headers for an HTTP 404 response
 	Headers404 *GetAssetReceiptResponse404Headers
 	// Headers429 the parsed response headers for an HTTP 429 response
@@ -2520,6 +2529,11 @@ func (r GetAssetReceiptResponse) GetJSON200() *Receipt {
 // GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
 func (r GetAssetReceiptResponse) GetApplicationproblemJSON401() *Unauthorized {
 	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r GetAssetReceiptResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
 }
 
 // GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
@@ -2571,6 +2585,11 @@ type IssueTokenResponse401Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
+// IssueTokenResponse403Headers the declared response headers of an HTTP 403 response for IssueToken
+type IssueTokenResponse403Headers struct {
+	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
+}
+
 // IssueTokenResponse429Headers the declared response headers of an HTTP 429 response for IssueToken
 type IssueTokenResponse429Headers struct {
 	RetryAfter *int
@@ -2586,12 +2605,16 @@ type IssueTokenResponse struct {
 	ApplicationproblemJSON400 *BadRequest
 	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
 	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
 	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
 	ApplicationproblemJSON429 *TooManyRequests
 	// Headers400 the parsed response headers for an HTTP 400 response
 	Headers400 *IssueTokenResponse400Headers
 	// Headers401 the parsed response headers for an HTTP 401 response
 	Headers401 *IssueTokenResponse401Headers
+	// Headers403 the parsed response headers for an HTTP 403 response
+	Headers403 *IssueTokenResponse403Headers
 	// Headers429 the parsed response headers for an HTTP 429 response
 	Headers429 *IssueTokenResponse429Headers
 }
@@ -2609,6 +2632,11 @@ func (r IssueTokenResponse) GetApplicationproblemJSON400() *BadRequest {
 // GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
 func (r IssueTokenResponse) GetApplicationproblemJSON401() *Unauthorized {
 	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r IssueTokenResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
 }
 
 // GetApplicationproblemJSON429 returns the response for an HTTP 429 `application/problem+json` response
@@ -2650,6 +2678,11 @@ type GetObservationMappingResponse401Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
+// GetObservationMappingResponse403Headers the declared response headers of an HTTP 403 response for GetObservationMapping
+type GetObservationMappingResponse403Headers struct {
+	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
+}
+
 // GetObservationMappingResponse404Headers the declared response headers of an HTTP 404 response for GetObservationMapping
 type GetObservationMappingResponse404Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
@@ -2668,12 +2701,16 @@ type GetObservationMappingResponse struct {
 	JSON200 *ObservationMappingRecord
 	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
 	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
 	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
 	ApplicationproblemJSON404 *NotFound
 	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
 	ApplicationproblemJSON429 *TooManyRequests
 	// Headers401 the parsed response headers for an HTTP 401 response
 	Headers401 *GetObservationMappingResponse401Headers
+	// Headers403 the parsed response headers for an HTTP 403 response
+	Headers403 *GetObservationMappingResponse403Headers
 	// Headers404 the parsed response headers for an HTTP 404 response
 	Headers404 *GetObservationMappingResponse404Headers
 	// Headers429 the parsed response headers for an HTTP 429 response
@@ -2688,6 +2725,11 @@ func (r GetObservationMappingResponse) GetJSON200() *ObservationMappingRecord {
 // GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
 func (r GetObservationMappingResponse) GetApplicationproblemJSON401() *Unauthorized {
 	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r GetObservationMappingResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
 }
 
 // GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
@@ -2734,6 +2776,11 @@ type GetDevicePolicyResponse401Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
+// GetDevicePolicyResponse403Headers the declared response headers of an HTTP 403 response for GetDevicePolicy
+type GetDevicePolicyResponse403Headers struct {
+	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
+}
+
 // GetDevicePolicyResponse404Headers the declared response headers of an HTTP 404 response for GetDevicePolicy
 type GetDevicePolicyResponse404Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
@@ -2752,12 +2799,16 @@ type GetDevicePolicyResponse struct {
 	JSON200 *ExternalDevicePolicySchemaD0320935
 	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
 	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
 	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
 	ApplicationproblemJSON404 *NotFound
 	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
 	ApplicationproblemJSON429 *TooManyRequests
 	// Headers401 the parsed response headers for an HTTP 401 response
 	Headers401 *GetDevicePolicyResponse401Headers
+	// Headers403 the parsed response headers for an HTTP 403 response
+	Headers403 *GetDevicePolicyResponse403Headers
 	// Headers404 the parsed response headers for an HTTP 404 response
 	Headers404 *GetDevicePolicyResponse404Headers
 	// Headers429 the parsed response headers for an HTTP 429 response
@@ -2772,6 +2823,11 @@ func (r GetDevicePolicyResponse) GetJSON200() *ExternalDevicePolicySchemaD032093
 // GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
 func (r GetDevicePolicyResponse) GetApplicationproblemJSON401() *Unauthorized {
 	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r GetDevicePolicyResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
 }
 
 // GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
@@ -3120,6 +3176,11 @@ type AbortUploadResponse401Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
+// AbortUploadResponse403Headers the declared response headers of an HTTP 403 response for AbortUpload
+type AbortUploadResponse403Headers struct {
+	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
+}
+
 // AbortUploadResponse404Headers the declared response headers of an HTTP 404 response for AbortUpload
 type AbortUploadResponse404Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
@@ -3141,6 +3202,8 @@ type AbortUploadResponse struct {
 	HTTPResponse *http.Response
 	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
 	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
 	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
 	ApplicationproblemJSON404 *NotFound
 	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
@@ -3149,6 +3212,8 @@ type AbortUploadResponse struct {
 	ApplicationproblemJSON429 *TooManyRequests
 	// Headers401 the parsed response headers for an HTTP 401 response
 	Headers401 *AbortUploadResponse401Headers
+	// Headers403 the parsed response headers for an HTTP 403 response
+	Headers403 *AbortUploadResponse403Headers
 	// Headers404 the parsed response headers for an HTTP 404 response
 	Headers404 *AbortUploadResponse404Headers
 	// Headers409 the parsed response headers for an HTTP 409 response
@@ -3160,6 +3225,11 @@ type AbortUploadResponse struct {
 // GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
 func (r AbortUploadResponse) GetApplicationproblemJSON401() *Unauthorized {
 	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r AbortUploadResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
 }
 
 // GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
@@ -3211,6 +3281,11 @@ type GetUploadResponse401Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
+// GetUploadResponse403Headers the declared response headers of an HTTP 403 response for GetUpload
+type GetUploadResponse403Headers struct {
+	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
+}
+
 // GetUploadResponse404Headers the declared response headers of an HTTP 404 response for GetUpload
 type GetUploadResponse404Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
@@ -3229,12 +3304,16 @@ type GetUploadResponse struct {
 	JSON200 *UploadStatus
 	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
 	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
 	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
 	ApplicationproblemJSON404 *NotFound
 	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
 	ApplicationproblemJSON429 *TooManyRequests
 	// Headers401 the parsed response headers for an HTTP 401 response
 	Headers401 *GetUploadResponse401Headers
+	// Headers403 the parsed response headers for an HTTP 403 response
+	Headers403 *GetUploadResponse403Headers
 	// Headers404 the parsed response headers for an HTTP 404 response
 	Headers404 *GetUploadResponse404Headers
 	// Headers429 the parsed response headers for an HTTP 429 response
@@ -3249,6 +3328,11 @@ func (r GetUploadResponse) GetJSON200() *UploadStatus {
 // GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
 func (r GetUploadResponse) GetApplicationproblemJSON401() *Unauthorized {
 	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r GetUploadResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
 }
 
 // GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
@@ -3300,6 +3384,11 @@ type CompleteUploadResponse401Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
+// CompleteUploadResponse403Headers the declared response headers of an HTTP 403 response for CompleteUpload
+type CompleteUploadResponse403Headers struct {
+	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
+}
+
 // CompleteUploadResponse404Headers the declared response headers of an HTTP 404 response for CompleteUpload
 type CompleteUploadResponse404Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
@@ -3330,6 +3419,8 @@ type CompleteUploadResponse struct {
 	ApplicationproblemJSON400 *BadRequest
 	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
 	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
 	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
 	ApplicationproblemJSON404 *NotFound
 	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
@@ -3342,6 +3433,8 @@ type CompleteUploadResponse struct {
 	Headers400 *CompleteUploadResponse400Headers
 	// Headers401 the parsed response headers for an HTTP 401 response
 	Headers401 *CompleteUploadResponse401Headers
+	// Headers403 the parsed response headers for an HTTP 403 response
+	Headers403 *CompleteUploadResponse403Headers
 	// Headers404 the parsed response headers for an HTTP 404 response
 	Headers404 *CompleteUploadResponse404Headers
 	// Headers409 the parsed response headers for an HTTP 409 response
@@ -3365,6 +3458,11 @@ func (r CompleteUploadResponse) GetApplicationproblemJSON400() *BadRequest {
 // GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
 func (r CompleteUploadResponse) GetApplicationproblemJSON401() *Unauthorized {
 	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r CompleteUploadResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
 }
 
 // GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
@@ -3421,6 +3519,11 @@ type ListUploadPartsResponse401Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
+// ListUploadPartsResponse403Headers the declared response headers of an HTTP 403 response for ListUploadParts
+type ListUploadPartsResponse403Headers struct {
+	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
+}
+
 // ListUploadPartsResponse404Headers the declared response headers of an HTTP 404 response for ListUploadParts
 type ListUploadPartsResponse404Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
@@ -3449,6 +3552,8 @@ type ListUploadPartsResponse struct {
 	JSON200 *PartList
 	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
 	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
 	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
 	ApplicationproblemJSON404 *NotFound
 	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
@@ -3459,6 +3564,8 @@ type ListUploadPartsResponse struct {
 	ApplicationproblemJSON429 *TooManyRequests
 	// Headers401 the parsed response headers for an HTTP 401 response
 	Headers401 *ListUploadPartsResponse401Headers
+	// Headers403 the parsed response headers for an HTTP 403 response
+	Headers403 *ListUploadPartsResponse403Headers
 	// Headers404 the parsed response headers for an HTTP 404 response
 	Headers404 *ListUploadPartsResponse404Headers
 	// Headers409 the parsed response headers for an HTTP 409 response
@@ -3477,6 +3584,11 @@ func (r ListUploadPartsResponse) GetJSON200() *PartList {
 // GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
 func (r ListUploadPartsResponse) GetApplicationproblemJSON401() *Unauthorized {
 	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r ListUploadPartsResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
 }
 
 // GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
@@ -3997,6 +4109,13 @@ func ParseGetAssetReceiptResponse(rsp *http.Response) (*GetAssetReceiptResponse,
 		}
 		response.ApplicationproblemJSON401 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest NotFound
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -4024,6 +4143,16 @@ func ParseGetAssetReceiptResponse(rsp *http.Response) (*GetAssetReceiptResponse,
 			headers.XRequestId = &value
 		}
 		response.Headers401 = &headers
+	case rsp.StatusCode == 403:
+		var headers GetAssetReceiptResponse403Headers
+		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
+			var value ExternalCommonSchemaDefsUlid3520d2d2
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XRequestId = &value
+		}
+		response.Headers403 = &headers
 	case rsp.StatusCode == 404:
 		var headers GetAssetReceiptResponse404Headers
 		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
@@ -4091,6 +4220,13 @@ func ParseIssueTokenResponse(rsp *http.Response) (*IssueTokenResponse, error) {
 		}
 		response.ApplicationproblemJSON401 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
 		var dest TooManyRequests
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -4121,6 +4257,16 @@ func ParseIssueTokenResponse(rsp *http.Response) (*IssueTokenResponse, error) {
 			headers.XRequestId = &value
 		}
 		response.Headers401 = &headers
+	case rsp.StatusCode == 403:
+		var headers IssueTokenResponse403Headers
+		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
+			var value ExternalCommonSchemaDefsUlid3520d2d2
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XRequestId = &value
+		}
+		response.Headers403 = &headers
 	case rsp.StatusCode == 429:
 		var headers IssueTokenResponse429Headers
 		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
@@ -4171,6 +4317,13 @@ func ParseGetObservationMappingResponse(rsp *http.Response) (*GetObservationMapp
 		}
 		response.ApplicationproblemJSON401 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest NotFound
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -4198,6 +4351,16 @@ func ParseGetObservationMappingResponse(rsp *http.Response) (*GetObservationMapp
 			headers.XRequestId = &value
 		}
 		response.Headers401 = &headers
+	case rsp.StatusCode == 403:
+		var headers GetObservationMappingResponse403Headers
+		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
+			var value ExternalCommonSchemaDefsUlid3520d2d2
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XRequestId = &value
+		}
+		response.Headers403 = &headers
 	case rsp.StatusCode == 404:
 		var headers GetObservationMappingResponse404Headers
 		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
@@ -4258,6 +4421,13 @@ func ParseGetDevicePolicyResponse(rsp *http.Response) (*GetDevicePolicyResponse,
 		}
 		response.ApplicationproblemJSON401 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest NotFound
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -4285,6 +4455,16 @@ func ParseGetDevicePolicyResponse(rsp *http.Response) (*GetDevicePolicyResponse,
 			headers.XRequestId = &value
 		}
 		response.Headers401 = &headers
+	case rsp.StatusCode == 403:
+		var headers GetDevicePolicyResponse403Headers
+		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
+			var value ExternalCommonSchemaDefsUlid3520d2d2
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XRequestId = &value
+		}
+		response.Headers403 = &headers
 	case rsp.StatusCode == 404:
 		var headers GetDevicePolicyResponse404Headers
 		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
@@ -4682,6 +4862,13 @@ func ParseAbortUploadResponse(rsp *http.Response) (*AbortUploadResponse, error) 
 		}
 		response.ApplicationproblemJSON401 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest NotFound
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -4716,6 +4903,16 @@ func ParseAbortUploadResponse(rsp *http.Response) (*AbortUploadResponse, error) 
 			headers.XRequestId = &value
 		}
 		response.Headers401 = &headers
+	case rsp.StatusCode == 403:
+		var headers AbortUploadResponse403Headers
+		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
+			var value ExternalCommonSchemaDefsUlid3520d2d2
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XRequestId = &value
+		}
+		response.Headers403 = &headers
 	case rsp.StatusCode == 404:
 		var headers AbortUploadResponse404Headers
 		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
@@ -4786,6 +4983,13 @@ func ParseGetUploadResponse(rsp *http.Response) (*GetUploadResponse, error) {
 		}
 		response.ApplicationproblemJSON401 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest NotFound
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -4813,6 +5017,16 @@ func ParseGetUploadResponse(rsp *http.Response) (*GetUploadResponse, error) {
 			headers.XRequestId = &value
 		}
 		response.Headers401 = &headers
+	case rsp.StatusCode == 403:
+		var headers GetUploadResponse403Headers
+		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
+			var value ExternalCommonSchemaDefsUlid3520d2d2
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XRequestId = &value
+		}
+		response.Headers403 = &headers
 	case rsp.StatusCode == 404:
 		var headers GetUploadResponse404Headers
 		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
@@ -4880,6 +5094,13 @@ func ParseCompleteUploadResponse(rsp *http.Response) (*CompleteUploadResponse, e
 		}
 		response.ApplicationproblemJSON401 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest NotFound
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -4931,6 +5152,16 @@ func ParseCompleteUploadResponse(rsp *http.Response) (*CompleteUploadResponse, e
 			headers.XRequestId = &value
 		}
 		response.Headers401 = &headers
+	case rsp.StatusCode == 403:
+		var headers CompleteUploadResponse403Headers
+		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
+			var value ExternalCommonSchemaDefsUlid3520d2d2
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XRequestId = &value
+		}
+		response.Headers403 = &headers
 	case rsp.StatusCode == 404:
 		var headers CompleteUploadResponse404Headers
 		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
@@ -5011,6 +5242,13 @@ func ParseListUploadPartsResponse(rsp *http.Response) (*ListUploadPartsResponse,
 		}
 		response.ApplicationproblemJSON401 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest NotFound
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -5052,6 +5290,16 @@ func ParseListUploadPartsResponse(rsp *http.Response) (*ListUploadPartsResponse,
 			headers.XRequestId = &value
 		}
 		response.Headers401 = &headers
+	case rsp.StatusCode == 403:
+		var headers ListUploadPartsResponse403Headers
+		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
+			var value ExternalCommonSchemaDefsUlid3520d2d2
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XRequestId = &value
+		}
+		response.Headers403 = &headers
 	case rsp.StatusCode == 404:
 		var headers ListUploadPartsResponse404Headers
 		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {

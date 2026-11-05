@@ -135,9 +135,13 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(DBAPIError)
     async def _db(request: Request, exc: DBAPIError) -> JSONResponse:
         # 문자열에 PostgreSQL이 저장할 수 없는 문자(NUL 등)가 있으면 입력 오류다 (Schemathesis M8, 그 밖은 500)
-        if _pg_code(exc) in ("22021", "22P05"):
+        code = _pg_code(exc)
+        if code in ("22021", "22P05"):
             return problem_response("VALIDATION_ERROR", request, errors=[{
                 "pointer": "", "code": "invalid_character", "message": "문자열에 쓸 수 없는 문자(NUL 등)가 있습니다"}])
+        if code in ("22003", "22007", "22008"):  # 숫자 범위 초과·시각 형식/범위 오류 (예: 32비트를 넘는 version)
+            return problem_response("VALIDATION_ERROR", request, errors=[{
+                "pointer": "", "code": "out_of_range", "message": "숫자나 시각이 저장할 수 있는 범위를 벗어났습니다"}])
         raise exc
 
     @app.exception_handler(Exception)

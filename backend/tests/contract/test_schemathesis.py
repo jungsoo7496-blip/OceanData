@@ -27,8 +27,9 @@ from schemathesis import GenerationMode
 from schemathesis.checks import CHECKS, load_all_checks
 
 from app.ratelimit import Limiter
-from app.seed import DEV_A_CAMERA, DEV_A_COLLECTOR, PRJ_A, SES_A
+from app.seed import DEV_A_CAMERA, DEV_A_COLLECTOR, PRJ_A, SES_A, sub
 from app.services.contracts import contracts_dir
+from tests.conftest import user_token
 from tests.integration.test_ingest import drain, manifest, mp4_bytes, upload_all
 
 pytestmark = pytest.mark.integration
@@ -175,12 +176,13 @@ def test_fixed_mismatch_status_codes_are_documented(contract_env: ContractEnv) -
     # M5: 없는·범위 밖 장비 → 404 (테넌트 격리)
     r = env.client.post("/v1/uploads", json=manifest(b"synthetic", source="dev_" + "Z" * 26), headers=env.headers)
     assert r.status_code == 404 and "404" in _documented(env, "POST /v1/uploads")
-    # M6: 인증 작업은 모두 호출 제한(429)을 문서화한다
+    # M6: 인증 작업은 모두 호출 제한(429)과 권한 거부(403: 역할·다중 인증·기기 범위)를 문서화한다 (전체 작업 탐색)
     spec = env.schema.raw_schema
-    missing = [f"{m.upper()} {p}" for p, item in spec["paths"].items() for m, op in item.items()
-               if isinstance(op, dict) and "responses" in op and "401" in op["responses"]
-               and "429" not in op["responses"]]
-    assert not missing, missing
+    for code in ("429", "403"):
+        missing = [f"{m.upper()} {p}" for p, item in spec["paths"].items() for m, op in item.items()
+                   if isinstance(op, dict) and "responses" in op and "401" in op["responses"]
+                   and code not in op["responses"]]
+        assert not missing, (code, missing)
     _set_rate_limit(env.app, 1)
     try:
         env.client.get("/v1/me", headers=env.headers)
@@ -218,6 +220,10 @@ def test_fixed_mismatch_instance_query_and_nul(contract_env: ContractEnv) -> Non
         env.operation("GET " + path.split("?")[0]).validate_response(r)
     assert env.client.get("/v1/assets?data_type=VIDEO&captured_from=2026-11-01T00:00:00Z",
                           headers=env.headers).status_code == 200
+    op = {"Authorization": f"Bearer {user_token(sub(106), mfa=True)}"}  # 전체 탐색: 0000년은 날짜가 아니다 (500이었음)
+    r = env.client.get("/v1/usage-reports?month=0000-01", headers=op)
+    assert r.status_code == 400, r.text
+    env.operation("GET /v1/usage-reports").validate_response(r)
     # M8: NUL은 조회 조건이면 400, 경로 ID면 404, JSON 본문 문자열이면 400 — 500이 아니고 요청 ID가 있다
     for path, status in (("/v1/sessions?label=%00", 400), ("/v1/assets?data_type=%00", 400),
                          ("/v1/assets?env_metric=a%00", 400), ("/v1/uploads/%00", 404), ("/v1/assets/ast_%00", 404),
@@ -229,3 +235,32 @@ def test_fixed_mismatch_instance_query_and_nul(contract_env: ContractEnv) -> Non
         "project_id": PRJ_A, "label": "nul-check", "title": "제목\u0000",
         "starts_at": "2026-11-01T00:00:00Z"})
     assert r.status_code == 400 and r.json()["errors"][0]["code"] == "invalid_character", r.text
+
+
+def test_fixed_full_exploration_findings(contract_env: ContractEnv) -> None:
+    """전체 작업 탐색(test_schemathesis_all.py)으로 찾아 고친 것: 정수 범위 500, 1000년 이전 연도 출력, 멱등 키 길이,
+    엔드포인트가 선언하지 않은 정수 조회 조건."""
+    from datetime import UTC, datetime
+
+    from app.timefmt import iso
+
+    env = contract_env
+    r = env.client.get("/v1/integration-cards/icd_S0SQEX477AB66ETWJDRJH5PMTK?version=5270030422", headers=env.headers)
+    assert r.status_code == 400, r.text  # 32비트 정수를 넘는 값 (전에는 DB 오류 500)
+    env.operation("GET /v1/integration-cards/{integration_card_id}").validate_response(r)
+    assert iso(datetime(63, 5, 29, 0, 34, 56, tzinfo=UTC)) == "0063-05-29T00:34:56Z"  # 전에는 "63-05-29…"
+    body = {"project_id": PRJ_A, "label": "idem-check", "title": "멱등 키 길이", "starts_at": "2026-11-01T00:00:00Z"}
+    for key in ("short", "k" * 129):
+        r = env.client.post("/v1/sessions", json=body, headers={**env.headers, "Idempotency-Key": key})
+        assert r.status_code == 400 and r.json()["errors"][0]["pointer"] == "/header/idempotency-key", r.text
+    r = env.client.post("/v1/sessions", json=body, headers={**env.headers, "Idempotency-Key": "k" * 8})
+    assert r.status_code == 201, r.text
+    op = {"Authorization": f"Bearer {user_token(sub(106), mfa=True)}"}  # 보고서 양식 구역의 명시적 null은 계약 밖
+    r = env.client.post("/v1/report-templates", headers=op, json={
+        "code": "NULLCHK", "name": "null 검사", "sections": [{"kind": "TEXT", "title": "본문", "metrics": None}]})
+    assert r.status_code == 400 and r.json()["errors"][0]["pointer"] == "/sections/0/metrics", r.text
+    for path in ("/v1/datasets?limit=abc", "/v1/datasets?limit=0", "/v1/sessions?limit=5.0"):
+        r = env.client.get(path, headers=env.headers)
+        assert r.status_code in (400, 403), (path, r.text)
+        if r.status_code == 400:
+            assert r.json()["errors"][0]["pointer"] == "/query/limit", r.text
