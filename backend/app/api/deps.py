@@ -30,12 +30,6 @@ def client_ip(request: Request) -> str | None:
 
 
 def get_db(c: Container = Depends(container)) -> Iterator[Session]:
-    """요청 하나의 DB 세션. 라우터는 이 함수를 직접 쓰지 않고 `DB`(scope="function")로 받는다.
-
-    FastAPI 기본(request 범위)에서는 yield 뒤 코드가 응답을 보낸 뒤에 돌아, 커밋이 실패해도 클라이언트는 이미
-    2xx를 받는다 (검토 2: 201을 받은 이벤트가 404). function 범위면 경로 함수가 끝나고 응답을 보내기 전에 커밋하고,
-    커밋 오류는 되돌린 뒤 오류 처리기(errors.py)가 문제 응답으로 바꾼다.
-    """
     db = c.sessionmaker()
     try:
         yield db
@@ -47,11 +41,7 @@ def get_db(c: Container = Depends(container)) -> Iterator[Session]:
         db.close()
 
 
-# 모든 경로 함수·의존성이 같은 세션을 받는다 (scope가 다르면 FastAPI 캐시 키가 달라 세션이 둘이 된다).
-DB = Depends(get_db, scope="function")
-
-
-def get_principal(request: Request, db: Session = DB, c: Container = Depends(container)) -> Principal:
+def get_principal(request: Request, db: Session = Depends(get_db), c: Container = Depends(container)) -> Principal:
     # 요청으로 받은 기관 ID로 범위를 바꾸지 않는다 (02번 요구사항 2.6)
     for name in FORBIDDEN_SCOPE_INPUTS:
         if name in request.query_params:

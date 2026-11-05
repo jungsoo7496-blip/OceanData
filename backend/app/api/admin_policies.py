@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app.api.deps import DB, client_ip, container, require
+from app.api.deps import client_ip, container, get_db, require
 from app.container import Container
 from app.db.models import JobPolicy, JobRow, Organization, OrgQuota, RetentionPolicy
 from app.domain.principal import Principal
@@ -55,7 +55,7 @@ def _org_view(org: Organization, q: OrgQuota | None, default_quota: int) -> dict
 
 
 @router.get("/v1/organization-policies")
-def list_organization_policies(db: Session = DB, c: Container = Depends(container),
+def list_organization_policies(db: Session = Depends(get_db), c: Container = Depends(container),
                                p: Principal = Depends(require("org_policy:read"))) -> dict:
     quotas = {q.organization_id: q for q in db.execute(select(OrgQuota)).scalars()}
     orgs = db.execute(select(Organization).order_by(Organization.organization_id)).scalars()
@@ -64,7 +64,7 @@ def list_organization_policies(db: Session = DB, c: Container = Depends(containe
 
 @router.patch("/v1/organization-policies/{organization_id}")
 def update_organization_policy(organization_id: str, body: OrganizationPolicyPatch, request: Request,
-                               db: Session = DB, c: Container = Depends(container),
+                               db: Session = Depends(get_db), c: Container = Depends(container),
                                p: Principal = Depends(require("org_policy:write"))) -> dict:
     sent = _need_change(body)
     org = db.get(Organization, organization_id)
@@ -104,14 +104,14 @@ def _retention_view(r: RetentionPolicy) -> dict[str, Any]:
 
 
 @router.get("/v1/retention-policies")
-def list_retention_policies(db: Session = DB,
+def list_retention_policies(db: Session = Depends(get_db),
                             p: Principal = Depends(require("retention_policy:read"))) -> dict:
     rows = db.execute(select(RetentionPolicy).order_by(RetentionPolicy.target)).scalars()
     return {"items": [_retention_view(r) for r in rows]}
 
 
 @router.patch("/v1/retention-policies/{target}")
-def update_retention_policy(target: str, body: RetentionPolicyPatch, request: Request, db: Session = DB,
+def update_retention_policy(target: str, body: RetentionPolicyPatch, request: Request, db: Session = Depends(get_db),
                             c: Container = Depends(container),
                             p: Principal = Depends(require("retention_policy:write"))) -> dict:
     sent = _need_change(body)
@@ -167,14 +167,14 @@ def _job_view(j: JobPolicy, queued: dict[str, int]) -> dict[str, Any]:
 
 
 @router.get("/v1/job-policies")
-def list_job_policies(db: Session = DB, p: Principal = Depends(require("job_policy:read"))) -> dict:
+def list_job_policies(db: Session = Depends(get_db), p: Principal = Depends(require("job_policy:read"))) -> dict:
     queued = _queued(db)
     rows = db.execute(select(JobPolicy).order_by(JobPolicy.priority.desc(), JobPolicy.job_type)).scalars()
     return {"items": [_job_view(j, queued) for j in rows]}
 
 
 @router.patch("/v1/job-policies/{job_type}")
-def update_job_policy(job_type: str, body: JobPolicyPatch, request: Request, db: Session = DB,
+def update_job_policy(job_type: str, body: JobPolicyPatch, request: Request, db: Session = Depends(get_db),
                       c: Container = Depends(container), p: Principal = Depends(require("job_policy:write"))) -> dict:
     sent = _need_change(body)
     j = db.execute(select(JobPolicy).where(JobPolicy.job_type == job_type).with_for_update()).scalar_one_or_none()

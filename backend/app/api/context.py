@@ -12,7 +12,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import DB, client_ip, container, load_scoped, page_params, require
+from app.api.deps import client_ip, container, get_db, load_scoped, page_params, require
 from app.api.pagination import paginate
 from app.container import Container
 from app.db.models import Device, Project, SessionDevice, TrialSession
@@ -61,7 +61,7 @@ def _session_devices(db: Session, session_ids: list[str]) -> dict[str, list[str]
 
 
 @router.get("/v1/projects")
-def list_projects(db: Session = DB, p: Principal = Depends(require("project:read")),
+def list_projects(db: Session = Depends(get_db), p: Principal = Depends(require("project:read")),
                   page: dict = Depends(page_params)) -> dict:
     if p.has_role("PROGRAM_VIEWER") and not p.has_role("PLATFORM_OPERATOR"):
         stmt = select(Project).where(Project.project_id.in_(sorted(p.assigned_project_ids) or [""]))
@@ -85,14 +85,14 @@ class DeviceCreate(BaseModel):
 
 
 @router.get("/v1/devices")
-def list_devices(db: Session = DB, p: Principal = Depends(require("device:read")),
+def list_devices(db: Session = Depends(get_db), p: Principal = Depends(require("device:read")),
                  page: dict = Depends(page_params)) -> dict:
     rows, nxt = paginate(db, scoped_select(Device, p), Device.device_id, page["limit"], page["cursor"])
     return {"items": [device_view(r) for r in rows], "next_cursor": nxt}
 
 
 @router.post("/v1/devices", status_code=201)
-def create_device(body: DeviceCreate, request: Request, db: Session = DB,
+def create_device(body: DeviceCreate, request: Request, db: Session = Depends(get_db),
                   c: Container = Depends(container), p: Principal = Depends(require("device:write")),
                   idempotency_key: str | None = Header(default=None)) -> JSONResponse:
     if p.has_role("PLATFORM_OPERATOR") and not p.has_role("ORG_ADMIN"):
@@ -124,7 +124,7 @@ def create_device(body: DeviceCreate, request: Request, db: Session = DB,
 
 
 @router.get("/v1/devices/{device_id}")
-def get_device(device_id: str, request: Request, db: Session = DB, c: Container = Depends(container),
+def get_device(device_id: str, request: Request, db: Session = Depends(get_db), c: Container = Depends(container),
                p: Principal = Depends(require("device:read"))) -> dict:
     return device_view(load_scoped(db, c, request, Device, device_id, p))
 
@@ -149,7 +149,7 @@ def _require_tz(field: str, value: datetime | None) -> None:
 
 
 @router.get("/v1/sessions")
-def list_sessions(project_id: str | None = None, label: str | None = None, db: Session = DB,
+def list_sessions(project_id: str | None = None, label: str | None = None, db: Session = Depends(get_db),
                   p: Principal = Depends(require("session:read")), page: dict = Depends(page_params)) -> dict:
     stmt = scoped_select(TrialSession, p)
     if project_id:
@@ -162,7 +162,7 @@ def list_sessions(project_id: str | None = None, label: str | None = None, db: S
 
 
 @router.post("/v1/sessions", status_code=201)
-def create_session(body: SessionCreate, request: Request, db: Session = DB,
+def create_session(body: SessionCreate, request: Request, db: Session = Depends(get_db),
                    c: Container = Depends(container), p: Principal = Depends(require("session:write")),
                    idempotency_key: str | None = Header(default=None)) -> JSONResponse:
     _require_tz("starts_at", body.starts_at)
@@ -194,7 +194,7 @@ def create_session(body: SessionCreate, request: Request, db: Session = DB,
 
 
 @router.get("/v1/sessions/{session_id}")
-def get_session(session_id: str, request: Request, db: Session = DB,
+def get_session(session_id: str, request: Request, db: Session = Depends(get_db),
                 c: Container = Depends(container), p: Principal = Depends(require("session:read"))) -> dict:
     s = load_scoped(db, c, request, TrialSession, session_id, p)
     return session_view(s, _session_devices(db, [s.session_id])[s.session_id])
@@ -211,7 +211,7 @@ class SessionPatch(BaseModel):
 
 
 @router.patch("/v1/sessions/{session_id}")
-def update_session(session_id: str, body: SessionPatch, request: Request, db: Session = DB,
+def update_session(session_id: str, body: SessionPatch, request: Request, db: Session = Depends(get_db),
                    c: Container = Depends(container), p: Principal = Depends(require("session:write"))) -> dict:
     """실증회차 일정·장소·메모·장비 수정 (09번 요구사항 5.1). 바뀐 항목의 전후 값을 감사한다."""
     sent = body.model_fields_set

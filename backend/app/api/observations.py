@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, literal, or_, select, text, tuple_
 from sqlalchemy.orm import Session
 
-from app.api.deps import DB, client_ip, container, load_scoped, page_params, require
+from app.api.deps import client_ip, container, get_db, load_scoped, page_params, require
 from app.api.pagination import paginate
 from app.container import Container
 from app.db.models import Asset, Device, Event, EventAsset, ObservationMapping, OrgEventCode, TrialSession
@@ -61,7 +61,7 @@ def _source_device(db: Session, c: Container, request: Request, p: Principal, de
 # ---------------------------------------------------------------- 관측값
 
 @router.post("/v1/observations", tags=["observations"])
-def post_observations(request: Request, body: Any = Body(...), db: Session = DB,
+def post_observations(request: Request, body: Any = Body(...), db: Session = Depends(get_db),
                       c: Container = Depends(container), p: Principal = Depends(require("observation:write")),
                       idempotency_key: str | None = Header(default=None)) -> JSONResponse:
     # 항목 수 한도는 스키마 검증보다 먼저 (요구사항 1.4)
@@ -163,7 +163,7 @@ def list_observations(source_system_id: str | None = None, metric: str | None = 
                       from_: datetime = Query(alias="from"), to: datetime = Query(),
                       quality_flag: str | None = None, channel: str | None = None,
                       interval: str | None = Query(default=None, pattern=r"^PT[1-9][0-9]{0,5}[MH]$"),
-                      db: Session = DB, p: Principal = Depends(require("observation:read")),
+                      db: Session = Depends(get_db), p: Principal = Depends(require("observation:read")),
                       page: dict = Depends(page_params)) -> dict:
     if from_.tzinfo is None or to.tzinfo is None or to <= from_:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/query/to", "code": "range",
@@ -211,7 +211,7 @@ class Correction(BaseModel):
 
 
 @router.post("/v1/observations/corrections", tags=["observations"])
-def correct_observation(body: Correction, request: Request, db: Session = DB,
+def correct_observation(body: Correction, request: Request, db: Session = Depends(get_db),
                         c: Container = Depends(container),
                         p: Principal = Depends(require("observation:correct"))) -> dict:
     load_scoped(db, c, request, Device, body.source_system_id, p)
@@ -233,7 +233,7 @@ def _mapping_view(m: ObservationMapping) -> dict:
 
 
 @router.get("/v1/devices/{device_id}/observation-mapping", tags=["observations"])
-def get_mapping(device_id: str, request: Request, db: Session = DB, c: Container = Depends(container),
+def get_mapping(device_id: str, request: Request, db: Session = Depends(get_db), c: Container = Depends(container),
                 p: Principal = Depends(require("mapping:read"))) -> dict:
     if p.kind == "DEVICE" and device_id not in p.mapped_source_ids:
         raise ProblemError("NOT_FOUND")
@@ -272,7 +272,7 @@ class MappingBody(BaseModel):
 
 
 @router.put("/v1/devices/{device_id}/observation-mapping", tags=["observations"])
-def put_mapping(device_id: str, body: MappingBody, request: Request, db: Session = DB,
+def put_mapping(device_id: str, body: MappingBody, request: Request, db: Session = Depends(get_db),
                 c: Container = Depends(container), p: Principal = Depends(require("mapping:write"))) -> dict:
     device = load_scoped(db, c, request, Device, device_id, p)
     metrics = {m["code"] for m in contracts.code_table("metrics")["items"]}
@@ -333,7 +333,7 @@ def _link_assets(db: Session, c: Container, request: Request, p: Principal, even
 
 
 @router.post("/v1/events", tags=["events"])
-def create_event(request: Request, body: Any = Body(...), db: Session = DB,
+def create_event(request: Request, body: Any = Body(...), db: Session = Depends(get_db),
                  c: Container = Depends(container), p: Principal = Depends(require("event:write")),
                  idempotency_key: str | None = Header(default=None)) -> JSONResponse:
     problems, rejected = contracts.validate_document("event", body)
@@ -384,7 +384,7 @@ def create_event(request: Request, body: Any = Body(...), db: Session = DB,
 @router.get("/v1/events", tags=["events"])
 def list_events(session_id: str | None = None, event_code: str | None = None, source_system_id: str | None = None,
                 human_verified: bool | None = None, from_: datetime | None = Query(default=None, alias="from"),
-                to: datetime | None = None, db: Session = DB,
+                to: datetime | None = None, db: Session = Depends(get_db),
                 p: Principal = Depends(require("event:read")), page: dict = Depends(page_params)) -> dict:
     stmt = scoped_select(Event, p)
     for col, val in ((Event.session_id, session_id), (Event.source_system_id, source_system_id),
@@ -402,7 +402,7 @@ def list_events(session_id: str | None = None, event_code: str | None = None, so
 
 
 @router.get("/v1/events/{event_id}", tags=["events"])
-def get_event(event_id: str, request: Request, db: Session = DB, c: Container = Depends(container),
+def get_event(event_id: str, request: Request, db: Session = Depends(get_db), c: Container = Depends(container),
               p: Principal = Depends(require("event:read"))) -> dict:
     return event_view(db, load_scoped(db, c, request, Event, event_id, p))
 
@@ -410,7 +410,7 @@ def get_event(event_id: str, request: Request, db: Session = DB, c: Container = 
 @router.get("/v1/events/{event_id}/overlapping-assets", tags=["events"])
 def overlapping_assets(event_id: str, request: Request, margin_s: int = Query(0, ge=0, le=3600),
                        source_system_id: str | None = Query(None, pattern=r"^dev_[0-9A-HJKMNP-TV-Z]{26}$"),
-                       db: Session = DB, c: Container = Depends(container),
+                       db: Session = Depends(get_db), c: Container = Depends(container),
                        p: Principal = Depends(require("event:read"))) -> dict:
     """이벤트 구간과 촬영 구간이 겹치는 같은 회차 자산 (요구사항 7.6). 촬영시각 미상은 개수만."""
     from datetime import timedelta
@@ -449,7 +449,7 @@ class EventPatch(BaseModel):
 
 
 @router.patch("/v1/events/{event_id}", tags=["events"])
-def patch_event(event_id: str, body: EventPatch, request: Request, db: Session = DB,
+def patch_event(event_id: str, body: EventPatch, request: Request, db: Session = Depends(get_db),
                 c: Container = Depends(container), p: Principal = Depends(require("event:write"))) -> dict:
     if not body.model_fields_set:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "", "code": "min_properties",

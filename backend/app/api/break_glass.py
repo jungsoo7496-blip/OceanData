@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import DB, client_ip, container, require
+from app.api.deps import client_ip, container, get_db, require
 from app.container import Container
 from app.db.models import BreakGlassGrant
 from app.domain.principal import Principal
@@ -48,7 +48,7 @@ def _locked(db: Session, grant_id: str) -> BreakGlassGrant:
 
 
 @router.get("/v1/break-glass-grants")
-def list_grants(db: Session = DB, c: Container = Depends(container),
+def list_grants(db: Session = Depends(get_db), c: Container = Depends(container),
                 p: Principal = Depends(require("break_glass:read"))) -> dict:
     rows = db.execute(scoped_select(BreakGlassGrant, p).order_by(BreakGlassGrant.created_at.desc())
                       .limit(200)).scalars()
@@ -57,7 +57,7 @@ def list_grants(db: Session = DB, c: Container = Depends(container),
 
 
 @router.post("/v1/break-glass-grants", status_code=201)
-def request_grant(body: GrantRequest, request: Request, db: Session = DB,
+def request_grant(body: GrantRequest, request: Request, db: Session = Depends(get_db),
                   c: Container = Depends(container), p: Principal = Depends(require("break_glass:request"))) -> dict:
     now = c.clock.now()
     try:
@@ -73,7 +73,7 @@ def request_grant(body: GrantRequest, request: Request, db: Session = DB,
 
 
 @router.post("/v1/break-glass-grants/{grant_id}/decision")
-def decide_grant(grant_id: str, body: Decision, request: Request, db: Session = DB,
+def decide_grant(grant_id: str, body: Decision, request: Request, db: Session = Depends(get_db),
                  c: Container = Depends(container), p: Principal = Depends(require("break_glass:decide"))) -> dict:
     g = _locked(db, grant_id)
     now = c.clock.now()
@@ -89,7 +89,7 @@ def decide_grant(grant_id: str, body: Decision, request: Request, db: Session = 
 
 
 @router.post("/v1/break-glass-grants/{grant_id}/revoke")
-def revoke_grant(grant_id: str, body: Revoke, request: Request, db: Session = DB,
+def revoke_grant(grant_id: str, body: Revoke, request: Request, db: Session = Depends(get_db),
                  c: Container = Depends(container), p: Principal = Depends(require("break_glass:decide"))) -> dict:
     g = _locked(db, grant_id)
     now = c.clock.now()

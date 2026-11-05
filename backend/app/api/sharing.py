@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import DB, client_ip, container, load_scoped, require
+from app.api.deps import client_ip, container, get_db, load_scoped, require
 from app.container import Container
 from app.db.models import Asset, ShareRequest, ShareReviewEvent, TrialSession
 from app.domain import sharing_rules as rules
@@ -34,7 +34,7 @@ class ShareRequestCreate(BaseModel):
 
 
 @router.get("/v1/assets/{asset_id}/share-requests")
-def list_share_requests(asset_id: str, request: Request, db: Session = DB,
+def list_share_requests(asset_id: str, request: Request, db: Session = Depends(get_db),
                         c: Container = Depends(container), p: Principal = Depends(require("share:read"))) -> dict:
     a = load_scoped(db, c, request, Asset, asset_id, p)
     rows = db.execute(select(ShareRequest).where(ShareRequest.asset_id == a.asset_id)
@@ -43,7 +43,7 @@ def list_share_requests(asset_id: str, request: Request, db: Session = DB,
 
 
 @router.post("/v1/assets/{asset_id}/share-requests", status_code=201)
-def create_share_request(asset_id: str, body: ShareRequestCreate, request: Request, db: Session = DB,
+def create_share_request(asset_id: str, body: ShareRequestCreate, request: Request, db: Session = Depends(get_db),
                          c: Container = Depends(container), p: Principal = Depends(require("share:request")),
                          idempotency_key: str | None = Header(default=None)) -> JSONResponse:
     """상향은 Sharing_Rules, 하향은 언제든 (ORG_ADMIN만, 요구사항 3.8)."""
@@ -73,7 +73,7 @@ class Decision(BaseModel):
 
 
 @router.post("/v1/share-requests/{share_request_id}/decisions")
-def decide_share_request(share_request_id: str, body: Decision, request: Request, db: Session = DB,
+def decide_share_request(share_request_id: str, body: Decision, request: Request, db: Session = Depends(get_db),
                          c: Container = Depends(container), p: Principal = Depends(require("share:decide"))) -> dict:
     req = db.get(ShareRequest, share_request_id, with_for_update=True)
     if req is None:
@@ -93,7 +93,7 @@ class Candidates(BaseModel):
 
 
 @router.post("/v1/share-candidates")
-def mark_candidates(body: Candidates, request: Request, db: Session = DB,
+def mark_candidates(body: Candidates, request: Request, db: Session = Depends(get_db),
                     c: Container = Depends(container), p: Principal = Depends(require("share:candidate"))) -> dict:
     if not body.asset_ids and not body.session_id:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "", "code": "minProperties",
@@ -132,7 +132,7 @@ def review_view(db: Session, c: Container, a: Asset) -> dict:
 
 
 @router.get("/v1/assets/{asset_id}/share-review")
-def get_share_review(asset_id: str, request: Request, db: Session = DB,
+def get_share_review(asset_id: str, request: Request, db: Session = Depends(get_db),
                      c: Container = Depends(container), p: Principal = Depends(require("share:read"))) -> dict:
     return review_view(db, c, load_scoped(db, c, request, Asset, asset_id, p))
 
@@ -147,7 +147,7 @@ class ReviewAction(BaseModel):
 
 
 @router.post("/v1/assets/{asset_id}/share-review")
-def act_share_review(asset_id: str, body: ReviewAction, request: Request, db: Session = DB,
+def act_share_review(asset_id: str, body: ReviewAction, request: Request, db: Session = Depends(get_db),
                      c: Container = Depends(container), p: Principal = Depends(require("share:review"))) -> dict:
     a = load_scoped(db, c, request, Asset, asset_id, p)
     db.refresh(a, with_for_update=True)
@@ -175,7 +175,7 @@ class Classification(BaseModel):
 
 
 @router.patch("/v1/assets/{asset_id}/classification")
-def classify_asset(asset_id: str, body: Classification, request: Request, db: Session = DB,
+def classify_asset(asset_id: str, body: Classification, request: Request, db: Session = Depends(get_db),
                    c: Container = Depends(container), p: Principal = Depends(require("asset:classify"))) -> dict:
     """운영자가 근거(점검 기록 참조)와 함께 지정 (요구사항 4.6). 더 엄격하게 바꾸면 파생본 등급은 규칙으로 다시 본다."""
     if body.sensitivity_class is None and body.privacy_status is None:

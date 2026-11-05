@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import DB, client_ip, container, require
+from app.api.deps import client_ip, container, get_db, require
 from app.container import Container
 from app.db.models import ExternalSource
 from app.domain.normalize import parse_rfc3339
@@ -75,12 +75,12 @@ def view(s: ExternalSource) -> dict[str, Any]:
 
 
 @router.get("/v1/external-sources")
-def list_sources(db: Session = DB, _: Principal = Depends(require("external_source:read"))) -> dict:
+def list_sources(db: Session = Depends(get_db), _: Principal = Depends(require("external_source:read"))) -> dict:
     return {"items": [view(s) for s in db.execute(select(ExternalSource).order_by(ExternalSource.source_id)).scalars()]}
 
 
 @router.post("/v1/external-sources", status_code=201)
-def create_source(body: SourceCreate, request: Request, db: Session = DB,
+def create_source(body: SourceCreate, request: Request, db: Session = Depends(get_db),
                   c: Container = Depends(container), p: Principal = Depends(require("external_source:write"))) -> dict:
     if db.get(ExternalSource, body.source_id) is not None:
         raise ProblemError("CONFLICT", detail="같은 source_id가 있습니다")
@@ -117,7 +117,7 @@ def _source(db: Session, source_id: str) -> ExternalSource:
 
 
 @router.patch("/v1/external-sources/{source_id}")
-def update_source(source_id: str, body: SourcePatch, request: Request, db: Session = DB,
+def update_source(source_id: str, body: SourcePatch, request: Request, db: Session = Depends(get_db),
                   c: Container = Depends(container), p: Principal = Depends(require("external_source:write"))) -> dict:
     fields = body.model_dump(exclude_unset=True)
     if not fields:
@@ -138,7 +138,7 @@ class Backfill(BaseModel):
 
 
 @router.post("/v1/external-sources/{source_id}/backfill", status_code=202)
-def backfill(source_id: str, body: Backfill, request: Request, db: Session = DB,
+def backfill(source_id: str, body: Backfill, request: Request, db: Session = Depends(get_db),
              c: Container = Depends(container), p: Principal = Depends(require("external_source:write"))) -> dict:
     s = _source(db, source_id)
     if not s.supports_backfill:

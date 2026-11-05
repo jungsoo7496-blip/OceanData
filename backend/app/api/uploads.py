@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.api.deps import DB, container, require
+from app.api.deps import container, get_db, require
 from app.container import Container
 from app.domain.principal import Principal
 from app.services.idempotency import run_idempotent
@@ -17,7 +17,7 @@ router = APIRouter(tags=["uploads"])
 
 
 @router.post("/v1/uploads")
-def create_upload(manifest: dict = Body(...), db: Session = DB, c: Container = Depends(container),
+def create_upload(manifest: dict = Body(...), db: Session = Depends(get_db), c: Container = Depends(container),
                   p: Principal = Depends(require("upload:write")),
                   idempotency_key: str | None = Header(default=None)) -> JSONResponse:
     svc = IngestService(c, db)
@@ -27,14 +27,14 @@ def create_upload(manifest: dict = Body(...), db: Session = DB, c: Container = D
 
 
 @router.get("/v1/uploads/{upload_id}")
-def get_upload(upload_id: str, db: Session = DB, c: Container = Depends(container),
+def get_upload(upload_id: str, db: Session = Depends(get_db), c: Container = Depends(container),
                p: Principal = Depends(require("upload:read"))) -> dict:
     svc = IngestService(c, db)
     return svc.upload_status(svc.load_upload(p, upload_id))
 
 
 @router.delete("/v1/uploads/{upload_id}", status_code=204)
-def abort_upload(upload_id: str, db: Session = DB, c: Container = Depends(container),
+def abort_upload(upload_id: str, db: Session = Depends(get_db), c: Container = Depends(container),
                  p: Principal = Depends(require("upload:write"))) -> Response:
     svc = IngestService(c, db)
     svc.abort(svc.load_upload(p, upload_id))
@@ -42,7 +42,7 @@ def abort_upload(upload_id: str, db: Session = DB, c: Container = Depends(contai
 
 
 @router.get("/v1/uploads/{upload_id}/parts")
-def list_parts(upload_id: str, db: Session = DB, c: Container = Depends(container),
+def list_parts(upload_id: str, db: Session = Depends(get_db), c: Container = Depends(container),
                p: Principal = Depends(require("upload:write"))) -> dict:
     svc = IngestService(c, db)
     return svc.list_parts(svc.load_upload(p, upload_id))
@@ -60,7 +60,7 @@ class CompleteRequest(BaseModel):
 
 
 @router.post("/v1/uploads/{upload_id}/complete", status_code=202)
-def complete_upload(upload_id: str, body: CompleteRequest, db: Session = DB,
+def complete_upload(upload_id: str, body: CompleteRequest, db: Session = Depends(get_db),
                     c: Container = Depends(container), p: Principal = Depends(require("upload:write")),
                     idempotency_key: str | None = Header(default=None)) -> JSONResponse:
     svc = IngestService(c, db)

@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import cast, column, literal, select, table
 from sqlalchemy.orm import Session
 
-from app.api.deps import DB, client_ip, container, load_scoped, require
+from app.api.deps import client_ip, container, get_db, load_scoped, require
 from app.container import Container
 from app.db.models import Asset, AssetTag, AssetTagEdit, DeidReview
 from app.db.types import Vector
@@ -38,7 +38,7 @@ def _review(db: Session, p: Principal, review_id: str, lock: bool = False) -> De
 
 @router.get("/v1/deid-reviews", tags=["deid"])
 def list_reviews(status: Literal["ASSIGNED", "PASSED", "MISSED", "REJECTED"] | None = None,
-                 db: Session = DB, p: Principal = Depends(require("deid_review:read"))) -> dict:
+                 db: Session = Depends(get_db), p: Principal = Depends(require("deid_review:read"))) -> dict:
     stmt = select(DeidReview).order_by(DeidReview.created_at, DeidReview.review_id)
     if not _operator(p):
         stmt = stmt.where(DeidReview.reviewer_id == p.user_id)
@@ -48,7 +48,7 @@ def list_reviews(status: Literal["ASSIGNED", "PASSED", "MISSED", "REJECTED"] | N
 
 
 @router.get("/v1/deid-reviews/{review_id}", tags=["deid"])
-def get_review(review_id: str, db: Session = DB,
+def get_review(review_id: str, db: Session = Depends(get_db),
                p: Principal = Depends(require("deid_review:read"))) -> dict:
     rv = _review(db, p, review_id)
     return deid.review_view(rv, db.get(Asset, rv.deid_asset_id))
@@ -56,7 +56,7 @@ def get_review(review_id: str, db: Session = DB,
 
 @router.get("/v1/deid-reviews/{review_id}/frame", tags=["deid"])
 def review_frame(review_id: str, request: Request, t: float = Query(ge=0), which: Literal["ORIGINAL", "DEID"] = "DEID",
-                 db: Session = DB, c: Container = Depends(container),
+                 db: Session = Depends(get_db), c: Container = Depends(container),
                  p: Principal = Depends(require("deid_review:read"))) -> Response:
     """표본 프레임 (원본 대비, 요구사항 4.2). 원본 열람은 감사 로그에 남는다."""
     from app.services.pipeline import _run, local_copy, work_dir
@@ -120,7 +120,7 @@ class Decision(BaseModel):
 
 
 @router.post("/v1/deid-reviews/{review_id}/decision", tags=["deid"])
-def decide_review(review_id: str, body: Decision, request: Request, db: Session = DB,
+def decide_review(review_id: str, body: Decision, request: Request, db: Session = Depends(get_db),
                   c: Container = Depends(container), p: Principal = Depends(require("deid_review:decide"))) -> dict:
     rv = _review(db, p, review_id, lock=True)
     if body.result == "MISSED" and not body.missed:
@@ -137,7 +137,7 @@ def decide_review(review_id: str, body: Decision, request: Request, db: Session 
 
 
 @router.get("/v1/deid-quality", tags=["deid"])
-def quality(db: Session = DB, p: Principal = Depends(require("deid_quality:read"))) -> dict:
+def quality(db: Session = Depends(get_db), p: Principal = Depends(require("deid_quality:read"))) -> dict:
     """클래스별 미탐률·재처리 비율 (요구사항 9.1). 제공기관 관리자는 자기 기관만."""
     return deid.quality_report(db, None if _operator(p) else p.organization_id)
 
@@ -146,7 +146,7 @@ def quality(db: Session = DB, p: Principal = Depends(require("deid_quality:read"
 
 
 @router.get("/v1/assets/{asset_id}/tags", tags=["deid"])
-def get_tags(asset_id: str, request: Request, db: Session = DB, c: Container = Depends(container),
+def get_tags(asset_id: str, request: Request, db: Session = Depends(get_db), c: Container = Depends(container),
              p: Principal = Depends(require("asset:read"))) -> dict:
     a = load_scoped(db, c, request, Asset, asset_id, p)
     tags = db.execute(select(AssetTag).where(AssetTag.asset_id == a.asset_id)
@@ -167,7 +167,7 @@ class TagEdit(BaseModel):
 
 
 @router.patch("/v1/assets/{asset_id}/tags", tags=["deid"])
-def patch_tags(asset_id: str, body: TagEdit, request: Request, db: Session = DB,
+def patch_tags(asset_id: str, body: TagEdit, request: Request, db: Session = Depends(get_db),
                c: Container = Depends(container), p: Principal = Depends(require("asset:write"))) -> dict:
     bad = [t for t in [*body.add, *body.remove] if t not in tagging.VOCAB]
     if bad or not (body.add or body.remove):
@@ -181,7 +181,7 @@ def patch_tags(asset_id: str, body: TagEdit, request: Request, db: Session = DB,
 
 @router.get("/v1/scenes/search", tags=["deid"])
 def search_scenes(q: str = Query(min_length=1, max_length=200), limit: int = Query(20, ge=1, le=100),
-                  db: Session = DB, p: Principal = Depends(require("asset:read"))) -> dict:
+                  db: Session = Depends(get_db), p: Principal = Depends(require("asset:read"))) -> dict:
     """문장으로 장면 찾기 (요구사항 7.2). 권한 범위 안의 자산만."""
     tags = tagging.text_tags(q)
     if not tags:

@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select, text, true
 from sqlalchemy.orm import Session
 
-from app.api.deps import DB, client_ip, container, load_scoped, require
+from app.api.deps import client_ip, container, get_db, load_scoped, require
 from app.container import Container
 from app.db.models import Asset, Device, OrgEventCode, TrialSession
 from app.domain.normalize import parse_rfc3339
@@ -40,7 +40,7 @@ def get_schema(name: str, version: str, _: Principal = Depends(require("schema:r
 
 
 @router.get("/v1/codes/{table}", tags=["contracts"])
-def get_code_table(table: str, db: Session = DB,
+def get_code_table(table: str, db: Session = Depends(get_db),
                    p: Principal = Depends(require("code:read"))) -> dict:
     if table not in contracts.CODE_TABLES:
         raise ProblemError("NOT_FOUND")
@@ -61,7 +61,7 @@ class OrgEventSubcodeCreate(BaseModel):
 
 @router.post(_ORG_EVENT_SUBCODES, status_code=201, tags=["contracts"])
 def create_org_event_subcode(
-    body: OrgEventSubcodeCreate, request: Request, db: Session = DB,
+    body: OrgEventSubcodeCreate, request: Request, db: Session = Depends(get_db),
     c: Container = Depends(container), p: Principal = Depends(require("org_event_code:create")),
     idempotency_key: str | None = Header(default=None, min_length=8, max_length=128),
 ) -> JSONResponse:
@@ -104,7 +104,7 @@ def validate_contract(body: ValidateRequest, _: Principal = Depends(require("con
 
 # ---- 장비 정책 (에이전트가 주기적으로 받는다). 기본 정책·새 버전 저장은 services/device_policy (09번 초안 적용도)
 @router.get("/v1/devices/{device_id}/policy", tags=["agents"])
-def get_device_policy(device_id: str, request: Request, db: Session = DB,
+def get_device_policy(device_id: str, request: Request, db: Session = Depends(get_db),
                       c: Container = Depends(container), p: Principal = Depends(require("device_policy:read"))) -> dict:
     if p.kind == "DEVICE" and device_id != p.device_id:  # 수집기는 자기 정책만
         raise ProblemError("NOT_FOUND")
@@ -157,7 +157,7 @@ def _report_time(value: str | None, pointer: str) -> datetime | None:
 
 @router.get("/v1/quality-reports", tags=["status"])
 def get_quality_report(request: Request, session_id: str | None = None, from_: str | None = Query(None, alias="from"),
-                       to: str | None = None, db: Session = DB, c: Container = Depends(container),
+                       to: str | None = None, db: Session = Depends(get_db), c: Container = Depends(container),
                        p: Principal = Depends(require("quality_report:read"))) -> dict:
     """원본·삭제되지 않은 자산의 품질 상태 수와 상위 사유 (03번 요구사항 10.1, STD-03).
 
@@ -191,7 +191,7 @@ def get_quality_report(request: Request, session_id: str | None = None, from_: s
 
 
 @router.get("/v1/assets/{asset_id}/lineage", tags=["assets"])
-def get_lineage(asset_id: str, request: Request, db: Session = DB, c: Container = Depends(container),
+def get_lineage(asset_id: str, request: Request, db: Session = Depends(get_db), c: Container = Depends(container),
                 p: Principal = Depends(require("asset:read"))) -> dict:
     load_scoped(db, c, request, Asset, asset_id, p)
     out: dict = {"asset_id": asset_id}

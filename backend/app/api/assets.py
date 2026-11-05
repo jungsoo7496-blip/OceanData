@@ -11,7 +11,7 @@ from sqlalchemy import Float, column, exists, func, literal, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
-from app.api.deps import DB, client_ip, container, load_scoped, page_params, require
+from app.api.deps import client_ip, container, get_db, load_scoped, page_params, require
 from app.api.pagination import paginate
 from app.container import Container
 from app.db.models import Asset, TrialSession
@@ -65,7 +65,7 @@ def list_assets(request: Request, session_id: str | None = None, source_system_i
                 sharing_scope: str | None = None, variant: str | None = None, share_status: str | None = None,
                 env_metric: str | None = None, env_min: float | None = None, env_max: float | None = None,
                 captured_from: datetime | None = None,
-                captured_to: datetime | None = None, db: Session = DB,
+                captured_to: datetime | None = None, db: Session = Depends(get_db),
                 p: Principal = Depends(require("asset:read")), page: dict = Depends(page_params)) -> dict:
     stmt = scoped_select(Asset, p)
     for col, val in ((Asset.session_id, session_id), (Asset.source_system_id, source_system_id),
@@ -91,7 +91,7 @@ def list_assets(request: Request, session_id: str | None = None, source_system_i
 
 
 @router.get("/v1/assets/{asset_id}")
-def get_asset(asset_id: str, request: Request, db: Session = DB, c: Container = Depends(container),
+def get_asset(asset_id: str, request: Request, db: Session = Depends(get_db), c: Container = Depends(container),
               p: Principal = Depends(require("asset:read"))) -> dict:
     a = load_scoped(db, c, request, Asset, asset_id, p)
     c.audit.record("ASSET_VIEWED", principal=p, organization_id=a.organization_id, target_type="Asset",
@@ -108,7 +108,7 @@ class AssetPatch(BaseModel):
 
 
 @router.patch("/v1/assets/{asset_id}")
-def patch_asset(asset_id: str, body: AssetPatch, request: Request, db: Session = DB,
+def patch_asset(asset_id: str, body: AssetPatch, request: Request, db: Session = Depends(get_db),
                 c: Container = Depends(container), p: Principal = Depends(require("asset:write"))) -> dict:
     if not body.model_fields_set - {"reason"}:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "", "code": "min_properties",
@@ -160,7 +160,7 @@ def patch_asset(asset_id: str, body: AssetPatch, request: Request, db: Session =
 
 
 @router.get("/v1/assets/{asset_id}/receipt")
-def get_receipt(asset_id: str, request: Request, db: Session = DB, c: Container = Depends(container),
+def get_receipt(asset_id: str, request: Request, db: Session = Depends(get_db), c: Container = Depends(container),
                 p: Principal = Depends(require("asset:receipt"))) -> dict:
     a = load_scoped(db, c, request, Asset, asset_id, p)
     r = receipt(db, a)
@@ -176,7 +176,7 @@ class ReprocessRequest(BaseModel):
 
 
 @router.post("/v1/assets/{asset_id}/reprocess", status_code=202)
-def reprocess_asset(asset_id: str, body: ReprocessRequest, request: Request, db: Session = DB,
+def reprocess_asset(asset_id: str, body: ReprocessRequest, request: Request, db: Session = Depends(get_db),
                     c: Container = Depends(container), p: Principal = Depends(require("asset:reprocess"))) -> dict:
     """처리 단계 재실행 (05번 요구사항 7.2). 새 파생 자산은 계보에 연결된다."""
     from app.domain.ids import new_ulid
@@ -229,7 +229,7 @@ def _own_binary(a: Asset, p: Principal) -> None:
 
 
 @router.get("/v1/assets/{asset_id}/clips")
-def list_asset_clips(asset_id: str, request: Request, db: Session = DB, c: Container = Depends(container),
+def list_asset_clips(asset_id: str, request: Request, db: Session = Depends(get_db), c: Container = Depends(container),
                      p: Principal = Depends(require("asset:clip"))) -> dict:
     """이 영상의 구간 클립 작업과 결과 (09번 요구사항 7.2)."""
     from app.services import clips
@@ -240,7 +240,7 @@ def list_asset_clips(asset_id: str, request: Request, db: Session = DB, c: Conta
 
 
 @router.post("/v1/assets/{asset_id}/clips", status_code=202)
-def create_asset_clip(asset_id: str, body: ClipRequest, request: Request, db: Session = DB,
+def create_asset_clip(asset_id: str, body: ClipRequest, request: Request, db: Session = Depends(get_db),
                       c: Container = Depends(container), p: Principal = Depends(require("asset:clip"))) -> dict:
     """구간 클립 작업 등록 (09번 요구사항 7.2). 결과는 작업 큐가 파생 자산(CLIP)으로 계보에 연결한다."""
     from app.services import clips
@@ -258,7 +258,7 @@ def create_asset_clip(asset_id: str, body: ClipRequest, request: Request, db: Se
 
 
 @router.post("/v1/assets/{asset_id}/download-url")
-def create_download_url(asset_id: str, request: Request, db: Session = DB,
+def create_download_url(asset_id: str, request: Request, db: Session = Depends(get_db),
                         c: Container = Depends(container), p: Principal = Depends(require("asset:download"))) -> dict:
     """프록시 재생·원본 다운로드용 단기 URL (09번 요구사항 7.1, 7.3). 발급 사실은 감사 로그에 남긴다 (security.md)."""
     from datetime import timedelta
