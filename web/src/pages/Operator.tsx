@@ -1,4 +1,4 @@
-// 운영 콘솔 (09번 요구사항 10): 기관 사용량, 격리 목록, 감사 로그, 보존 dry-run, 약정(03번), 긴급 열람(02번), 백업 회차(08번).
+// 운영 콘솔 (09번 요구사항 10): 기관 사용량, 정책 편집(OperatorPolicies.tsx), 격리 목록, 감사 로그, 보존 dry-run, 약정(03번), 긴급 열람(02번), 백업 회차(08번).
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { App, Button, Card, DatePicker, Form, Input, InputNumber, Modal, Progress, Select, Space, Table, Tag, Typography } from 'antd'
 import { useState } from 'react'
@@ -6,6 +6,7 @@ import type { components } from '../contract/api.gen'
 import { api, ApiError, post, type Asset, type OrgUsage, type Page } from '../lib/api'
 import { bytes, kst, QUARANTINE_LABEL } from '../lib/format'
 import { explain } from '../lib/problems'
+import { PolicyEditor } from './OperatorPolicies'
 
 interface Audit { audit_id: string; occurred_at: string; actor_kind: string; actor_id: string | null; action: string; target_id: string | null; result: string }
 // 계약에서 생성한 타입 (손으로 쓴 타입 대신, 09번 작업 16)
@@ -211,6 +212,7 @@ export function OperatorConsole() {
             { title: '신청 백업', key: 'bk', render: (_, u) => bytes(u.breakdown.backup_bytes ?? 0) },
             { title: '쿼터', dataIndex: 'quota_bytes', render: bytes }]} />
       </Card>
+      <PolicyEditor />
       <Card title="보존 만료 dry-run" extra={<Button onClick={() => dry.mutate()} loading={dry.isPending}>미리 보기</Button>}>
         {dry.data ? (
           <>

@@ -1651,6 +1651,132 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/organization-policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 기관별 정책 — 쿼터·사용량·악성코드 검사 요구 (PLATFORM_OPERATOR)
+         * @description 09번 요구사항 10.1. 사용량은 /v1/usage와 같은 합(저장·격리·예약·신청 백업, domain.md 9장).
+         */
+        get: operations["listOrganizationPolicies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/organization-policies/{organization_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organization_id: components["schemas"]["organization_id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * 기관 쿼터·악성코드 검사 요구 변경 (PLATFORM_OPERATOR, 다중 인증, 사유 필수, 변경 전후 감사)
+         * @description 09번 요구사항 10.1·10.2. 바뀐 항목의 전후 값과 사유를 감사 ORG_POLICY_CHANGED에 남긴다.
+         *     쿼터를 지금 사용량보다 낮출 수 있다(새 업로드만 막히고 데이터는 지우지 않는다) — 응답의 over_quota로 알린다.
+         */
+        patch: operations["updateOrganizationPolicy"];
+        trace?: never;
+    };
+    "/v1/retention-policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 보존 정책 표 (대상별 기간·만료 동작·알림, PLATFORM_OPERATOR) */
+        get: operations["listRetentionPolicies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/retention-policies/{target}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description RAW, PROXY, THUMBNAIL, CLIP, DEID, SENSOR_EXPORT, EVIDENCE, DATASET, QUARANTINE:<사유> */
+                target: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * 보존 정책 변경 (PLATFORM_OPERATOR, 다중 인증, 사유 필수, 변경 전후 감사)
+         * @description 08번 요구사항 3.1, 09번 요구사항 10.2. 새로 등록·파생되는 자산부터 적용한다(이미 계산한 retention_until은 다시 계산하지 않는다).
+         *     만료 동작은 현재 정책을 따르므로 DELETE → KEEP은 기존 만료 대상도 바로 지키고, KEEP → DELETE는 기존 자산(무기한)에 영향이 없다.
+         *     EVIDENCE·DATASET과 자동 삭제하지 않는 격리(QUARANTINE:UNKNOWN_SESSION·MISSING_REQUIRED_METADATA, domain.md 9장)는
+         *     만료 동작을 바꿀 수 없다(409, action_locked). 표에 없는 대상은 404.
+         *     DELETE에는 retention_days가 있어야 한다.
+         */
+        patch: operations["updateRetentionPolicy"];
+        trace?: never;
+    };
+    "/v1/job-policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 처리 작업 정책 (우선순위·자원 클래스·최대 시도·대기 수, PLATFORM_OPERATOR) */
+        get: operations["listJobPolicies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/job-policies/{job_type}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_type: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * 작업 우선순위·최대 시도 변경 (PLATFORM_OPERATOR, 다중 인증, 사유 필수, 변경 전후 감사)
+         * @description 05번 요구사항 6.1, 09번 요구사항 10.2. 우선순위는 대기 중(QUEUED) 작업에도 바로 적용한다. 최대 시도는 새로 등록하는 작업부터.
+         */
+        patch: operations["updateJobPolicy"];
+        trace?: never;
+    };
     "/v1/retention/dry-run": {
         parameters: {
             query?: never;
@@ -2888,6 +3014,57 @@ export interface components {
             name: string;
             /** @enum {unknown} */
             status: "PLANNED" | "ACTIVE" | "CLOSED";
+        };
+        OrganizationPolicy: {
+            organization_id: components["schemas"]["organization_id"];
+            name: string;
+            org_type: string;
+            quota_bytes: number;
+            /** @description 저장·격리·예약·신청 백업의 합 (/v1/usage와 같음) */
+            usage_bytes: number;
+            malware_scan_required: boolean;
+            /** @description 사용량이 쿼터를 넘음 (새 업로드가 막힌다) */
+            over_quota: boolean;
+        };
+        OrganizationPolicyPatch: {
+            quota_bytes?: number;
+            malware_scan_required?: boolean;
+            reason: string;
+        };
+        RetentionPolicy: {
+            target: string;
+            policy_id: string;
+            retention_days: number | null;
+            /** @enum {unknown} */
+            expiry_action: "DELETE" | "KEEP";
+            notify_days_before: number;
+            updated_at: components["schemas"]["utc_datetime"];
+            /** @description 만료 동작을 바꿀 수 없다 (KEEP 고정): EVIDENCE·DATASET, 회차 미상·필수 메타데이터 누락 격리 */
+            action_locked: boolean;
+        };
+        RetentionPolicyPatch: {
+            retention_days?: number | null;
+            /** @enum {unknown} */
+            expiry_action?: "DELETE" | "KEEP";
+            notify_days_before?: number;
+            reason: string;
+        };
+        JobPolicy: {
+            job_type: string;
+            priority: number;
+            /** @enum {unknown} */
+            resource_class: "CPU" | "GPU";
+            /** @enum {unknown} */
+            gpu_fallback: "CPU" | "WAIT";
+            max_attempts: number;
+            lease_s: number;
+            /** @description 지금 대기 중인 작업 수 */
+            queued_jobs: number;
+        };
+        JobPolicyPatch: {
+            priority?: number;
+            max_attempts?: number;
+            reason: string;
         };
         /** @description label·project_id는 바꿀 수 없다 (보내면 400) */
         SessionPatch: {
@@ -7961,6 +8138,194 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    listOrganizationPolicies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 기관 정책 목록 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["OrganizationPolicy"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    updateOrganizationPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                organization_id: components["schemas"]["organization_id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "quota_bytes": 2199023255552,
+                 *       "reason": "2단계 실증 확대로 쿼터 2 TiB (합성 예시)"
+                 *     }
+                 */
+                "application/json": components["schemas"]["OrganizationPolicyPatch"];
+            };
+        };
+        responses: {
+            /** @description 바뀐 기관 정책 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationPolicy"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    listRetentionPolicies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 보존 정책 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["RetentionPolicy"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    updateRetentionPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description RAW, PROXY, THUMBNAIL, CLIP, DEID, SENSOR_EXPORT, EVIDENCE, DATASET, QUARANTINE:<사유> */
+                target: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "retention_days": 1825,
+                 *       "reason": "관리기관 보존 기준 5년 확정 (합성 예시)"
+                 *     }
+                 */
+                "application/json": components["schemas"]["RetentionPolicyPatch"];
+            };
+        };
+        responses: {
+            /** @description 바뀐 보존 정책 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetentionPolicy"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    listJobPolicies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 작업 정책 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["JobPolicy"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    updateJobPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_type: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "priority": 95,
+                 *       "reason": "비식별 적체 해소를 위해 우선 (합성 예시)"
+                 *     }
+                 */
+                "application/json": components["schemas"]["JobPolicyPatch"];
+            };
+        };
+        responses: {
+            /** @description 바뀐 작업 정책 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPolicy"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             429: components["responses"]["TooManyRequests"];
         };
     };

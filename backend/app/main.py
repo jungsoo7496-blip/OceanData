@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from app import API_VERSION
 from app.api import (
+    admin_policies,
     agents,
     assets,
     auth,
@@ -61,6 +62,7 @@ def create_app(c: Container | None = None) -> FastAPI:
     app.include_router(onboarding.router)
     app.include_router(break_glass.router)
     app.include_router(webhooks.router)
+    app.include_router(admin_policies.router)
     app.include_router(models_registry.router)
     app.include_router(monitoring.router)
     app.include_router(reports.router)

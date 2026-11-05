@@ -2925,6 +2925,163 @@ paths:
         '422': {$ref: '#/components/responses/Unprocessable'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
 
+  /v1/organization-policies:
+    get:
+      tags: [status]
+      operationId: listOrganizationPolicies
+      summary: 기관별 정책 — 쿼터·사용량·악성코드 검사 요구 (PLATFORM_OPERATOR)
+      description: 09번 요구사항 10.1. 사용량은 /v1/usage와 같은 합(저장·격리·예약·신청 백업, domain.md 9장).
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 기관 정책 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/OrganizationPolicy'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
+  /v1/organization-policies/{organization_id}:
+    parameters:
+      - {name: organization_id, in: path, required: true, schema: {$ref: './schemas/common.schema.json#/$defs/organization_id'}}
+    patch:
+      tags: [status]
+      operationId: updateOrganizationPolicy
+      summary: 기관 쿼터·악성코드 검사 요구 변경 (PLATFORM_OPERATOR, 다중 인증, 사유 필수, 변경 전후 감사)
+      description: |
+        09번 요구사항 10.1·10.2. 바뀐 항목의 전후 값과 사유를 감사 ORG_POLICY_CHANGED에 남긴다.
+        쿼터를 지금 사용량보다 낮출 수 있다(새 업로드만 막히고 데이터는 지우지 않는다) — 응답의 over_quota로 알린다.
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/OrganizationPolicyPatch'}
+            example: {quota_bytes: 2199023255552, reason: 2단계 실증 확대로 쿼터 2 TiB (합성 예시)}
+      responses:
+        '200':
+          description: 바뀐 기관 정책
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OrganizationPolicy'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
+  /v1/retention-policies:
+    get:
+      tags: [status]
+      operationId: listRetentionPolicies
+      summary: 보존 정책 표 (대상별 기간·만료 동작·알림, PLATFORM_OPERATOR)
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 보존 정책
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/RetentionPolicy'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
+  /v1/retention-policies/{target}:
+    parameters:
+      - {name: target, in: path, required: true, schema: {type: string, maxLength: 60}, description: 'RAW, PROXY, THUMBNAIL, CLIP, DEID, SENSOR_EXPORT, EVIDENCE, DATASET, QUARANTINE:<사유>'}
+    patch:
+      tags: [status]
+      operationId: updateRetentionPolicy
+      summary: 보존 정책 변경 (PLATFORM_OPERATOR, 다중 인증, 사유 필수, 변경 전후 감사)
+      description: |
+        08번 요구사항 3.1, 09번 요구사항 10.2. 새로 등록·파생되는 자산부터 적용한다(이미 계산한 retention_until은 다시 계산하지 않는다).
+        만료 동작은 현재 정책을 따르므로 DELETE → KEEP은 기존 만료 대상도 바로 지키고, KEEP → DELETE는 기존 자산(무기한)에 영향이 없다.
+        EVIDENCE·DATASET과 자동 삭제하지 않는 격리(QUARANTINE:UNKNOWN_SESSION·MISSING_REQUIRED_METADATA, domain.md 9장)는
+        만료 동작을 바꿀 수 없다(409, action_locked). 표에 없는 대상은 404.
+        DELETE에는 retention_days가 있어야 한다.
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RetentionPolicyPatch'}
+            example: {retention_days: 1825, reason: 관리기관 보존 기준 5년 확정 (합성 예시)}
+      responses:
+        '200':
+          description: 바뀐 보존 정책
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RetentionPolicy'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
+  /v1/job-policies:
+    get:
+      tags: [status]
+      operationId: listJobPolicies
+      summary: 처리 작업 정책 (우선순위·자원 클래스·최대 시도·대기 수, PLATFORM_OPERATOR)
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 작업 정책
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/JobPolicy'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
+  /v1/job-policies/{job_type}:
+    parameters:
+      - {name: job_type, in: path, required: true, schema: {type: string, maxLength: 60}}
+    patch:
+      tags: [status]
+      operationId: updateJobPolicy
+      summary: 작업 우선순위·최대 시도 변경 (PLATFORM_OPERATOR, 다중 인증, 사유 필수, 변경 전후 감사)
+      description: |
+        05번 요구사항 6.1, 09번 요구사항 10.2. 우선순위는 대기 중(QUEUED) 작업에도 바로 적용한다. 최대 시도는 새로 등록하는 작업부터.
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/JobPolicyPatch'}
+            example: {priority: 95, reason: 비식별 적체 해소를 위해 우선 (합성 예시)}
+      responses:
+        '200':
+          description: 바뀐 작업 정책
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/JobPolicy'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
   /v1/retention/dry-run:
     post:
       tags: [status]
@@ -4876,6 +5033,73 @@ components:
         project_id: {$ref: './schemas/common.schema.json#/$defs/project_id'}
         name: {type: string}
         status: {enum: [PLANNED, ACTIVE, CLOSED]}
+
+    OrganizationPolicy:
+      type: object
+      required: [organization_id, name, org_type, quota_bytes, usage_bytes, malware_scan_required, over_quota]
+      properties:
+        organization_id: {$ref: './schemas/common.schema.json#/$defs/organization_id'}
+        name: {type: string}
+        org_type: {type: string}
+        quota_bytes: {type: integer, minimum: 0}
+        usage_bytes: {type: integer, minimum: 0, description: 저장·격리·예약·신청 백업의 합 (/v1/usage와 같음)}
+        malware_scan_required: {type: boolean}
+        over_quota: {type: boolean, description: 사용량이 쿼터를 넘음 (새 업로드가 막힌다)}
+
+    OrganizationPolicyPatch:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      minProperties: 2
+      properties:
+        quota_bytes: {type: integer, minimum: 0}
+        malware_scan_required: {type: boolean}
+        reason: {type: string, minLength: 2, maxLength: 500}
+
+    RetentionPolicy:
+      type: object
+      required: [target, policy_id, retention_days, expiry_action, notify_days_before, updated_at, action_locked]
+      properties:
+        target: {type: string}
+        policy_id: {type: string}
+        retention_days: {type: [integer, 'null'], minimum: 1}
+        expiry_action: {enum: [DELETE, KEEP]}
+        notify_days_before: {type: integer, minimum: 0}
+        updated_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        action_locked: {type: boolean, description: '만료 동작을 바꿀 수 없다 (KEEP 고정): EVIDENCE·DATASET, 회차 미상·필수 메타데이터 누락 격리'}
+
+    RetentionPolicyPatch:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      minProperties: 2
+      properties:
+        retention_days: {type: [integer, 'null'], minimum: 1, maximum: 36500}
+        expiry_action: {enum: [DELETE, KEEP]}
+        notify_days_before: {type: integer, minimum: 0, maximum: 365}
+        reason: {type: string, minLength: 2, maxLength: 500}
+
+    JobPolicy:
+      type: object
+      required: [job_type, priority, resource_class, gpu_fallback, max_attempts, lease_s, queued_jobs]
+      properties:
+        job_type: {type: string}
+        priority: {type: integer}
+        resource_class: {enum: [CPU, GPU]}
+        gpu_fallback: {enum: [CPU, WAIT]}
+        max_attempts: {type: integer, minimum: 1}
+        lease_s: {type: integer, minimum: 1}
+        queued_jobs: {type: integer, minimum: 0, description: 지금 대기 중인 작업 수}
+
+    JobPolicyPatch:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      minProperties: 2
+      properties:
+        priority: {type: integer, minimum: 0, maximum: 1000}
+        max_attempts: {type: integer, minimum: 1, maximum: 20}
+        reason: {type: string, minLength: 2, maxLength: 500}
 
     SessionPatch:
       type: object

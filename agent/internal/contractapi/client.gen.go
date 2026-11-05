@@ -244,6 +244,9 @@ type ExternalCommonSchemaDefsObservationRejectReason67988162 = interface{}
 // ExternalCommonSchemaDefsOffsetDatetime07be295a RFC 3339, 시간대 오프셋 필수 (Z 또는 ±hh:mm)
 type ExternalCommonSchemaDefsOffsetDatetime07be295a = time.Time
 
+// ExternalCommonSchemaDefsOrganizationId38fc02b6 defines model for External_common_schema_defs_organization_id_38fc02b6.
+type ExternalCommonSchemaDefsOrganizationId38fc02b6 = string
+
 // ExternalCommonSchemaDefsPosition98dc010e [경도, 위도] 또는 [경도, 위도, 높이]. 위도 자리의 값이 ±90을 넘으면 순서가 뒤바뀐 것으로 보고 거부한다.
 type ExternalCommonSchemaDefsPosition98dc010e = []interface{}
 

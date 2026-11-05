@@ -15,7 +15,7 @@ React 18 + TS + Vite, Ant Design 5(ko_KR, 대비 강화 테마), TanStack Query,
 | /assets, /assets/:id | ORG | 필터(회차·장비·유형·변형·품질·상태·등급), L0~L4·역할, "촬영시각 미상"·"미검증" 구분, 상세·계보, 프록시 재생(단기 URL), 원본 내려받기(감사), 구간 클립 내보내기(재생 위치·숫자로 구간 → 작업 등록, 작업 목록 5초마다 갱신) | 6, 7.1~7.3 |
 | /upload | ORG | 원천 장비·변형·회차 선택, 브라우저 SHA-256 → POST /v1/uploads → Uppy 파트 전송 → complete. 같은 파일 재선택 시 서버가 진행 중 세션을 주고 listParts로 받은 파트를 건너뜀. 결과 표에 오류별 원인·다음 행동 | 8 |
 | /program | PROGRAM_VIEWER | 담당 사업·회차, L1 자산 메타데이터만 (바이너리 없음) | 9 |
-| /operator | PLATFORM_OPERATOR | 기관 사용량, 보존 dry-run, 전 기관 격리 목록, 감사 로그 | 10.1 일부 |
+| /operator | PLATFORM_OPERATOR | 기관 사용량, 정책 편집(기관 쿼터·악성코드 검사, 보존 정책, 작업 우선순위 — 다중 인증·사유·전후 감사), 보존 dry-run, 전 기관 격리 목록, 감사 로그, 약정·긴급 열람·백업·용량 예측·모델 등록부 | 10.1 일부, 10.2 |
 
 ## 서버 변경
 `POST /v1/assets/{id}/download-url`(계약 추가): 자기 기관 ORG 역할만, 처리 끝난 자산만, 격리 불가, 발급 감사. 관리기관·운영자 403.

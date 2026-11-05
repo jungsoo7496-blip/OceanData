@@ -132,6 +132,13 @@ PERMISSIONS: dict[str, Rule] = {
     "hardware_signal:write": Rule(frozenset({"PLATFORM_OPERATOR"})),
     "inspection:read": Rule(frozenset({"PLATFORM_OPERATOR"})),
     "inspection:write": Rule(frozenset({"PLATFORM_OPERATOR"})),
+    # 09 운영 콘솔 정책 편집 (요구사항 10.1·10.2, ADR-0038): 바꾸기는 다중 인증·사유·전후 감사
+    "org_policy:read": Rule(frozenset({"PLATFORM_OPERATOR"})),
+    "org_policy:write": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),
+    "retention_policy:read": Rule(frozenset({"PLATFORM_OPERATOR"})),
+    "retention_policy:write": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),
+    "job_policy:read": Rule(frozenset({"PLATFORM_OPERATOR"})),
+    "job_policy:write": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),
 }
 
 
