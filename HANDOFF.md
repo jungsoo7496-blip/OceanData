@@ -11,6 +11,7 @@
 -1d. **04번 웹훅 완료 (2026-11-05, 클라우드, ADR-0030):** 구독 API(https·사설 주소 거부·비밀 한 번), 상태 변경 같은 트랜잭션의 outbox(0015, down 포함), 워커 서명 전송·지수 백오프·N회 실패 시 구독 끔+기관 메일, 전송 직전 DNS 사설 주소 차단. 남은 위험: DNS 재바인딩은 나가는 방화벽으로(확인 필요).
 -1e. **04번 악성코드 검사 포트 완료 (2026-11-05, 클라우드, ADR-0031):** 무결성 검증 스트리밍 중 검사, 의심 시 QUARANTINED(MALWARE_SUSPECTED), 기관 정책 `org-policy --malware-scan on`(0016, down 포함), 검사기 없으면 상태 전이 전에 멈춰 재시도. `MALWARE_SCANNER=mock-eicar`는 시험용 — **실제 검사기 제품은 결정 대기**.
 -1f. **07번 MQTT 암호 보안 저장 (2026-11-05, 클라우드):** 에이전트가 시작할 때 config.json의 평문 `password`를 보안 저장소(`secrets/mqtt-<장비>.json`, Windows DPAPI·Unix 0600)로 옮기고 `password_secret`만 남긴다. Linux Go 전체 시험 통과, Windows는 교차 빌드·vet만 — **Windows 실기 시험 필요**.
+-1g. **01번 golangci-lint 완료 (2026-11-05, 클라우드, ADR-0032):** `agent/.golangci.yml`(standard 린터+gofmt, 제외 규칙·nolint 0건), `make agent-lint`·CI에서 Linux와 `GOOS=windows` 대상 두 번. 처음 지적 43건을 모두 코드에서 처리(쓰기 파일 닫기 오류 반환, 설정 임시 파일 정리 순서 등). GPL-3.0이라 `go run …@v2.15.0` 별도 프로세스로만 쓰고 go.mod·납품물에 넣지 않는다. Go 전체 race 시험·Windows 빌드/vet 통과.
 0. **03번 작업 7·12·14 완료. 다음은 같은 스펙의 작업 17 약정·연계 카드 등록 API다. 기존 CLI·테이블·권한을 읽고 계약부터 진행한다.** 업로드 원래 좌표의 EPSG:4326 변환 결과에 공통 GeoJSON·좌표 검사를 추가했다. 계약 선행 검사, PostGIS 관련 통합·응답 계약 6개, 생성 Go SDK 일치, Ruff·Mypy 통과. 원본·변환 이력 보존과 무효 변환의 400/미생성을 확인했다. 새 DB 마이그레이션/down은 해당 없음. `var/contracts-03-task7.log`, `var/meta03-location-integration.log`, `var/agent-codegen-03-coordinates.log`.
 
    **품질 재평가:** `python -m app.cli reevaluate-quality <기관ID> [--asset-id <자산ID>]`는 활성 DB 규칙을 사용하고 격리·삭제·미완료 자산과 관측 근거가 없는 과거 범위 경고를 보호한다. 신규 PostgreSQL 시험 6개, 수집·미디어 회귀 5개, Ruff·Mypy 통과. 잘못된 규칙으로 RECEIVED를 막지 않고 정상화 뒤 재시도했다. 공개 계약 및 DB 구조 변경 없음. `var/meta03-quality-integration-final.log`, `var/meta03-quality-regression.log`(ADR-0027).
@@ -53,7 +54,7 @@
 | 스펙 | 상태 | 남은 것 (자세히는 각 tasks.md) |
 |---|---|---|
 | 기준선 | 완료 | kiro-pack v0.2 + GPT v0.07 오픈소스 검토서(참고) |
-| 01 개발 기반 | 거의 완료 | `make up` 실패 경로 자동 시험, golangci-lint(06번과 함께) |
+| 01 개발 기반 | 완료 | `make up` 실패 경로 자동 시험·golangci-lint(ADR-0032) 완료. 원격 CI 실행 확인만 남음 |
 | 02 인증·테넌트 | 핵심 완료 | 긴급 열람(요구사항 8) 완료. Keycloak MFA 단계 인증, 구성원 관리(요구사항 9) 남음 |
 | 03 메타데이터 표준 | 완료 | 좌표 변환 검증·기관 하위 이벤트 코드 등록·품질 재평가·약정·연계 카드 API·계약 타입 생성(웹 TS·Go SDK, 백엔드는 스키마 검증) |
 | 04 수집 API | 핵심 완료 | 웹훅·쿼터 동시성 시험·악성코드 검사 포트(모의) 완료. 검사기 제품 결정, 예제 클라이언트·Schemathesis, 10GB 시험 남음 |
@@ -175,6 +176,7 @@ tools/         validate_contracts.py, check_traceability.py, check_licenses.py, 
 - ADR-0023 공급망·릴리스 검사 강화·실제 브라우저 탭 종료/재개
 - ADR-0024 CurrentUser DPAPI·서명 업데이트 감독 (Windows native·제품 CLI 재검증 완료)
 - ADR-0025 계약 SDK 생성용 참조 투영·고정 생성기·재생성/실제 호출 검사
+- ADR-0032 golangci-lint: GPL-3.0 개발 도구로만 `go run` 실행, go.mod·납품물 제외, Linux·Windows 두 번 검사
 - ADR-0031 악성코드 검사: 스트리밍 포트 + EICAR 모의, 기관 정책 플래그(0016), 검사기 없으면 미룸
 - ADR-0030 웹훅: ORM outbox 발행·저장하지 않는 서명 비밀·SSRF 차단·N회 실패 시 비활성
 - ADR-0029 긴급 열람: 요청자 한정·자산/회차 대상·만료 시각으로 즉시 회수·접근마다 감사

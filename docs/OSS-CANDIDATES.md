@@ -121,6 +121,7 @@
 | openapi-typescript | MIT | 채택 | 09 | contracts OpenAPI → TypeScript 타입 |
 | oapi-codegen | Apache-2.0 | 채택 | 06 | contracts OpenAPI → Go 클라이언트 |
 | Locust | MIT | 채택 | 17 | 부하 시험 (T12) |
+| golangci-lint | GPL-3.0 | 채택 (개발 도구만) | 01·06 | Go 정적 분석. `go run …@v2.15.0`로 별도 프로세스 실행, go.mod·납품물에 넣지 않음 (ADR-0032) |
 | @axe-core/playwright | MPL-2.0 | 채택 | 09·17 | KWCAG 자동 검사 보조 |
 | 한글 폰트 (Noto Sans KR 등) | OFL-1.1 | 채택 | 10 | PDF 한글 출력 |
 | ONNX Runtime | MIT | 채택 | 05·14 | 이미 스택 |
