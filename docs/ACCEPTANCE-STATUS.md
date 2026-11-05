@@ -1,6 +1,6 @@
 # 수용시험 결과 (2026-11-05, 로컬 검증 누적)
 
-> 백엔드 기준선은 2026-11-04 결과다. 2026-11-05 클라우드: T01-e를 실제 SeaweedFS로 확인해 PASS로 바꿨다 (docker 필요, 없으면 건너뜀). 2026-11-05에 T01-h 로컬 보안 보고서·T02-g 실제 브라우저 재개와 Go 전체 50건(MQTT 포함)·T03-b 에이전트 결과를 추가했다.
+> 백엔드 기준선은 2026-11-04 결과다. 2026-11-05 클라우드: T01-e(실제 SeaweedFS, docker 필요·없으면 건너뜀)·T15-f를 PASS로 바꿨다. 2026-11-05에 T01-h 로컬 보안 보고서·T02-g 실제 브라우저 재개와 Go 전체 50건(MQTT 포함)·T03-b 에이전트 결과를 추가했다.
 > T03-b는 실제 프로세스 강제 종료와 주입 시계 72시간 모의 단절 시험이며, 실제 72시간·PC 전원 차단·15번 엣지 장비 검증은 별도다.
 > 다시 만들기: `make test-acceptance`, 보안 보고서는 `tools/security_acceptance.py`로 연결한다. 원본은 `var/acceptance-results.jsonl`이다.
 > 이 표는 로컬 검증 범위이며 새 원격 GitHub Actions나 전체 릴리스 성공을 뜻하지 않는다. strict 라이선스 검사는 미상·승인 대기 항목 때문에 차단 중이다.
@@ -11,8 +11,8 @@
 |---|---|
 | NEEDS_HARDWARE | 2 |
 | NEEDS_INPUT | 4 |
-| NOT_IMPLEMENTED | 5 |
-| PASS | 73 |
+| NOT_IMPLEMENTED | 4 |
+| PASS | 74 |
 
 | ID | 케이스 | 상태 | 시험 / 사유 |
 |---|---|---|---|
@@ -90,7 +90,7 @@
 | T15-c | 유효한 이용 권한이 있는 데이터셋의 포함 자산 삭제 | PASS | tests/acceptance/test_t08_t15_sharing.py::test_t08_t15_dataset_distribution |
 | T15-d | Grant 철회·만료 | PASS | tests/acceptance/test_t08_t15_sharing.py::test_t08_t15_dataset_distribution<br>tests/acceptance/test_t08_t15_sharing.py::test_t15_deadline_and_expiry |
 | T15-e | v1 Grant로 v2 접근 | PASS | tests/acceptance/test_t08_t15_sharing.py::test_t08_t15_dataset_distribution |
-| T15-f | 회차 미상(UNKNOWN_SESSION) 격리 자산이 30일 지남 | NOT_IMPLEMENTED |  |
+| T15-f | 회차 미상(UNKNOWN_SESSION) 격리 자산이 30일 지남 | PASS | tests/acceptance/test_t15f_unknown_session_quarantine.py::test_t15f_unknown_session_quarantine_is_never_auto_deleted (31일 뒤 만료 dry-run·실행은 손상 격리만 삭제, 회차 미상은 남음, 운영자가 정책으로 자동 삭제를 켤 수 없음(409), ORG_ADMIN 다중 인증 폐기 확정으로만 삭제. 2026-11-05) |
 | T15-g | ORG_ADMIN이 공유 등급을 PRIVATE로 낮춤 | PASS | tests/acceptance/test_t08_t15_sharing.py::test_t08_t15_dataset_distribution |
 | T16-a | GPU 없음 | PASS | tests/acceptance/test_t09_deid_review.py::test_t09_deid_review_flow |
 | T16-b | `make bench` | PASS | tests/acceptance/test_t12_concurrency.py::test_t16b_bench_reports_per_step_throughput |
