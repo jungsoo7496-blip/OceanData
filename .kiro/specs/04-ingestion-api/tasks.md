@@ -3,7 +3,7 @@
 - [x] 1. 업로드 생성: 범위·정책·variant·쿼터·파트 URL — 요구사항 1.1, 1.2, 1.7 · 시험 `test_upload_happy_path_and_receipt`, `test_variant_rules_and_metadata_only`
 - [x] 2. C0 메타데이터 전용 등록 — 요구사항 1.3 · 시험 `test_variant_rules_and_metadata_only`
 - [x] 3. 쿼터 예약·확정·격리·해제 (행 잠금) — 요구사항 1.4, 1.5 · 시험 `test_quota_abort_and_expiry`, `test_T04_checksum_mismatch_is_quarantined`
-- [ ] 4. 쿼터 동시성 시험 (병렬 업로드 생성에서 합계 초과 없음) — 요구사항 1.5 (행 잠금 구현은 있음, 동시 시험 없음)
+- [x] 4. 쿼터 동시성 시험 (병렬 업로드 생성에서 합계 초과 없음) — 요구사항 1.5 · 시험 `tests/acceptance/test_t12_concurrency.py` (T12-a: 동시 12건·쿼터 5건분 → 정확히 5건, 예약+사용 ≤ 쿼터)
 - [x] 5. 스토리지 장애 503 + Retry-After — 요구사항 1.6 (멀티파트 생성 실패 시. 자동 시험 없음)
 - [x] 6. 멱등: ALREADY_REGISTERED, Idempotency-Key 재응답·충돌, C0 자산 세션 재개 — 요구사항 2.1~2.4 · 시험 `test_duplicates_and_idempotency`
 - [x] 7. 재개·만료(410)·취소 — 요구사항 3.1~3.4 · 시험 `test_T03_resume_after_interruption`, `test_quota_abort_and_expiry`

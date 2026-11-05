@@ -1,0 +1,18 @@
+{
+  "basic": {"project_name": "선박 영상 실증 (합성 예시)", "start_month": "2026-12",
+            "contacts": [{"role": "기술", "user_id": "usr_00000000000000000000000101"}]},
+  "equipment": [{"kind": "NVR", "manufacturer": "확인 필요", "model": "확인 필요", "count": 2}],
+  "data": {"note": "H.264 MP4 + GPS CSV (가정)"},
+  "volume": {"device_count": 4, "bitrate_mbps": 4, "hours_per_day": 8, "days": 7, "measured_7_days": false},
+  "time_sync": {"note": "GPS UTC (가정)"},
+  "network": {"note": "해상 오프라인, 접안 Wi-Fi (가정)"},
+  "current_storage": {"local_copy_policy": "ROTATING", "local_retention_days": 30, "note": "선내 NAS 30일 (가정)"},
+  "collection_mode_requested": "C2_EVENT_CLIPS",
+  "core_byproduct": {"note": "탐지 결과 로그는 CORE (가정)"},
+  "rights_privacy": {"note": "선원 얼굴 가능성 (가정)"},
+  "integration_methods": ["폴더 에이전트"],
+  "desired_services": ["영상 검색", "보고서", "백업"],
+  "report_forms": {"available": true, "formats": ["HWP"], "note": "월간 실증일지 (가정)"},
+  "samples": {"note": "비식별 샘플 3건 (가정)"},
+  "termination": {"note": "실증 종료 후 6개월 보관 (가정)"}
+}

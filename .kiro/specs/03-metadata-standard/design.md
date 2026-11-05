@@ -52,3 +52,13 @@ DB 버전과 문서 버전을 맞추고 한 행만 활성으로 둔다. 지원�
 명령은 `rule_version`, `evaluated`, `changed`, `skipped_missing_facts`를 출력하고 기관별 실행을 감사 로그에 남긴다.
 선택 대상은 삭제되지 않은 REGISTERED·PROXIED·READY_PRIVATE 자산이다. 재평가로 공유·격리·저장 위치를 변경하지 않는다.
 원래 범위 경고를 입증할 값이 없는 자산은 그대로 두고 건수를 보고한다. 공개 API와 DB 구조는 변경하지 않는다.
+
+## 약정·연계 카드 (작업 17, ADR-0028)
+- 약정: `GET /v1/agreements`(운영자 전체·제공기관 자기 기관), `POST /v1/agreements`(운영자·다중 인증, TIER1 목적 없음·TIER2 목적 1개 이상·
+  purpose 코드표·시간대 필수), `POST /v1/agreements/{id}/end`(사유, valid_until을 당김 — 새 상태 코드 없음, 13번 `tier2_valid()`에 바로 반영).
+- 연계 카드: `contracts/schemas/integration-card.schema.json`(부록 A 15개 분야, 분야 안은 자유 기록, `collection_mode_requested`·
+  `current_storage.local_copy_policy`만 domain.md 코드 검사, 담당자는 사용자 ID·역할만). ORG_ADMIN이 자기 기관 카드 등록·새 버전,
+  장비 지정 시 local_copy_policy를 장비에 반영(감사), 희망 collection_mode는 기록만. 다른 기관 카드·장비는 404 + 교차 기관 감사.
+- 정책 연결: `python -m app.cli set-policy <수집기> <정책.json> --integration-card <icd_…>` → `device_policies.integration_card_id`,
+  카드 응답 `linked_policies`. 0002 표 사용으로 신규 마이그레이션 없음.
+

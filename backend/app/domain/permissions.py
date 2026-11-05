@@ -42,6 +42,11 @@ PERMISSIONS: dict[str, Rule] = {
     "device:write": Rule(frozenset({"ORG_ADMIN", "PLATFORM_OPERATOR"})),
     "device_policy:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="agent:policy"),
     "device_policy:write": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),
+    # 03번 약정·연계 카드 (요구사항 1.4·1.5)
+    "agreement:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}),
+    "agreement:write": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),  # 공유 가능 여부(2단 약정)를 바꾼다
+    "integration_card:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}),
+    "integration_card:write": Rule(frozenset({"ORG_ADMIN"})),
     "agent:heartbeat": Rule(frozenset(), scope="agent:heartbeat"),
     "agent_health:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
     "schema:read": Rule(ALL_USER_ROLES, scope="status:read"),

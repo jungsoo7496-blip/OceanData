@@ -14,4 +14,4 @@
 - [x] 12. 세 경로 같은 저장 결과 — 요구사항 9.2 · CSV↔REST 시험 + MQTT는 REST로만 전송
 - [x] 13. 계약 예시 통과·거부 — 요구사항 9.3 (`make contracts-check`, 03번 검증기)
 - [ ] 14. MQTT 계정 비밀번호를 OS 보안 저장소로 (지금은 config.json) — 06번 DPAPI와 함께
-- [ ] 15. 기관 하위 이벤트 코드 등록 API — 03번 tasks 12와 같음
+- [x] 15. 기관 하위 이벤트 코드 등록 API — 03번 tasks 12로 구현 (`POST /v1/codes/event-categories/subcodes`, ADR-0026) · 시험 `tests/integration/test_org_event_subcodes.py`

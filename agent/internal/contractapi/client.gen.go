@@ -100,6 +100,9 @@ type ExternalAgentHeartbeatSchemaDefsQueue1c3421e0 struct {
 // ExternalCommonSchemaDefsAccessRequestId805bb48e defines model for External_common_schema_defs_access_request_id_805bb48e.
 type ExternalCommonSchemaDefsAccessRequestId805bb48e = string
 
+// ExternalCommonSchemaDefsAgreementIdF95ee31e defines model for External_common_schema_defs_agreement_id_f95ee31e.
+type ExternalCommonSchemaDefsAgreementIdF95ee31e = string
+
 // ExternalCommonSchemaDefsAnnotationExtD745e426 defines model for External_common_schema_defs_annotation_ext_d745e426.
 type ExternalCommonSchemaDefsAnnotationExtD745e426 struct {
 	AnnotationKind ExternalCommonSchemaDefsAnnotationKindBf49c73d `json:"annotation_kind"`
@@ -219,6 +222,9 @@ type ExternalCommonSchemaDefsIngestStatusC4273bf0 = interface{}
 
 // ExternalCommonSchemaDefsInspectionId2d537fe6 defines model for External_common_schema_defs_inspection_id_2d537fe6.
 type ExternalCommonSchemaDefsInspectionId2d537fe6 = string
+
+// ExternalCommonSchemaDefsIntegrationCardId00ff88d3 defines model for External_common_schema_defs_integration_card_id_00ff88d3.
+type ExternalCommonSchemaDefsIntegrationCardId00ff88d3 = string
 
 // ExternalCommonSchemaDefsLocalCopyPolicy091c1d0c defines model for External_common_schema_defs_local_copy_policy_091c1d0c.
 type ExternalCommonSchemaDefsLocalCopyPolicy091c1d0c = interface{}

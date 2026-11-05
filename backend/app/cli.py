@@ -22,6 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     sp = sub.add_parser("set-policy", help="수집기 정책 등록 (device-policy.schema.json 검증, 새 버전으로 저장)")
     sp.add_argument("device_id")
     sp.add_argument("policy_file")
+    sp.add_argument("--integration-card", default=None, help="이 정책을 만든 연계 카드 ID (03번 요구사항 1.5)")
     rr = sub.add_parser("retention", help="보존 만료 dry-run (--execute면 실제 삭제, 운영자 확인 후)")
     rr.add_argument("--execute", action="store_true")
     sm = sub.add_parser("set-mapping", help="관측값 매핑 프로필 새 버전 저장 (감사, 화면은 09번)")
@@ -70,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         print("시험 데이터 준비됨 (기관 5, 사용자 9, 사업 2, 장비 5, 회차 2)")
         return 0
     if args.cmd == "set-policy":
-        return _set_policy(c, args.device_id, args.policy_file)
+        return _set_policy(c, args.device_id, args.policy_file, args.integration_card)
     if args.cmd == "reevaluate-quality":
         import json
 
@@ -195,7 +196,8 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
-def _set_policy(c, device_id: str, policy_file: str) -> int:  # type: ignore[no-untyped-def]
+def _set_policy(c, device_id: str, policy_file: str,  # type: ignore[no-untyped-def]
+                card_id: str | None = None) -> int:
     import json
     from pathlib import Path
 
@@ -221,12 +223,20 @@ def _set_policy(c, device_id: str, policy_file: str) -> int:  # type: ignore[no-
                     (s_dev.collector_device_id != device_id and s_dev.device_id != device_id):
                 print(f"매핑되지 않은 원천 장비: {src['device_id']}", file=sys.stderr)
                 return 1
+        if card_id is not None:  # 연계 카드에서 만든 정책이면 같은 기관의 카드여야 한다 (03번 요구사항 1.5)
+            from app.db.models import IntegrationCard
+
+            owner = db.execute(select(IntegrationCard.organization_id).where(
+                IntegrationCard.integration_card_id == card_id).limit(1)).scalar_one_or_none()
+            if owner != dev.organization_id:
+                print(f"같은 기관의 연계 카드가 아닙니다: {card_id}", file=sys.stderr)
+                return 1
         ver = (db.execute(select(func.max(DevicePolicy.version)).where(DevicePolicy.device_id == device_id))
                .scalar() or 0) + 1
         db.add(DevicePolicy(device_id=device_id, version=ver, organization_id=dev.organization_id, policy=doc,
-                            created_by="cli", created_at=c.clock.now()))
+                            integration_card_id=card_id, created_by="cli", created_at=c.clock.now()))
     c.audit.record("POLICY_CHANGED", actor_kind="SYSTEM", actor_id="cli", organization_id=dev.organization_id,
-                   target_type="Device", target_id=device_id, details={"version": ver,
+                   target_type="Device", target_id=device_id, details={"version": ver, "integration_card_id": card_id,
                                                                        "policy_version": doc["policy_version"]})
     print(f"정책 저장: {device_id} v{ver} ({doc['policy_version']})")
     return 0

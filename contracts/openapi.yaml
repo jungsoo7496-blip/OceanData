@@ -1010,6 +1010,176 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {$ref: '#/components/responses/NotFound'}
 
+  /v1/agreements:
+    get:
+      tags: [context]
+      operationId: listAgreements
+      summary: 기관 약정 (운영자는 전체, 제공기관은 자기 기관)
+      description: 03번 요구사항 1.4. 13번 공유 규칙은 이 기록(TIER2·유효기간·허용 목적)으로 2단 약정 유효를 판단한다.
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 약정 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/Agreement'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      tags: [context]
+      operationId: createAgreement
+      summary: 약정 기록 (PLATFORM_OPERATOR, 다중 인증). 체결된 약정의 참조·유효기간·허용 목적을 남긴다
+      description: TIER1(수집·관리)은 허용 목적이 없고, TIER2(공동활용 제공)는 허용 목적이 하나 이상 있어야 한다. 약정서 원본은 저장하지 않고 참조만 기록한다.
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AgreementCreate'}
+      responses:
+        '201':
+          description: 기록됨
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Agreement'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+
+  /v1/agreements/{agreement_id}/end:
+    parameters:
+      - {name: agreement_id, in: path, required: true, schema: {$ref: './schemas/common.schema.json#/$defs/agreement_id'}}
+    post:
+      tags: [context]
+      operationId: endAgreement
+      summary: 약정 종료 (PLATFORM_OPERATOR, 다중 인증). 유효기간 끝을 당긴다
+      description: 상태 코드를 새로 만들지 않고 valid_until을 effective_at(기본 지금)으로 당긴다. 이미 공유된 자산·이용 권한은 자동으로 바꾸지 않는다 — 13번 하향·철회 절차를 따른다.
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties:
+                reason: {type: string, minLength: 2, maxLength: 500}
+                effective_at: {type: string, format: date-time}
+      responses:
+        '200':
+          description: 종료됨
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Agreement'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/integration-cards:
+    get:
+      tags: [context]
+      operationId: listIntegrationCards
+      summary: 연계 카드 최신 버전 (제공기관은 자기 기관, 운영자는 전체)
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 연계 카드 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/IntegrationCard'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      tags: [context]
+      operationId: createIntegrationCard
+      summary: 연계 카드 등록 (ORG_ADMIN, 자기 기관). 버전 1로 저장
+      description: 03번 요구사항 1.5, ONB-01. 장비를 지정하면 카드의 current_storage.local_copy_policy를 그 장비 기록에 반영한다(domain.md 9장). 희망 collection_mode는 기록만 한다.
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/IntegrationCardWrite'}
+            examples:
+              vessel:
+                value:
+                  device_id: dev_00000000000000000000000301
+                  content: {basic: {project_name: 선박 영상 실증 (합성 예시)}, current_storage: {local_copy_policy: ROTATING},
+                            collection_mode_requested: C2_EVENT_CLIPS}
+      responses:
+        '201':
+          description: 등록됨
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/IntegrationCard'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/integration-cards/{integration_card_id}:
+    parameters:
+      - {name: integration_card_id, in: path, required: true, schema: {$ref: './schemas/common.schema.json#/$defs/integration_card_id'}}
+    get:
+      tags: [context]
+      operationId: getIntegrationCard
+      summary: 연계 카드 (기본 최신 버전, version으로 이전 버전)
+      x-freeze: G1
+      x-status: draft
+      parameters:
+        - {name: version, in: query, schema: {type: integer, minimum: 1}}
+      responses:
+        '200':
+          description: 연계 카드
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/IntegrationCard'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/integration-cards/{integration_card_id}/versions:
+    parameters:
+      - {name: integration_card_id, in: path, required: true, schema: {$ref: './schemas/common.schema.json#/$defs/integration_card_id'}}
+    post:
+      tags: [context]
+      operationId: createIntegrationCardVersion
+      summary: 연계 카드 새 버전 (ORG_ADMIN). 이전 버전은 바꾸지 않는다
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/IntegrationCardWrite'}
+      responses:
+        '201':
+          description: 새 버전
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/IntegrationCard'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
   /v1/codes/{table}:
     parameters:
       - name: table
@@ -4329,6 +4499,67 @@ components:
         local_copy_policy: {$ref: './schemas/common.schema.json#/$defs/local_copy_policy'}
         local_retention_days: {type: [integer, 'null'], minimum: 0}
         expected_interval_s: {type: [integer, 'null'], minimum: 1}
+
+    Agreement:
+      type: object
+      required: [agreement_id, organization_id, tier, reference, valid_from, valid_until, allowed_purposes, status, in_effect]
+      properties:
+        agreement_id: {$ref: './schemas/common.schema.json#/$defs/agreement_id'}
+        organization_id: {$ref: './schemas/common.schema.json#/$defs/organization_id'}
+        tier: {enum: [TIER1, TIER2], description: TIER1=수집·관리(L0·L1), TIER2=공동활용 제공(L2~L4)}
+        reference: {type: string, description: 약정서 참조 (문서 번호 등, 원본은 저장하지 않음)}
+        valid_from: {type: string, format: date-time}
+        valid_until: {type: [string, 'null'], format: date-time}
+        allowed_purposes: {type: array, items: {$ref: './schemas/common.schema.json#/$defs/purpose'}}
+        status: {type: string}
+        in_effect: {type: boolean, description: 지금 유효한가 (ACTIVE이고 유효기간 안)}
+        created_by: {type: string}
+        created_at: {type: string, format: date-time}
+
+    AgreementCreate:
+      type: object
+      additionalProperties: false
+      required: [organization_id, tier, reference, valid_from]
+      properties:
+        organization_id: {$ref: './schemas/common.schema.json#/$defs/organization_id'}
+        tier: {enum: [TIER1, TIER2]}
+        reference: {type: string, minLength: 2, maxLength: 200}
+        valid_from: {type: string, format: date-time}
+        valid_until: {type: [string, 'null'], format: date-time}
+        allowed_purposes:
+          type: array
+          maxItems: 10
+          uniqueItems: true
+          items: {$ref: './schemas/common.schema.json#/$defs/purpose'}
+
+    IntegrationCardWrite:
+      type: object
+      additionalProperties: false
+      required: [content]
+      properties:
+        device_id: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+        content: {$ref: './schemas/integration-card.schema.json'}
+
+    IntegrationCard:
+      type: object
+      required: [integration_card_id, version, organization_id, device_id, content, created_by, created_at]
+      properties:
+        integration_card_id: {$ref: './schemas/common.schema.json#/$defs/integration_card_id'}
+        version: {type: integer, minimum: 1}
+        organization_id: {$ref: './schemas/common.schema.json#/$defs/organization_id'}
+        device_id: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/device_id'}, {type: 'null'}]}
+        content: {$ref: './schemas/integration-card.schema.json'}
+        linked_policies:
+          type: array
+          description: 이 카드에서 만든 장비 정책 버전
+          items:
+            type: object
+            required: [device_id, version]
+            properties:
+              device_id: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+              version: {type: integer}
+        created_by: {type: string}
+        created_at: {type: string, format: date-time}
 
     Device:
       type: object

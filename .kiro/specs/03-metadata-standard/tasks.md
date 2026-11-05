@@ -16,4 +16,4 @@
 - [x] 14. 품질 규칙 DB 로딩 + 운영자 재평가 명령 — 요구사항 10.1, 10.2 · PostgreSQL 신규 6개와 수집·미디어 회귀 통과(ADR-0027). 0002 재사용
 - [x] 15. 계보 조회(상·하위, 범위 필터) — 요구사항 11.2 · 시험 `test_lineage_and_asset_scope` (기록은 05번 파생 생성 때)
 - [x] 16. 장비 정책 조회 (저장본 없으면 장비 표로 기본 정책) — 요구사항 1.3 일부
-- [ ] 17. 약정·연계 카드 등록 API — 요구사항 1.4, 1.5 (화면은 09번, contracts 먼저)
+- [x] 17. 약정·연계 카드 등록 API — 요구사항 1.4, 1.5 · `GET/POST /v1/agreements`, `POST /v1/agreements/{id}/end`, `GET/POST /v1/integration-cards`, `GET /v1/integration-cards/{id}`, `POST …/versions`, `set-policy --integration-card` · 시험 `tests/integration/test_onboarding.py` · ADR-0028 (화면은 09번, 실제 카드 양식은 확인 필요)

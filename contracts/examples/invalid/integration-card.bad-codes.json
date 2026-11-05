@@ -1,0 +1,6 @@
+{
+  "basic": {"project_name": "잘못된 코드 (합성)", "contacts": [{"role": "기술", "name": "실명은 받지 않는다"}]},
+  "current_storage": {"local_copy_policy": "KEEP_FOREVER"},
+  "collection_mode_requested": "C9_EVERYTHING",
+  "desired_services": ["a", "b", "c", "d"]
+}
