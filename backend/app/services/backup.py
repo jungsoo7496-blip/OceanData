@@ -73,13 +73,30 @@ def plan(c: Container, db: Session) -> list[dict[str, Any]]:
                                 Asset.variant == "DEID"))
     for a in db.execute(q.order_by(Asset.asset_id)).scalars():
         zone, key = str(a.storage_zone), str(a.storage_key)
+        # 백업 키는 계층과 무관하다 (objects/<존>/<키>) — 계층을 옮겨도 다시 복사하지 않는다 (08번 요구사항 9)
         items[(zone, key)] = {"zone": zone, "key": key, "sha256": a.checksum_sha256, "size": int(a.byte_size or 0),
-                              "asset_id": a.asset_id}
-    for zone in NOT_FROM_ASSETS:
+                              "asset_id": a.asset_id, "tier": a.storage_tier or "HOT"}
+    for zone in NOT_FROM_ASSETS:  # 자산이 아닌 객체(보고서 스냅샷·매니페스트)는 HOT에만 있다
         for o in c.storage.list_objects(c.settings.buckets[zone], ""):
             items.setdefault((zone, o.key), {"zone": zone, "key": o.key, "sha256": None, "size": o.size,
                                              "asset_id": None, "etag": o.etag})
     return [items[k] for k in sorted(items)]
+
+
+def _read(c: Container, it: dict[str, Any]) -> tuple[str, str, int]:
+    """백업할 객체를 임시 파일로 받는다.
+    자산 객체가 회차 도중 다른 계층으로 옮겨져 읽지 못하면 지금 위치에서 한 번 더 받는다."""
+    from app.services import tiers
+
+    p = tiers.place(c, it.get("tier") or "HOT", it["zone"])
+    try:
+        return _download(p.storage, p.bucket, it["key"])
+    except Exception:
+        now_at = tiers.current(c, it["asset_id"]) if it.get("asset_id") else None
+        if now_at is None or now_at == (p.tier, it["zone"], it["key"]):
+            raise
+    q = tiers.place(c, now_at[0], now_at[1])
+    return _download(q.storage, q.bucket, now_at[2])
 
 
 def _download(storage: StoragePort, bucket: str, key: str) -> tuple[str, str, int]:
@@ -123,7 +140,7 @@ def _copy_objects(c: Container, dst: StoragePort, items: list[dict[str, Any]], p
                 st["skipped"] += 1
                 continue
         try:
-            path, sha, size = _download(c.storage, c.settings.buckets[it["zone"]], it["key"])
+            path, sha, size = _read(c, it)
         except Exception as exc:  # noqa: BLE001 - 객체 하나의 실패는 기록하고 계속
             failed.append({"key": bkey, "reason": f"원본을 읽지 못함 ({type(exc).__name__})"})
             continue

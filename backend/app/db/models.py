@@ -260,6 +260,9 @@ class Asset(Base):
         Index("ix_assets_org_status", "organization_id", "ingest_status"),
         Index("ix_assets_location", "location", postgresql_using="gist"),
         Index("ix_assets_capture", "organization_id", "capture_start_at"),
+        # 계층 이동 후보 찾기 (08번 요구사항 9.2): 계층·존별로 오래된 것부터
+        Index("ix_assets_tier_age", "storage_tier", "storage_zone", "ingested_at",
+              postgresql_where=text("deleted_at IS NULL")),
     )
     asset_id: Mapped[str] = mapped_column(ID, primary_key=True)
     schema_version: Mapped[str] = mapped_column(String(20))
@@ -306,6 +309,9 @@ class Asset(Base):
     ingest_context: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # 내부용(감시 규칙·로컬 ID·좌표 변환 이력)
     storage_zone: Mapped[str | None] = mapped_column(String(20))
     storage_key: Mapped[str | None] = mapped_column(String(400))
+    # 08: 객체가 있는 계층 HOT / WARM (요구사항 9). 키는 계층과 무관하게 같다. 이동은 sha256 확인 뒤에만 바꾼다
+    storage_tier: Mapped[str] = mapped_column(String(10), server_default="HOT", default="HOT")
+    last_accessed_at: Mapped[datetime | None] = mapped_column(TS)  # 08: 사용자가 바이너리를 마지막으로 연 시각
     embedding: Mapped[Any | None] = mapped_column(Vector(), deferred=True)
     legal_hold: Mapped[bool] = mapped_column(Boolean, server_default="false")  # 08: 법적 보류
     legal_hold_reason: Mapped[str | None] = mapped_column(Text)
@@ -609,6 +615,53 @@ class DeletionCertificate(Base):
     deleted_at: Mapped[datetime] = mapped_column(TS)
     objects: Mapped[list[Any]] = mapped_column(JSONB)
     backup_copies_expire_at: Mapped[datetime | None] = mapped_column(TS)
+
+
+class TierPolicy(Base):
+    """Hot → Warm 이동 규칙 (08번 요구사항 9.2, HW-3). 값은 정책이다 — 운영기관 확정 필요."""
+
+    __tablename__ = "tier_policies"
+    policy_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    zone: Mapped[str] = mapped_column(String(20))  # RAW / PROCESSED / EVIDENCE / DATASET (격리는 옮기지 않는다)
+    variant: Mapped[str | None] = mapped_column(String(20))  # NULL이면 그 존의 모든 변형
+    min_age_days: Mapped[int] = mapped_column(Integer)  # 들어온 뒤(ingested_at) 지난 일수
+    # 마지막 조회(없으면 ingested_at) 뒤 일수, NULL이면 보지 않는다
+    min_idle_days: Mapped[int | None] = mapped_column(Integer)
+    enabled: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    updated_at: Mapped[datetime] = mapped_column(TS)
+
+
+class TierMove(Base):
+    """계층 이동 기록 (08번 요구사항 9.2·9.3). 자산마다 열린 이동(COPYING·SWITCHED)은 하나뿐이다.
+
+    COPYING(원래 위치로 계속 읽음) → 사본 sha256 확인 → SWITCHED(자산 위치를 바꿈, 원래 객체는 유예 동안 남김)
+    → DONE(원래 객체 삭제). 실패하면 FAILED, 자산이 그사이 바뀌거나 지워지면 CANCELLED — 둘 다 원래 객체는 그대로다.
+    """
+
+    __tablename__ = "tier_moves"
+    __table_args__ = (
+        Index("uq_tier_moves_open", "asset_id", unique=True,
+              postgresql_where=text("status IN ('COPYING', 'SWITCHED')")),
+        Index("ix_tier_moves_status_due", "status", "delete_after"),
+    )
+    move_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    asset_id: Mapped[str] = mapped_column(ForeignKey("assets.asset_id"), index=True)
+    organization_id: Mapped[str] = mapped_column(ID)
+    policy_id: Mapped[str | None] = mapped_column(String(64))  # NULL이면 운영자 되돌리기(RECALL)
+    from_tier: Mapped[str] = mapped_column(String(10))
+    to_tier: Mapped[str] = mapped_column(String(10))
+    zone: Mapped[str] = mapped_column(String(20))
+    object_key: Mapped[str] = mapped_column(String(400))
+    byte_size: Mapped[int] = mapped_column(BigInteger)
+    checksum_sha256: Mapped[str] = mapped_column(String(64))  # 자산 기록의 값 — 사본을 다시 읽어 이것과 비교한다
+    status: Mapped[str] = mapped_column(String(12))  # COPYING / SWITCHED / DONE / FAILED / CANCELLED
+    error_code: Mapped[str | None] = mapped_column(String(60))
+    legal_hold: Mapped[bool | None] = mapped_column(Boolean)  # 위치를 바꿀 때 법적 보류였는지 (보관 경위 기록)
+    created_at: Mapped[datetime] = mapped_column(TS)
+    updated_at: Mapped[datetime] = mapped_column(TS)
+    switched_at: Mapped[datetime | None] = mapped_column(TS)
+    delete_after: Mapped[datetime | None] = mapped_column(TS)  # 원래 객체를 지워도 되는 시각 (≥ 다운로드 URL 유효시간)
+    finished_at: Mapped[datetime | None] = mapped_column(TS)
 
 
 class DailyTask(Base):
@@ -1171,5 +1224,6 @@ class UsageSnapshot(Base):
     reserved_bytes: Mapped[int] = mapped_column(BigInteger)
     backup_bytes: Mapped[int] = mapped_column(BigInteger)  # 기관이 신청한 백업 (사용량에 포함)
     by_zone: Mapped[dict[str, Any]] = mapped_column(JSONB)  # 존별 활성 자산 크기 합
+    by_tier: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # 계층별 (0022부터. 그 전 스냅숏은 모두 HOT)
     backup_target_bytes: Mapped[int] = mapped_column(BigInteger)  # 독립 백업 대상 (ADR-0021 술어)
     created_at: Mapped[datetime] = mapped_column(TS)

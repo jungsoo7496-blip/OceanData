@@ -33,8 +33,12 @@ def _db_ok(c: Container) -> bool:
 
 @router.get("/readyz", tags=["system"])
 def readyz(c: Container = Depends(container)) -> JSONResponse:
+    from app.services import tiers
+
     probes = {"db": lambda: _db_ok(c), "storage": c.storage.check, "idp": c.identity.check}
     futures = {name: _pool.submit(fn) for name, fn in probes.items()}
+    # WARM 계층은 준비 상태를 바꾸지 않고 경고만 한다 (HOT 업로드·조회는 계속된다, 08번 요구사항 9)
+    warm = _pool.submit(tiers.check, c, "WARM") if c.settings.tiering_enabled else None
     checks: dict[str, str] = {}
     for name, fut in futures.items():
         try:
@@ -50,6 +54,13 @@ def readyz(c: Container = Depends(container)) -> JSONResponse:
         warnings = encryption_warnings(c) if checks.get("storage") == "ok" else []
     except Exception:  # noqa: BLE001
         warnings = []
+    if warm is not None:
+        try:
+            warm_ok = bool(warm.result(timeout=c.settings.readiness_timeout_s + 0.5))
+        except (FutureTimeout, Exception):  # noqa: BLE001
+            warm_ok = False
+        if not warm_ok:
+            warnings = [*warnings, "storage_tier_unavailable:WARM"]
     if warnings:  # 준비 상태는 바꾸지 않고 상세에 표시 (요구사항 1.4)
         body["warnings"] = warnings
     return JSONResponse(body, status_code=200 if ready else 503)

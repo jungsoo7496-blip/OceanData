@@ -525,7 +525,10 @@ class IntegrityVerifier:
                     raise ScannerUnavailable("기관 정책이 악성코드 검사를 요구하지만 MALWARE_SCANNER가 none입니다")
             if asset.ingest_status == "RECEIVED":
                 asset.ingest_status = states.transition("ingest_status", "RECEIVED", "VALIDATING", {"SERVICE"})
-            bucket, key = self.c.settings.buckets[asset.storage_zone or "RAW"], asset.storage_key or ""
+            from app.services import tiers
+
+            storage, bucket = tiers.locate(self.c, asset)
+            key = asset.storage_key or ""
             up = db.execute(select(Upload).where(Upload.asset_id == asset_id, Upload.status == "RECEIVED")
                             .order_by(Upload.created_at.desc()).limit(1)).scalar_one_or_none()
         # 스트리밍으로 다시 계산한다 (요구사항 4.2)
@@ -533,7 +536,7 @@ class IntegrityVerifier:
         size = 0
         head = b""
         scan = scanner.start() if scanner is not None else None
-        for chunk in self.c.storage.iter_object(bucket, key):
+        for chunk in storage.iter_object(bucket, key):
             if len(head) < 4096:
                 head += chunk[:4096 - len(head)]
             h.update(chunk)
@@ -566,16 +569,13 @@ class IntegrityVerifier:
             if up is not None and not revalidate:
                 db.get(Upload, up.upload_id).reserved_bytes = 0  # type: ignore[union-attr]
             if reason:
-                self._quarantine(db, asset, reason, bucket, key)
+                self._quarantine(db, asset, reason)
                 if not revalidate:
                     quota.settle(asset.organization_id, reserved, to="quarantine", actual=size)
                 return "QUARANTINED"
-            if revalidate:  # 격리 존에서 정식 위치로 되돌리고 격리 사용량을 사용량으로 옮긴다
+            if revalidate:  # 격리 존에서 정식 위치(HOT)로 되돌리고 격리 사용량을 사용량으로 옮긴다
                 asset.quarantine_reason = None
-                zone = zone_for(asset.variant)
-                new_key = object_key(asset)
-                self.c.storage.move_object(bucket, key, self.c.settings.buckets[zone], new_key)
-                asset.storage_zone, asset.storage_key = zone, new_key
+                tiers.relocate(self.c, asset, zone=zone_for(asset.variant), key=object_key(asset))
                 q = quota._row(asset.organization_id)
                 q.quarantine_bytes = max(0, q.quarantine_bytes - size)
                 q.used_bytes += size
@@ -592,15 +592,15 @@ class IntegrityVerifier:
             schedule_after_register(self.c, asset)  # 영상 처리(05번)·센서 파일 파싱(07번)
             return asset.ingest_status
 
-    def _quarantine(self, db: Session, asset: Asset, reason: str, bucket: str, key: str) -> None:
+    def _quarantine(self, db: Session, asset: Asset, reason: str) -> None:
+        from app.services import tiers
+
         asset.ingest_status = states.transition("ingest_status", asset.ingest_status, "QUARANTINED", {"SERVICE"})
         asset.quarantine_reason = reason
         asset.updated_at = self.c.clock.now()
-        qbucket = self.c.settings.buckets["QUARANTINE"]
         try:
-            if asset.storage_zone != "QUARANTINE":
-                self.c.storage.move_object(bucket, key, qbucket, key)  # 격리 존으로 옮긴다 (요구사항 5.2)
-            asset.storage_zone = "QUARANTINE"
+            if asset.storage_zone != "QUARANTINE":  # 격리 존(HOT)으로 옮긴다 (요구사항 5.2, 08번 요구사항 9)
+                tiers.relocate(self.c, asset, zone="QUARANTINE", key=asset.storage_key or "")
         except Exception as exc:  # noqa: BLE001 - 이동 실패해도 상태는 격리로 둔다 (재시도는 08번 정리 작업)
             log.error("quarantine_move_failed", extra={"asset_id": asset.asset_id, "error_type": type(exc).__name__})
         # 격리 보존은 사유별 정책 (domain.md 9장: 손상 30일 삭제, 회차 미상·메타 누락은 자동 삭제 없음)

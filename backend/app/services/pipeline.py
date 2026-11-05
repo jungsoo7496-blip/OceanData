@@ -101,15 +101,16 @@ def sweep_stale_work(c: Container, now_ts: float | None = None) -> int:
 
 @contextmanager
 def local_copy(c: Container, asset: Asset) -> Iterator[str]:
-    """객체를 임시 파일로 스트리밍해 받아 둔다 (메모리에 올리지 않는다). 여유 공간을 먼저 확인한다."""
-    bucket = c.settings.buckets[asset.storage_zone or zone_for(asset.variant)]
+    """객체를 임시 파일로 스트리밍해 받아 둔다 (메모리에 올리지 않는다). 여유 공간을 먼저 확인한다.
+    위치는 자산의 계층(HOT·WARM)에서 정한다 (08번 요구사항 9)."""
+    from app.services import tiers
+
     ensure_work_space(c, int(asset.byte_size or 0))
     fd, path = tempfile.mkstemp(prefix="marine-", suffix="." + (asset.mime_type.split("/")[-1] or "bin"),
                                 dir=work_dir(c))
     try:
         with os.fdopen(fd, "wb") as f:
-            for chunk in c.storage.iter_object(bucket, asset.storage_key or ""):
-                f.write(chunk)
+            tiers.download(c, asset, f)
         yield path
     finally:
         try:
@@ -177,7 +178,8 @@ def media_probe(c: Container, asset_id: str) -> str:
         asset = db.get(Asset, asset_id)
         if asset is None or not asset.has_binary or asset.ingest_status != "REGISTERED":
             return "SKIPPED"
-        snapshot = Asset(**{k: getattr(asset, k) for k in ("storage_zone", "storage_key", "variant", "mime_type")})
+        snapshot = Asset(**{k: getattr(asset, k) for k in ("asset_id", "storage_tier", "storage_zone", "storage_key",
+                                                           "variant", "mime_type")})
     with local_copy(c, snapshot) as path:
         r = _run([c.settings.ffprobe_path, "-v", "error", "-print_format", "json", "-show_format", "-show_streams",
                   path], c.settings.ffmpeg_timeout_s)
@@ -220,13 +222,14 @@ def quarantine_corrupt(c: Container, asset_id: str) -> str:
 
         apply_retention(db, asset, c.clock.now())
         asset.updated_at = c.clock.now()
-        bucket, key = c.settings.buckets[asset.storage_zone or "RAW"], asset.storage_key or ""
+        key = asset.storage_key or ""
         size = asset.byte_size
         org = asset.organization_id
         if asset.storage_zone != "QUARANTINE":
-            try:
-                c.storage.move_object(bucket, key, c.settings.buckets["QUARANTINE"], key)
-                asset.storage_zone = "QUARANTINE"
+            from app.services import tiers
+
+            try:  # 격리 존은 HOT에만 있다 — WARM에 있던 객체도 HOT 격리 버킷으로 옮긴다 (08번 요구사항 9)
+                tiers.relocate(c, asset, zone="QUARANTINE", key=key)
                 q = Quota(c, db)._row(org)
                 q.used_bytes, q.quarantine_bytes = max(0, q.used_bytes - size), q.quarantine_bytes + size
             except Exception as exc:  # noqa: BLE001
@@ -286,6 +289,7 @@ def create_derived(c: Container, db: Session, parent: Asset, path: str, *, varia
     from app.services.retention import apply_retention
 
     apply_retention(db, child, now)  # 파생본 보존 정책 (08번)
+    child.storage_tier = "HOT"  # 새 객체는 언제나 HOT에 쓴다 (08번 요구사항 9, 옮기는 것은 Tier_Mover)
     c.storage.upload_file(c.settings.buckets[child.storage_zone], child.storage_key, path, mime)
     db.add(child)
     db.flush()
@@ -453,7 +457,10 @@ def sensor_parse(c: Container, asset_id: str) -> str:
         elif asset.byte_size > c.settings.sensor_file_max_bytes:
             run.row_errors = [{"row": 0, "reason": "FILE_TOO_LARGE"}]
         else:
-            content = c.storage.get_object(c.settings.buckets[asset.storage_zone or "RAW"], asset.storage_key)
+            from app.services import tiers
+
+            storage, bucket = tiers.locate(c, asset)
+            content = storage.get_object(bucket, asset.storage_key)
             parsed = parse_rows(content, mapping.mapping)
             fmt = (mapping.mapping.get("timestamp") or {}).get("format")
             res = ingest_items(c, db, organization_id=asset.organization_id, device=device, items=parsed.items,

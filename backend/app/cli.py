@@ -25,6 +25,12 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--integration-card", default=None, help="이 정책을 만든 연계 카드 ID (03번 요구사항 1.5)")
     rr = sub.add_parser("retention", help="보존 만료 dry-run (--execute면 실제 삭제, 운영자 확인 후)")
     rr.add_argument("--execute", action="store_true")
+    tr = sub.add_parser("tiers", help="Hot/Warm 계층 이동 dry-run: 규칙별 대상 수·용량, 계층별 저장량, "
+                                      "이동 상태 (08번 요구사항 9)")
+    tr.add_argument("--recall", action="store_true",
+                    help="WARM 자산을 HOT으로 되돌리는 이동을 등록 (워커가 복사·확인·전환, "
+                         "마이그레이션 0022 되돌리기 전)")
+    tr.add_argument("--limit", type=int, default=None, help="--recall 대상 수 제한")
     sm = sub.add_parser("set-mapping", help="관측값 매핑 프로필 새 버전 저장 (감사, 화면은 09번)")
     sm.add_argument("device_id")
     sm.add_argument("mapping_file")
@@ -62,12 +68,28 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(settings.log_level)
     c = build_container(settings)
     if args.cmd == "init-buckets":
-        for zone, bucket in settings.buckets.items():
-            c.storage.ensure_bucket(bucket)
+        from app.services import tiers
+
+        # WARM 계층 버킷은 계층 이동을 켰을 때만 만든다 (WARM 저장소가 아직 없을 수 있다, 08번 요구사항 9)
+        for place in tiers.all_places(c, only=("HOT", "WARM") if settings.tiering_enabled else ("HOT",)):
+            place.storage.ensure_bucket(place.bucket)
             enc = ""
-            if settings.s3_sse == "AES256" and hasattr(c.storage, "ensure_encryption"):
-                enc = f" · 서버 측 암호화 {c.storage.ensure_encryption(bucket)}"
-            print(f"{zone}: {bucket} 준비됨{enc}")
+            if settings.s3_sse == "AES256" and hasattr(place.storage, "ensure_encryption"):
+                enc = f" · 서버 측 암호화 {place.storage.ensure_encryption(place.bucket)}"
+            label = place.zone if place.tier == "HOT" else f"{place.tier}:{place.zone}"
+            print(f"{label}: {place.bucket} 준비됨{enc}")
+        return 0
+    if args.cmd == "tiers":
+        import json as _json
+
+        from app.services import tier_mover
+
+        if args.recall:
+            moves = tier_mover.recall(c, args.limit)
+            print(f"HOT으로 되돌리는 이동 {len(moves)}건 등록 (워커가 처리, 원래 객체는 유예 뒤 삭제)")
+            return 0
+        with c.sessionmaker() as db:
+            print(_json.dumps(tier_mover.plan(c, db, c.clock.now()), ensure_ascii=False, indent=1))
         return 0
     if args.cmd == "seed":
         from app.seed import seed

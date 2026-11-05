@@ -27,3 +27,9 @@ INGEST_LAG = Gauge("ingest_lag_seconds", "장비별 수집 지연 (현재 − �
 WATCH_ACTIVE = Gauge("watch_alerts_active", "규칙별 활성 경보 수", ["rule_code"], registry=WORKER_REGISTRY)
 WATCH_EVALS = Counter("watch_evaluations_total", "감시 규칙 평가 횟수", registry=WORKER_REGISTRY)
 INCIDENTS_OPENED = Counter("incidents_opened_total", "규칙별 새 장애 기록 수", ["rule_code"], registry=WORKER_REGISTRY)
+
+# Hot/Warm 계층 이동 (08번 요구사항 9) — 처리량은 가정하지 않고 재서 조정한다 (HW-8)
+TIER_MOVES = Counter("tier_moves_total", "계층 이동 결과 수 (SWITCHED·DONE·FAILED·CANCELLED)", ["to_tier", "result"],
+                     registry=WORKER_REGISTRY)
+TIER_MOVE_BYTES = Counter("tier_move_bytes_total", "계층 이동으로 복사하고 sha256을 확인한 바이트", ["to_tier"],
+                          registry=WORKER_REGISTRY)

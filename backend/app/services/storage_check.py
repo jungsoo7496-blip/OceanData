@@ -21,15 +21,21 @@ def encryption_warnings(c: Container, *, refresh: bool = False) -> list[str]:
     hit = _CACHE.get(id(c))
     if hit and not refresh and time.monotonic() - hit[0] < TTL_S:
         return hit[1]
-    status_fn = getattr(c.storage, "encryption_status", None)
-    if status_fn is None:
-        warnings = ["storage_encryption_unknown"]
-    else:
+    from app.services.tiers import storage_of
+
+    # HOT은 기존 코드(storage_encryption_unsupported:<존>), WARM은 계층 이동을 켰을 때만 :WARM:<존> (08번 요구사항 9)
+    warnings: list[str] = []
+    for tier in ("HOT", "WARM") if c.settings.tiering_enabled else ("HOT",):
+        prefix = "" if tier == "HOT" else "WARM:"
+        status_fn = getattr(storage_of(c, tier), "encryption_status", None)
+        if status_fn is None:
+            warnings.append("storage_encryption_unknown" + (":WARM" if prefix else ""))
+            continue
         try:
-            bad = [zone for zone, bucket in c.settings.buckets.items() if status_fn(bucket) != "enabled"]
+            bad = [zone for zone, bucket in c.settings.tier_buckets(tier).items() if status_fn(bucket) != "enabled"]
         except Exception:  # noqa: BLE001 - 확인 실패도 경고로 (기동을 막지 않는다)
             bad = ["*"]
-        warnings = [f"storage_encryption_unsupported:{z}" for z in bad]
+        warnings += [f"storage_encryption_unsupported:{prefix}{z}" for z in bad]
     _CACHE[id(c)] = (time.monotonic(), warnings)
     return warnings
 

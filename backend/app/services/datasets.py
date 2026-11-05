@@ -113,12 +113,14 @@ def version_lineage(db: Session, v: DatasetVersion, organization_id: str | None)
             "manifest_sha256": v.manifest_sha256, "hidden_item_count": len(rows) - len(visible), "items": items}
 
 
-def _copy(c: Container, src_bucket: str, src_key: str, dst_bucket: str, dst_key: str) -> None:
+def _copy(c: Container, a: Asset, dst_bucket: str, dst_key: str) -> None:
+    """자산 객체(지금 계층에서 읽음, 08번 요구사항 9)를 DATASET 존(HOT)에 복사한다."""
+    from app.services import tiers
+
     fd, path = tempfile.mkstemp(prefix="dsv-")
     try:
         with os.fdopen(fd, "wb") as f:
-            for chunk in c.storage.iter_object(src_bucket, src_key):
-                f.write(chunk)
+            tiers.download(c, a, f)
         c.storage.upload_file(dst_bucket, dst_key, path)
     finally:
         os.unlink(path)
@@ -154,8 +156,7 @@ def _materialize(c: Container, db: Session, ds: Dataset, vid: str, version: str,
         ext = mimetypes.guess_extension(a.mime_type or "") or ".bin"
         path = f"{a.variant.lower()}/{a.asset_id}{ext}"
         key = f"{ds.dataset_id}/{vid}/{path}"
-        _copy(c, c.settings.buckets[a.storage_zone or "PROCESSED"], a.storage_key or "", c.settings.bucket_datasets,
-              key)
+        _copy(c, a, c.settings.bucket_datasets, key)
         rows.append(DatasetVersionItem(dataset_version_id=vid, asset_id=a.asset_id, organization_id=a.organization_id,
                                        path=path, object_key=key, byte_size=a.byte_size,
                                        checksum_sha256=a.checksum_sha256))

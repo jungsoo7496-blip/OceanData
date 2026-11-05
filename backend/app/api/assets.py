@@ -244,10 +244,12 @@ def create_asset_clip(asset_id: str, body: ClipRequest, request: Request, db: Se
                       c: Container = Depends(container), p: Principal = Depends(require("asset:clip"))) -> dict:
     """구간 클립 작업 등록 (09번 요구사항 7.2). 결과는 작업 큐가 파생 자산(CLIP)으로 계보에 연결한다."""
     from app.services import clips
+    from app.services.tiers import touch_accessed
 
     a = load_scoped(db, c, request, Asset, asset_id, p)
     _own_binary(a, p)
     out, created = clips.request_clip(c, a, p.principal_id, body.start_s, body.end_s)
+    touch_accessed(db, a.asset_id, c.clock.now())  # 사용자가 원 영상을 쓴다 (계층 규칙의 '마지막 조회')
     if created:
         c.audit.record("CLIP_EXPORT_REQUESTED", principal=p, organization_id=a.organization_id, target_type="Asset",
                        target_id=a.asset_id, reason=body.reason, source_ip=client_ip(request),
@@ -276,8 +278,14 @@ def create_download_url(asset_id: str, request: Request, db: Session = Depends(g
         raise ProblemError("CONFLICT", detail="아직 내려받을 수 있는 바이너리가 없습니다")
     if a.ingest_status == "QUARANTINED":
         raise ProblemError("CONFLICT", detail="격리된 자산은 내려받을 수 없습니다")
+    from app.services import tiers
+
     ttl = c.settings.presign_download_ttl_s
-    url = c.storage.presign_get(c.settings.buckets[a.storage_zone or "RAW"], a.storage_key, ttl)
+    # 지금 기록된 계층의 위치로 서명한다. 계층 이동 중이면 원래 위치이고, 전환 뒤에도 원래 객체는 URL 유효시간 이상
+    # 남겨 두므로 이미 발급한 URL이 끊기지 않는다 (08번 요구사항 9.3)
+    storage, bucket = tiers.locate(c, a)
+    url = storage.presign_get(bucket, a.storage_key, ttl)
+    tiers.touch_accessed(db, a.asset_id, c.clock.now())  # 계층 규칙의 '마지막 조회'
     c.audit.record("DOWNLOAD_URL_ISSUED", principal=p, organization_id=a.organization_id, target_type="Asset",
                    target_id=a.asset_id, source_ip=client_ip(request), details={"variant": a.variant})
     if grant is not None:  # 긴급 열람 중 원본 접근은 따로 남긴다 (요구사항 8.3)

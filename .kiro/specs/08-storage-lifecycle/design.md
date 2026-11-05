@@ -33,11 +33,33 @@
 - 워커가 하루 한 번 `usage_snapshots`(0018)에 기관별 쿼터 장부(등록·격리·예약·신청 백업)·존별 활성 자산 크기·독립 백업 대상 크기를 남긴다.
 - `GET /v1/capacity-forecast`(운영자): 최근 `CAPACITY_WINDOW_DAYS`(30) 스냅숏 합계의 최소제곱 기울기로 `CAPACITY_THRESHOLD_RATIO`(0.7) 도달 예상일.
   전체 용량 `STORAGE_CAPACITY_BYTES`가 없으면 예측일 없이 '확인 필요'. 예상일이 `CAPACITY_LEAD_TIME_DAYS`(180) 안이면 하루 한 번 운영자 메일.
-- `GET /v1/usage-reports?month=YYYY-MM`(ORG_ADMIN 자기 기관, 운영자 전체): 그 달 마지막 스냅숏의 존별 저장량, 처리 시간(작업 마지막 시도의
+- `GET /v1/usage-reports?month=YYYY-MM`(ORG_ADMIN 자기 기관, 운영자 전체): 그 달 마지막 스냅숏의 존별·계층별 저장량, 처리 시간(작업 마지막 시도의
   locked_at~updated_at, CPU/GPU), 다운로드 URL 발급 수·대상 크기(실제 전송량 아님), 데이터셋 배포 수. 금액은 넣지 않는다.
+  계층별은 스냅숏의 `by_tier`(0022), 그 전 스냅숏은 모두 HOT.
 
 ## 서버 측 암호화 (요구사항 1.3·1.4)
 `S3_SSE=AES256`이면 `init-buckets`가 존별 버킷에 기본 암호화(SSE-S3)를 요청한다(객체마다 헤더를 붙이지 않아 사전 서명 업로드도 적용).
 API 기동 때와 `/readyz`(5분 캐시)에서 `GetBucketEncryption`으로 확인해, 켜지지 않았거나 제품이 지원하지 않으면 경고 로그와
 `/readyz` `warnings: ["storage_encryption_unsupported:<존>"]`. 준비 상태(200/503)는 바꾸지 않는다. 주소·자격증명은 내보내지 않는다.
+계층 이동을 켜면 WARM 버킷도 같은 방식으로 확인한다(`storage_encryption_unsupported:WARM:<존>`).
+
+## Hot/Warm 계층·Tier_Mover (요구사항 9, 마이그레이션 0022, ADR-0036)
+| 구성 | 구현 |
+|---|---|
+| 계층 설정 (9.1) | HOT = `S3_*`·`BUCKET_*`. WARM = `WARM_S3_*`(비우면 HOT과 같은 S3 연결)·`WARM_BUCKET_RAW/PROC/EVIDENCE/DATASETS`(비우면 `<HOT 버킷>-warm`). 격리 존은 HOT에만. 같은 주소에서 WARM 버킷 = HOT 버킷이면 기동 실패. `TIERING_ENABLED`(기본 false). 컨테이너 `warm_storage`(None이면 HOT 저장소 공유) |
+| 위치 해석 (9.3) | 자산 행 (storage_tier, storage_zone, storage_key), 키는 계층과 무관. 읽는 곳은 모두 `services/tiers.locate()`: 다운로드 URL·`local_copy`(처리·비식별·태깅·클립·검수 프레임·데이터셋 샘플)·센서 파싱·수신/표본 무결성 검증·데이터셋 사본·백업·삭제(쓰는 모든 계층)·격리/재검증 이동(`relocate`, 언제나 HOT으로)·일일 대조(WARM 버킷 포함). 새 객체는 언제나 HOT. 긴 읽기가 유예 뒤 실패하면 지금 위치에서 한 번 다시 (`tiers.download`·백업 `_read`) |
+| 정책 표 (9.2) | `tier_policies`(존·변형·min_age_days(ingested_at)·min_idle_days(last_accessed_at, 없으면 ingested_at)·enabled). HOT → WARM만. 초안 `raw_original_to_warm`(RAW·ORIGINAL·180·90) **꺼짐 — 운영기관 확정 필요**. `assets.last_accessed_at`은 다운로드 URL 발급·검수 프레임·클립 요청 때 갱신 |
+| 이동 기록 | `tier_moves`(move_id bigint, from/to, 존·키·크기·sha256, 상태, error_code, legal_hold, switched_at·delete_after·finished_at). 자산마다 열린 이동(COPYING·SWITCHED) 하나 (부분 유일 인덱스) |
+| 순서 (9.2·9.3) | 정비 주기마다 `TIER_MAX_IN_FLIGHT`까지 COPYING 커밋 → 작업 `tier_move`(0022 정책: 우선순위 0·임대 6시간·3회) → 같은 공간 표식 확인 → GET 스트림 → PUT/멀티파트 → 사본을 다시 읽어 sha256·크기 = 자산 기록 → 자산 행 잠금·변경 없음 확인 → storage_tier 전환(SWITCHED) → `delete_after = 전환 + max(TIER_DELETE_GRACE_S, PRESIGN_DOWNLOAD_TTL_S)` 뒤, 전환 전에 시작한 처리 작업이 없으면 원래 객체 삭제(DONE) |
+| 상태 | COPYING → SWITCHED → DONE / COPYING → FAILED(COPY_CHECKSUM_MISMATCH·SOURCE_CHECKSUM_MISMATCH·SOURCE_MISSING·TIER_SAME_LOCATION·재시도 소진) / COPYING → CANCELLED(ASSET_DELETED·ASSET_RELOCATED·ASSET_CHANGED·TIERING_DISABLED). FAILED·CANCELLED는 사본만 지우고 원래 객체·위치는 그대로 |
+| 오류 처리 | 해시 불일치는 PermanentJobError(재시도 없음), 원본 손상·없음은 운영자 알림 `tier.source_problem`·다시 고르지 않음, 사본 불일치는 `TIER_FAILED_RETRY_AFTER_S` 뒤 다시. 저장소 일시 오류는 작업 재시도. 작업을 못 넣은 이동은 10분 뒤 재등록. 살아 있는 자산의 다른 쪽 객체는 물리적으로 다른 공간인지 확인한 뒤에만 지운다 |
+| 법적 보류 | 보류 자산도 옮긴다(삭제 금지일 뿐, 확인된 같은 사본이 있을 때만 원래 객체 삭제). 이동 당시 보류 여부를 `tier_moves.legal_hold`에. 매체 보존 요구는 법률 자문 확인 필요 |
+| 사용량 | `usage_snapshots.by_tier` → `storage_by_tier`. 일일 대조는 잠시 두 벌인 객체를 뺀다 |
+| 운영 | API 추가 없음. `python -m app.cli tiers`(dry-run), `--recall`(WARM → HOT), `init-buckets`(켰을 때 WARM 버킷), 메트릭 `tier_moves_total`·`tier_move_bytes_total`, `/readyz` 경고 `storage_tier_unavailable:WARM` |
+| 계약 | 설명만 변경: UsageReport.storage_by_tier(계층별 합), `/v1/usage-reports` 설명, Readiness.warnings 코드 |
+| 마이그레이션 | 0022 up: 위 열·표·인덱스·초안 규칙·작업 정책. down: WARM 자산·열린 이동이 있으면 멈춤(먼저 `tiers --recall`), 대기 작업·정책 삭제 |
+| 시험 | `tests/integration/test_tiers.py`(moto): 정책 나이·조회 조건·dry-run, 이동 중(사본 확인 뒤 전환 직전) URL·읽기는 HOT, 전환 뒤 이전 URL 유예 중 유효·새 URL WARM, 유예 뒤 원래 객체 삭제, 다시 실행 멱등, 사본 손상·원본 손상·재시도 간격, 법적 보류 이동·삭제 거부, WARM에서 `local_copy`·무결성 표본·센서 파싱·백업(계획 뒤 이동)·데이터셋 사본, 유예 중·복사 중 삭제, 계층별 스냅숏·월간 리포트·일일 대조, 같은 저장소 공유 설정·처리 작업 중 삭제 미룸·되돌리기·이동 끄면 취소·작업 재등록, 같은 공간 다른 주소 거부, `/readyz` 경고, 0022 down 보호. `tests/unit/test_tier_settings.py`: 설정·유예·위치 기본값·스트림 리더 |
+
+확인 필요: 실제 WARM 장비·제품·엔드포인트·대역폭, 운영기관 규칙 값, 보류 자산 매체 보존 요구(법률 자문). 데이터셋 버전 사본과
+자산이 아닌 객체(보고서 스냅숏·외부 원 응답)는 옮기지 않는다. WARM → HOT 자동 승격은 없다(운영자 `--recall`).
 

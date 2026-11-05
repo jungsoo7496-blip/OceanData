@@ -154,12 +154,18 @@ def delete_assets(c: Container, db: Session, *, organization_id: str, assets: li
     q = db.execute(select(OrgQuota).where(OrgQuota.organization_id == organization_id).with_for_update()) \
         .scalar_one_or_none()
     cert_id = new_id("deletion_certificate")
+    from app.services import tiers
+
+    used = tiers.in_use(c, db)
     for a in assets:
         if a.storage_key and a.storage_zone:
-            try:
-                c.storage.delete_object(c.settings.buckets[a.storage_zone], a.storage_key)
-            except Exception as exc:  # noqa: BLE001 - 이미 없는 객체도 삭제 완료로 본다
-                log.warning("delete_object_failed", extra={"asset_id": a.asset_id, "error_type": type(exc).__name__})
+            # 쓰는 모든 계층에서 지운다: 계층 이동 중 사본·유예 중인 원래 객체도 남기지 않는다 (08번 요구사항 9)
+            for place in tiers.zone_places(c, a.storage_zone, used):
+                try:
+                    place.storage.delete_object(place.bucket, a.storage_key)
+                except Exception as exc:  # noqa: BLE001 - 이미 없는 객체도 삭제 완료로 본다
+                    log.warning("delete_object_failed", extra={"asset_id": a.asset_id, "tier": place.tier,
+                                                               "error_type": type(exc).__name__})
             objects.append({"asset_id": a.asset_id, "object_key": a.storage_key, "checksum_sha256": a.checksum_sha256,
                             "byte_size": a.byte_size})
             if q is not None and a.has_binary:
@@ -254,16 +260,26 @@ def notify_expiring(c: Container, db: Session, now: datetime) -> int:
 
 
 def reconcile(c: Container, db: Session) -> list[dict[str, Any]]:
-    """DB 사용량과 스토리지 실측 대조 (요구사항 2.3). 차이가 있으면 운영자에게 알린다."""
+    """DB 사용량과 스토리지 실측 대조 (요구사항 2.3). 차이가 있으면 운영자에게 알린다.
+
+    HOT·WARM 계층 버킷을 모두 잰다. 계층 이동 중 사본과 유예 중인 원래 객체(잠시 두 벌)는 빼고 비교한다."""
+    from app.services import tier_mover, tiers
+
+    zones = ("RAW", "PROCESSED", "EVIDENCE", "QUARANTINE")
+    places = tiers.all_places(c, zones, tiers.in_use(c, db))
     diffs = []
     for q in db.execute(select(OrgQuota)).scalars():
         measured = 0
-        for zone in ("RAW", "PROCESSED", "EVIDENCE", "QUARANTINE"):
+        for place in places:
             try:
-                measured += sum(o.size for o in c.storage.list_objects(c.settings.buckets[zone],
-                                                                       q.organization_id + "/"))
+                measured += sum(o.size for o in place.storage.list_objects(place.bucket, q.organization_id + "/"))
             except Exception as exc:  # noqa: BLE001 - 버킷이 없으면 0으로 보고 기록만
-                log.warning("reconcile_list_failed", extra={"zone": zone, "error_type": type(exc).__name__})
+                log.warning("reconcile_list_failed", extra={"zone": place.zone, "tier": place.tier,
+                                                            "error_type": type(exc).__name__})
+        try:
+            measured -= tier_mover.transient_bytes(c, db, q.organization_id, zones)
+        except Exception as exc:  # noqa: BLE001 - 확인하지 못하면 빼지 않는다 (차이로 드러난다)
+            log.warning("reconcile_transient_failed", extra={"error_type": type(exc).__name__})
         recorded = q.used_bytes + q.quarantine_bytes
         if measured != recorded:
             diffs.append({"organization_id": q.organization_id, "recorded": recorded, "measured": measured})

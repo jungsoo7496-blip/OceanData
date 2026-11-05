@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 
 import boto3
 from botocore.client import Config
@@ -13,6 +14,28 @@ from app.config import Settings
 from app.ports.storage import CompletedPart, ObjectInfo
 
 log = logging.getLogger(__name__)
+
+
+class ChunkReader(io.RawIOBase):
+    """청크 이터레이터를 읽기 전용 파일처럼 (탐색 불가). upload_fileobj가 PUT 또는 멀티파트로 나눠 올린다."""
+
+    def __init__(self, chunks: Iterable[bytes]) -> None:
+        self._it = iter(chunks)
+        self._buf = memoryview(b"")
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, b: bytearray | memoryview) -> int:  # type: ignore[override]
+        while not len(self._buf):
+            try:
+                self._buf = memoryview(next(self._it))
+            except StopIteration:
+                return 0
+        n = min(len(b), len(self._buf))
+        b[:n] = self._buf[:n]
+        self._buf = self._buf[n:]
+        return n
 
 
 class S3Storage:
@@ -44,8 +67,12 @@ class S3Storage:
 
     # --- 상태
     def check(self) -> bool:
+        return self.buckets_ok(self.settings.buckets.values())
+
+    def buckets_ok(self, buckets: Iterable[str]) -> bool:
+        """버킷마다 HEAD (준비 상태·WARM 계층 확인)."""
         try:
-            for bucket in self.settings.buckets.values():
+            for bucket in buckets:
                 self.client.head_bucket(Bucket=bucket)  # type: ignore[attr-defined]
             return True
         except (BotoCoreError, ClientError) as exc:
@@ -86,6 +113,11 @@ class S3Storage:
     def put_object(self, bucket: str, key: str, data: bytes, content_type: str | None = None) -> None:
         extra = {"ContentType": content_type} if content_type else {}
         self.client.put_object(Bucket=bucket, Key=key, Body=data, **extra)  # type: ignore[attr-defined]
+
+    def put_stream(self, bucket: str, key: str, chunks: Iterable[bytes], content_type: str | None = None) -> None:
+        """청크 스트림을 PUT 또는 멀티파트로 올린다. 임시 디스크를 거치지 않는다 (계층 이동·저장소 사이 이동)."""
+        extra = {"ContentType": content_type} if content_type else None
+        self.client.upload_fileobj(ChunkReader(chunks), bucket, key, ExtraArgs=extra)  # type: ignore[attr-defined]
 
     def get_object(self, bucket: str, key: str) -> bytes:
         return self.client.get_object(Bucket=bucket, Key=key)["Body"].read()  # type: ignore[attr-defined]

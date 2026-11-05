@@ -10,6 +10,8 @@
 1. 지금 백업: `make backup` 또는 `POST /v1/backup-runs`(운영자). 결과 `GET /v1/backup-runs`.
 2. 복원 시험: `make restore-test` → 임시 DB·임시 위치에 복원해 행 수·감사 로그 체인·객체 sha256 대조, 끝나면 임시 DB·객체 삭제.
 3. 실제 복구: 백업 버킷 `runs/<bkr_…>/db.dump`를 빈 DB에 `pg_restore --no-owner`, 객체는 `objects/<존>/<키>`를 각 존 버킷 `<키>`로 복사 → `make verify-audit`·`make verify-integrity`.
+   매니페스트의 자산 객체에는 백업 때의 계층(`tier`: HOT·WARM, ADR-0036)이 있다. WARM 객체는 WARM 존 버킷으로 복사하거나, 모두 HOT 버킷에
+   복사했으면 복원 DB에서 그 자산의 `storage_tier`를 `HOT`으로 바꾼다.
 4. 실행 환경: `docker compose --env-file .env -f deploy/compose/docker-compose.yml build migrate`로 공용 이미지를 다시 빌드한다.
    PostgreSQL 16 `pg_dump`·`pg_restore`가 들어 있으며, 도구·서버의 주버전이 다르면 백업·복원을 중단하고 조치 안내를 기록한다 (ADR-0022).
 5. 운영 설정: `BACKUP_S3_ENDPOINT_URL`(다른 장비·위치), `BACKUP_S3_ACCESS_KEY_ID`·`BACKUP_S3_SECRET_ACCESS_KEY`,

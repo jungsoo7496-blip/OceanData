@@ -180,6 +180,21 @@ def _clip_export(c: Container, job: Job) -> Any:
 
 
 register("clip_export", _clip_export)  # 09번 구간 클립 내보내기 (요구사항 7.2)
+
+
+def _tier_move(c: Container, job: Job) -> Any:
+    from app.services import tier_mover
+
+    return tier_mover.handle_job(c, job)
+
+
+def _tier_move_failed(c: Container, job: Job, code: str) -> None:
+    from app.services import tier_mover
+
+    tier_mover.job_exhausted(c, job, code)
+
+
+register("tier_move", _tier_move, _tier_move_failed)  # 08번 Hot/Warm 계층 이동 (요구사항 9, ADR-0036)
 register("collect_source", _collect_source)  # 12번 (실패는 큐의 지수 백오프)
 register("env_join", _env_join)  # 12번  # 14번 (PROCESSING_STEPS에 TAG가 있을 때 영상 처리 뒤)
 
@@ -285,6 +300,11 @@ def maintenance(c: Container) -> None:
     with c.sessionmaker.begin() as db:
         if backup.due(c, db):
             c.queue.enqueue("backup", {"requested_by": "schedule"}, dedupe_key="backup")
+    # Hot/Warm 계층 (08번 요구사항 9): 유예가 지난 원래 객체 삭제(이동을 꺼도 끝까지)·정책 규칙으로 새 이동 고르기
+    from app.services import tier_mover
+
+    tier_mover.finish_due(c)
+    tier_mover.schedule(c)
     # 하루 한 번: 기한 지난 정기 점검 알림 (11번 요구사항 6.3)
     from app.services import inspections
 

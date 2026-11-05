@@ -6,7 +6,7 @@ import sys
 from functools import lru_cache
 from typing import Annotated
 
-from pydantic import Field, SecretStr, ValidationError, field_validator
+from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 CsvList = Annotated[list[str], NoDecode]
@@ -31,6 +31,26 @@ class Settings(BaseSettings):
     bucket_evidence: str = "evidence"
     bucket_datasets: str = "datasets"
     bucket_quarantine: str = "quarantine"
+
+    # Hot/Warm 계층 (08번 요구사항 9, ADR-0036). HOT은 위 S3_*·BUCKET_* 그대로다.
+    # WARM 주소·자격증명을 비우면 HOT과 같은 저장소(같은 S3 연결)를 쓰고 버킷만 다르다. 격리 존은 HOT에만 있다.
+    # 실제 WARM 장비·제품은 하드웨어 확정 후 — 확인 필요 (tech.md 결정 대기)
+    tiering_enabled: bool = False  # Tier_Mover 자동 이동 (정책 표 tier_policies의 규칙도 enabled여야 옮긴다)
+    warm_s3_endpoint_url: str | None = None
+    # 사전 서명 주소 (비우면 WARM 주소, 저장소를 같이 쓰면 HOT 공개 주소)
+    warm_s3_public_endpoint_url: str | None = None
+    warm_s3_region: str | None = None
+    warm_s3_access_key_id: SecretStr | None = None
+    warm_s3_secret_access_key: SecretStr | None = None
+    warm_s3_force_path_style: bool | None = None
+    warm_bucket_raw: str | None = None  # 비우면 <BUCKET_RAW>-warm
+    warm_bucket_proc: str | None = None
+    warm_bucket_evidence: str | None = None
+    warm_bucket_datasets: str | None = None
+    # 원래 객체는 위치를 바꾼 뒤 이만큼 지나서 지운다. 실제 유예 = max(이 값, PRESIGN_DOWNLOAD_TTL_S) (요구사항 9.3)
+    tier_delete_grace_s: int = 3600
+    tier_max_in_flight: int = 2  # 동시에 복사 중인 이동 수 (처리량은 가정하지 않고 메트릭으로 보며 조정, HW-8)
+    tier_failed_retry_after_s: int = 86400  # 실패한 이동을 정책이 다시 고르기까지 (원본 해시 불일치는 다시 고르지 않음)
 
     # IdP (Keycloak OIDC)
     idp_issuer_url: str
@@ -175,8 +195,21 @@ class Settings(BaseSettings):
             return [s.strip() for s in v.split(",") if s.strip()]
         return v
 
+    @model_validator(mode="after")
+    def _warm_not_hot(self) -> Settings:
+        """같은 저장소에서 WARM 버킷이 HOT 버킷과 같으면 이동이 하나뿐인 사본을 지운다 — 기동을 막는다."""
+        if (self.warm_s3_endpoint_url or self.s3_endpoint_url) == self.s3_endpoint_url:
+            hot = set(self.buckets.values())
+            clash = [f"WARM_BUCKET_{name}" for name, zone in (("RAW", "RAW"), ("PROC", "PROCESSED"),
+                                                               ("EVIDENCE", "EVIDENCE"), ("DATASETS", "DATASET"))
+                     if self.tier_buckets("WARM")[zone] in hot]
+            if clash:
+                raise SettingConflict(*clash)
+        return self
+
     @property
     def buckets(self) -> dict[str, str]:
+        """HOT 계층의 존별 버킷 (domain.md 9장). 새 객체는 모두 여기에 쓴다."""
         return {
             "RAW": self.bucket_raw,
             "PROCESSED": self.bucket_proc,
@@ -184,6 +217,49 @@ class Settings(BaseSettings):
             "DATASET": self.bucket_datasets,
             "QUARANTINE": self.bucket_quarantine,
         }
+
+    def tier_buckets(self, tier: str) -> dict[str, str]:
+        """계층의 존별 버킷. WARM에는 격리 존이 없다 (격리 객체는 옮기지 않는다)."""
+        if tier == "HOT":
+            return self.buckets
+        if tier == "WARM":
+            return {"RAW": self.warm_bucket_raw or f"{self.bucket_raw}-warm",
+                    "PROCESSED": self.warm_bucket_proc or f"{self.bucket_proc}-warm",
+                    "EVIDENCE": self.warm_bucket_evidence or f"{self.bucket_evidence}-warm",
+                    "DATASET": self.warm_bucket_datasets or f"{self.bucket_datasets}-warm"}
+        raise ValueError(f"알 수 없는 계층: {tier}")
+
+    @property
+    def warm_shares_hot_storage(self) -> bool:
+        """WARM이 HOT과 같은 S3 연결을 쓰는가 (주소·자격증명·지역·주소 방식을 따로 주지 않았다)."""
+        # 빈 값(Compose가 넘기는 "")은 지정하지 않은 것으로 본다
+        return (self.warm_s3_endpoint_url in (None, "", self.s3_endpoint_url) and not self.warm_s3_access_key_id
+                and not self.warm_s3_secret_access_key and self.warm_s3_region in (None, "", self.s3_region)
+                and self.warm_s3_force_path_style in (None, self.s3_force_path_style)
+                and self.warm_s3_public_endpoint_url in (None, "", self.s3_public_endpoint_url))
+
+    def warm_s3_settings(self) -> Settings:
+        """WARM 저장소 연결용 설정 사본 (S3Storage가 읽는 S3_* 값만 바꾼다)."""
+        update: dict[str, object] = {
+            "s3_endpoint_url": self.warm_s3_endpoint_url or self.s3_endpoint_url,
+            "s3_public_endpoint_url": self.warm_s3_public_endpoint_url or (
+                None if self.warm_s3_endpoint_url else self.s3_public_endpoint_url),
+            "s3_region": self.warm_s3_region or self.s3_region,
+            "s3_force_path_style": (self.s3_force_path_style if self.warm_s3_force_path_style is None
+                                    else self.warm_s3_force_path_style)}
+        if self.warm_s3_access_key_id:
+            update["s3_access_key_id"] = self.warm_s3_access_key_id
+        if self.warm_s3_secret_access_key:
+            update["s3_secret_access_key"] = self.warm_s3_secret_access_key
+        return self.model_copy(update=update)
+
+
+class SettingConflict(ValueError):
+    """설정 값끼리 맞지 않는다. 키 이름만 담는다 (값은 담지 않는다)."""
+
+    def __init__(self, *keys: str) -> None:
+        super().__init__("설정 값이 서로 맞지 않습니다: " + ", ".join(keys))
+        self.keys = keys
 
 
 class ConfigError(Exception):
@@ -203,10 +279,14 @@ class ConfigError(Exception):
 
 
 def _keys(errors: list, kind: str | None) -> list[str]:
-    out = set()
+    out: set[str] = set()
     for err in errors:
         is_missing = err.get("type") == "missing"
         if (kind == "missing") == is_missing:
+            conflict = (err.get("ctx") or {}).get("error")
+            if not err.get("loc") and isinstance(conflict, SettingConflict):  # 설정 사이 충돌: 키 이름만
+                out.update(conflict.keys)
+                continue
             loc = err.get("loc") or ("?",)
             out.add(str(loc[0]).upper())
     return sorted(out)

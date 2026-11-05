@@ -73,6 +73,9 @@ def review_frame(review_id: str, request: Request, t: float = Query(ge=0), which
         if r.returncode != 0 or not os.path.exists(out):
             raise ProblemError("NOT_FOUND", detail="그 시각의 프레임을 만들 수 없습니다")
         data = open(out, "rb").read()  # noqa: SIM115 - 임시 디렉터리 안 작은 파일
+    from app.services.tiers import touch_accessed
+
+    touch_accessed(db, a.asset_id, c.clock.now())  # 검수자가 바이너리를 열었다 (계층 규칙의 '마지막 조회')
     c.audit.record("DEID_REVIEW_FRAME_VIEWED", principal=p, organization_id=rv.organization_id, target_type="Asset",
                    target_id=a.asset_id, source_ip=client_ip(request), details={"which": which, "t": t})
     return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})

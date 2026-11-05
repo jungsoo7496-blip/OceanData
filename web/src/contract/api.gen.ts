@@ -1616,7 +1616,8 @@ export interface paths {
         /**
          * 기관별 월간 자원 사용량 (ORG_ADMIN은 자기 기관, 운영자는 전체). 금액 없이 사용량만
          * @description 08번 요구사항 10. 존별 저장량(그 달 마지막 스냅숏), 백업 대상 용량, 처리 작업 시간(CPU·GPU, 작업 마지막 시도의 시작~끝 근사),
-         *     다운로드(발급한 URL 기준 — 실제 전송량이 아님). Hot/Warm 계층은 아직 없어 모두 HOT으로 센다.
+         *     다운로드(발급한 URL 기준 — 실제 전송량이 아님). 계층별 저장량(storage_by_tier)은 스냅숏 때 자산이 있던 계층(HOT·WARM)으로
+         *     센다 (요구사항 9, 계층 이동 전에 만든 스냅숏은 모두 HOT).
          */
         get: operations["getUsageReport"];
         put?: never;
@@ -2508,7 +2509,11 @@ export interface components {
             checks: {
                 [key: string]: "ok" | "failed";
             };
-            /** @description 준비 상태를 바꾸지 않는 경고 코드 (예 storage_encryption_unsupported:RAW — S3_SSE를 요청했는데 스토리지가 지원하지 않음, 08번 요구사항 1.4) */
+            /**
+             * @description 준비 상태를 바꾸지 않는 경고 코드 (예 storage_encryption_unsupported:RAW — S3_SSE를 요청했는데 스토리지가 지원하지 않음, 08번 요구사항 1.4.
+             *     WARM 계층 버킷은 storage_encryption_unsupported:WARM:RAW. storage_tier_unavailable:WARM — 계층 이동을 켰는데 WARM 저장소·버킷에
+             *     닿지 않음, 08번 요구사항 9)
+             */
             warnings?: string[];
         };
         Capabilities: {
@@ -2689,6 +2694,7 @@ export interface components {
             storage_by_zone: {
                 [key: string]: number;
             };
+            /** @description 계층별(HOT·WARM) 활성 자산 크기 합 (08번 요구사항 9·10.1). 합계는 storage_by_zone 합계와 같다 */
             storage_by_tier: {
                 [key: string]: number;
             };

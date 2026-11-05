@@ -1,10 +1,16 @@
-"""StoragePort — S3 API 공통 기능만 (tech.md HW-1)."""
+"""StoragePort — S3 API 공통 기능만 (tech.md HW-1).
+
+계층(HOT·WARM, 08번 요구사항 9)마다 StoragePort 하나와 존별 버킷이 있다. 자산 객체의 위치는
+`app.services.tiers.locate()` 한 곳에서 (계층, 존, 키)로 정한다.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Protocol
+
+TIERS = ("HOT", "WARM")
 
 
 @dataclass(frozen=True)
@@ -22,8 +28,10 @@ class CompletedPart:
 
 class StoragePort(Protocol):
     def check(self) -> bool: ...
+    def buckets_ok(self, buckets: Iterable[str]) -> bool: ...
     def ensure_bucket(self, bucket: str) -> None: ...
     def put_object(self, bucket: str, key: str, data: bytes, content_type: str | None = None) -> None: ...
+    def put_stream(self, bucket: str, key: str, chunks: Iterable[bytes], content_type: str | None = None) -> None: ...
     def get_object(self, bucket: str, key: str) -> bytes: ...
     def iter_object(self, bucket: str, key: str, chunk_size: int = 8 * 1024 * 1024) -> Iterator[bytes]: ...
     def move_object(self, src_bucket: str, src_key: str, dst_bucket: str, dst_key: str) -> None: ...

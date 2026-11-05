@@ -1,6 +1,6 @@
 """용량 예측과 기관별 월간 자원 사용 리포트 (08번 요구사항 8, 10).
 
-- 스냅숏: 워커가 하루 한 번 기관별 사용량(쿼터 장부)·존별 활성 자산 크기·독립 백업 대상 크기를
+- 스냅숏: 워커가 하루 한 번 기관별 사용량(쿼터 장부)·존별·계층별(HOT·WARM) 활성 자산 크기·독립 백업 대상 크기를
   `usage_snapshots`에 남긴다.
 - 예측: 최근 window_days 스냅숏 합계의 최소제곱 직선으로 설정 사용률(기본 70%) 도달 예상일.
   전체 용량은 하드웨어가 정해져야 알 수 있으므로 설정값(STORAGE_CAPACITY_BYTES)이 없으면 '확인 필요'로 둔다.
@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Asset, AuditLog, Distribution, JobRow, OrgQuota, UsageSnapshot, User
 from app.ports.notifier import Notification
+from app.ports.storage import TIERS
 
 if TYPE_CHECKING:
     from app.container import Container
@@ -35,10 +36,15 @@ def snapshot(c: Container, db: Session, day: date) -> int:
     """오늘 스냅숏 (이미 있으면 덮어쓴다). 기관 수를 돌려준다."""
     live = (Asset.deleted_at.is_(None), Asset.has_binary.is_(True))
     zones: dict[str, dict[str, int]] = {}
-    for org, zone, total in db.execute(select(Asset.organization_id, Asset.storage_zone, func.sum(Asset.byte_size))
-                                       .where(*live).group_by(Asset.organization_id, Asset.storage_zone)):
+    by_tier: dict[str, dict[str, int]] = {}
+    for org, zone, tier, total in db.execute(
+            select(Asset.organization_id, Asset.storage_zone, Asset.storage_tier, func.sum(Asset.byte_size))
+            .where(*live).group_by(Asset.organization_id, Asset.storage_zone, Asset.storage_tier)):
         if zone:
-            zones.setdefault(org, {})[zone] = int(total or 0)
+            z = zones.setdefault(org, {})
+            z[zone] = z.get(zone, 0) + int(total or 0)
+            t = by_tier.setdefault(org, dict.fromkeys(TIERS, 0))  # 계층별 (08번 요구사항 9·10.1)
+            t[tier] = t.get(tier, 0) + int(total or 0)
     targets = dict(db.execute(select(Asset.organization_id, func.sum(Asset.byte_size))
                               .where(*live, _backup_target(), Asset.storage_zone != "QUARANTINE")
                               .group_by(Asset.organization_id)).tuples().all())
@@ -50,6 +56,7 @@ def snapshot(c: Container, db: Session, day: date) -> int:
         row.stored_bytes, row.quarantine_bytes = q.used_bytes, q.quarantine_bytes
         row.reserved_bytes, row.backup_bytes = q.reserved_bytes, q.backup_bytes
         row.by_zone = zones.get(q.organization_id, {})
+        row.by_tier = by_tier.get(q.organization_id, dict.fromkeys(TIERS, 0))
         row.backup_target_bytes = int(targets.get(q.organization_id) or 0)
         row.created_at = now
         db.merge(row)
@@ -140,6 +147,10 @@ def monthly_report(db: Session, month: str, organization_id: str | None) -> list
             UsageSnapshot.organization_id == org, UsageSnapshot.day >= start.date(), UsageSnapshot.day < end.date())
             .order_by(UsageSnapshot.day.desc()).limit(1)).scalar_one_or_none()
         by_zone = {z: int((snap.by_zone or {}).get(z, 0)) for z in ZONES} if snap else {z: 0 for z in ZONES}
+        if snap is not None and snap.by_tier is not None:
+            by_tier = {t: int(snap.by_tier.get(t, 0)) for t in TIERS}
+        else:  # 계층 기록 전(0022 이전) 스냅숏은 모두 HOT이었다
+            by_tier = {"HOT": sum(by_zone.values()), "WARM": 0}
         secs = {"CPU": 0.0, "GPU": 0.0}
         for rc, total in db.execute(select(JobRow.resource_class, func.sum(
                 func.extract("epoch", JobRow.updated_at - JobRow.locked_at))).where(
@@ -154,7 +165,7 @@ def monthly_report(db: Session, month: str, organization_id: str | None) -> list
             Distribution.organization_id == org, Distribution.created_at >= start,
             Distribution.created_at < end)).scalar_one()
         out.append({"organization_id": org, "snapshot_day": snap.day.isoformat() if snap else None,
-                    "storage_by_zone": by_zone, "storage_by_tier": {"HOT": sum(by_zone.values()), "WARM": 0},
+                    "storage_by_zone": by_zone, "storage_by_tier": by_tier,
                     "backup_target_bytes": snap.backup_target_bytes if snap else 0,
                     "requested_backup_bytes": snap.backup_bytes if snap else 0,
                     "processing_seconds": {k: round(v, 1) for k, v in secs.items()},
