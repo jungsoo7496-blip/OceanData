@@ -1279,7 +1279,12 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** 표본 프레임 (원본 대비). 원본 열람은 감사 기록 */
+        /**
+         * 표본 프레임 (원본 대비). 원본 열람은 감사 기록
+         * @description 배정된 검수자는 원본·비식별본 프레임을 본다. 운영자는 비식별본(심사 중인 파생본)만 보고, 다른 기관 자산의 원본 프레임은
+         *     그 자산(또는 회차)에 유효한 긴급 열람 승인이 있을 때만 본다 — 없으면 403 (domain.md 2장, 자산 다운로드와 같은 규칙).
+         *     승인으로 본 원본은 BREAK_GLASS_ACCESS로도 감사한다.
+         */
         get: operations["getDeidReviewFrame"];
         put?: never;
         post?: never;

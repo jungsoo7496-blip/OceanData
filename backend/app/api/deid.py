@@ -65,6 +65,15 @@ def review_frame(review_id: str, request: Request, t: float = Query(ge=0), which
     a = db.get(Asset, rv.original_asset_id if which == "ORIGINAL" else rv.deid_asset_id)
     if a is None or not a.storage_key:
         raise ProblemError("NOT_FOUND")
+    grant = None
+    if which == "ORIGINAL" and rv.reviewer_id != p.user_id and a.organization_id != p.organization_id:
+        # 배정 검수자가 아닌 운영자: 원본은 긴급 열람 승인으로만 (domain.md 2장, 다운로드 URL과 같은 규칙)
+        from app.services.break_glass import active_grant_for
+
+        grant = active_grant_for(db, a, p.principal_id, c.clock.now())
+        if grant is None:
+            raise ProblemError("FORBIDDEN", detail="운영자의 원본 프레임 열람은 유효한 긴급 열람 승인이 있어야 합니다")
+        grant_id, grant_expires = grant.grant_id, grant.expires_at
     db.expunge(a)
     with local_copy(c, a) as src, tempfile.TemporaryDirectory(prefix="marine-frame-", dir=work_dir(c)) as tmp:
         out = os.path.join(tmp, "f.jpg")
@@ -78,6 +87,11 @@ def review_frame(review_id: str, request: Request, t: float = Query(ge=0), which
     touch_accessed(db, a.asset_id, c.clock.now())  # 검수자가 바이너리를 열었다 (계층 규칙의 '마지막 조회')
     c.audit.record("DEID_REVIEW_FRAME_VIEWED", principal=p, organization_id=rv.organization_id, target_type="Asset",
                    target_id=a.asset_id, source_ip=client_ip(request), details={"which": which, "t": t})
+    if grant is not None:  # 긴급 열람 중 원본 접근은 따로 남긴다 (02번 요구사항 8.3)
+        c.audit.record("BREAK_GLASS_ACCESS", principal=p, organization_id=rv.organization_id, target_type="Asset",
+                       target_id=a.asset_id, source_ip=client_ip(request),
+                       details={"grant_id": grant_id, "variant": "ORIGINAL", "via": "deid_review_frame",
+                                "grant_expires_at": grant_expires.isoformat() if grant_expires else None})
     return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
