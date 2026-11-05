@@ -8,7 +8,7 @@
 - [x] 6. 보존 정책 표·등록 시 계산·격리 사유별 — 요구사항 3.1, 3.2 · 시험 `test_retention_policies_applied`
 - [x] 7. 만료 예고 알림 — 요구사항 3.3 · 시험 `test_expiry_notification`
 - [x] 8. 만료 실행·삭제 기록·dry-run API·운영자 확인 후 실행 — 요구사항 3.4, 3.6, 3.7 · 시험 `test_dry_run_legal_hold_and_expiry_execution`
-- [ ] 9. DATASET 존 사본을 원 자산 만료와 별도로 — 요구사항 3.5 (13번에서 데이터셋 생기면, 정책 표에는 DATASET KEEP 있음)
+- [x] 9. DATASET 존 사본을 원 자산 만료와 별도로 — 요구사항 3.5 · 사본은 원 자산 행과 따로 DATASET 버킷 객체(DatasetVersionItem)로 두어 원 자산 만료·삭제가 지우지 않는다(정책 dataset_keep, KEEP). 유효한 이용 권한이 있는 버전의 항목은 만료가 건너뛰고 dry-run에 경고, 철회 뒤 다음 실행에서 지운다. 사본은 기관 사용량에 넣지 않는다. 시험 `tests/integration/test_dataset_retention.py`. 항목이 지워진 버전의 새 배포는 13번 규칙(PRIVATE로 봄)을 따른다 — 보존 만료로 지운 경우에도 막을지는 확인 필요
 - [x] 10. 법적 보류 설정·해제(운영자·사유·감사)·삭제 제외 — 요구사항 4.1, 4.2
 - [x] 11. 자산·회차 삭제·파생본 포함·삭제 증명·백업 소멸일 — 요구사항 5.1, 5.2 · 시험 `test_asset_deletion_*`, `test_session_deletion_and_cross_org`
 - [x] 12. GRANTED 데이터셋 포함 시 재확인(`confirm_affected=true`)과 무관하게 409·철회 안내(원본 삭제로 파생본에 닿는 경로 포함, 철회 후에는 삭제 가능), 증빙·보고서 인용은 영향 목록 → 재확인 후 삭제 → 근거 손상(DELETED) 표시 — 요구사항 5.3, 5.4 · 시험 `test_t08_t15_dataset_distribution`, `test_t11_*`(삭제 재확인 단계)
