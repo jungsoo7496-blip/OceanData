@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import mimetypes
 import os
 import tempfile
@@ -38,6 +39,8 @@ from app.domain.ids import new_id
 from app.ports.notifier import Notification
 from app.services import contracts
 from app.timefmt import iso
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from app.container import Container
@@ -174,6 +177,46 @@ def _materialize(c: Container, db: Session, ds: Dataset, vid: str, version: str,
     return manifest, rows, body
 
 
+SAMPLE_MAX = 3
+
+
+def _make_samples(c: Container, ds: Dataset, vid: str, assets: list[Asset]) -> list[str]:
+    """카탈로그 샘플 썸네일 (요구사항 7.1): 항목(공유 조건을 통과한 파생본) 앞 3개에서 JPEG 한 장씩.
+    뽑지 못하면 건너뛴다 — 버전 만들기를 막지 않는다."""
+    from app.services.pipeline import _run, local_copy, work_dir
+
+    keys: list[str] = []
+    media = [a for a in sorted(assets, key=lambda x: x.asset_id)
+             if (a.mime_type or "").split("/")[0] in ("video", "image")]
+    for a in media[:SAMPLE_MAX]:
+        try:
+            with local_copy(c, a) as src, tempfile.TemporaryDirectory(prefix="marine-sample-", dir=work_dir(c)) as tmp:
+                out = os.path.join(tmp, "s.jpg")
+                for seek in ("1", "0"):  # 1초 지점, 짧으면 첫 프레임
+                    args = [c.settings.ffmpeg_path, "-hide_banner", "-loglevel", "error", "-y", "-ss", seek, "-i", src,
+                            "-frames:v", "1", "-vf", "scale=320:-2", out]
+                    if _run(args, 120).returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 0:
+                        break
+                else:
+                    continue
+                key = f"{ds.dataset_id}/{vid}/samples/{len(keys) + 1}.jpg"
+                with open(out, "rb") as f:
+                    c.storage.put_object(c.settings.bucket_datasets, key, f.read(), "image/jpeg")
+                keys.append(key)
+        except Exception as exc:  # noqa: BLE001 - 샘플은 부가 정보
+            log.warning("dataset_sample_failed", extra={"asset_id": a.asset_id, "error_type": type(exc).__name__})
+    return keys
+
+
+def sample_urls(c: Container, v: DatasetVersion | None) -> list[dict[str, str]]:
+    if v is None or v.status != "READY" or not v.sample_keys:
+        return []
+    ttl = c.settings.presign_download_ttl_s
+    exp = iso(c.clock.now() + timedelta(seconds=ttl)) or ""
+    return [{"url": c.storage.presign_get(c.settings.bucket_datasets, k, ttl), "expires_at": exp}
+            for k in v.sample_keys]
+
+
 def build_version(c: Container, db: Session, ds: Dataset, version: str, asset_ids: list[str],
                   data_card: dict[str, Any], by: str) -> DatasetVersion:
     """승인 자산으로 버전을 요청 안에서 만든다 (요구사항 5). 조건을 못 맞춘 자산이 하나라도 있으면 RuleViolation."""
@@ -185,7 +228,8 @@ def build_version(c: Container, db: Session, ds: Dataset, version: str, asset_id
                        provider_organization_ids=manifest["provider_organization_ids"], item_count=len(rows),
                        total_bytes=manifest["total_bytes"], data_card=data_card, manifest=manifest,
                        manifest_key=f"{ds.dataset_id}/{vid}/MANIFEST.json",
-                       manifest_sha256=hashlib.sha256(body).hexdigest(), created_by=by, created_at=now, status="READY")
+                       manifest_sha256=hashlib.sha256(body).hexdigest(), created_by=by, created_at=now, status="READY",
+                       sample_keys=_make_samples(c, ds, vid, assets) or None)
     db.add(v)
     db.flush()
     db.add_all(rows)
@@ -232,6 +276,7 @@ def finish_build(c: Container, dataset_version_id: str) -> str:
         v.manifest_sha256 = hashlib.sha256(body).hexdigest()
         v.provider_organization_ids, v.item_count = manifest["provider_organization_ids"], len(rows)
         v.total_bytes, v.status, v.pending_asset_ids = manifest["total_bytes"], "READY", None
+        v.sample_keys = _make_samples(c, ds, v.dataset_version_id, assets) or None
         db.add_all(rows)
     return "READY"
 

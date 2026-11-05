@@ -13,7 +13,7 @@ interface Review {
   derived: { asset_id: string; variant: string; share_status: string; review_result: string | null; privacy_status: string; sharing_scope: string }[]
   events: { from_status: string; to_status: string; actor: string; reason: string | null; at: string }[]
 }
-interface DatasetT { dataset_id: string; title: string; published: boolean; versions: { dataset_version_id: string; version: string; scope: string; item_count: number; total_bytes: number; created_at: string; status?: string; build_error?: string | null }[]; data_card?: Record<string, unknown> }
+interface DatasetT { dataset_id: string; title: string; published: boolean; versions: { dataset_version_id: string; version: string; scope: string; item_count: number; total_bytes: number; created_at: string; status?: string; build_error?: string | null }[]; data_card?: Record<string, unknown>; samples?: { url: string; expires_at: string }[] }
 interface AccessReq { access_request_id: string; dataset_version_id: string; purpose: string; status: string; pending_provider_approvals: number; deadline_at: string; grant_id?: string; grant_status?: string; grant_expires_at?: string }
 interface LineageT {
   dataset_version_id: string; version: string; manifest_sha256: string; hidden_item_count: number
@@ -246,6 +246,8 @@ export function Catalog() {
         <Table rowKey="dataset_id" size="small" loading={sets.isLoading} dataSource={sets.data?.items ?? []} locale={{ emptyText: '이용할 수 있는 데이터셋이 없습니다' }}
           expandable={{ expandedRowRender: (d) => <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{JSON.stringify(d.data_card, null, 2)}</pre> }}
           columns={[
+            { title: '샘플', key: 'samples', render: (_, d) => (
+              <Space size={4}>{(d.samples ?? []).map((x, n) => <img key={n} src={x.url} alt={`${d.title} 샘플 ${n + 1}`} width={96} style={{ borderRadius: 4 }} />)}</Space>) },
             { title: '이름', dataIndex: 'title' },
             { title: '버전', key: 'v', render: (_, d) => d.versions.map((v) => (
               <Space key={v.dataset_version_id}><Tag>{v.version} · {v.item_count}개 · {bytes(v.total_bytes)}</Tag>

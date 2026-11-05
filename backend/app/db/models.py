@@ -919,6 +919,8 @@ class DatasetVersion(Base):
     status: Mapped[str] = mapped_column(String(12), server_default="READY")
     build_error: Mapped[str | None] = mapped_column(String(500))
     pending_asset_ids: Mapped[list[str] | None] = mapped_column(ARRAY(String(30)))
+    # 카탈로그 샘플 썸네일 객체 키 (DATASET 버킷, 13번 요구사항 7.1). 항목의 공유용 파생본에서 뽑는다
+    sample_keys: Mapped[list[str] | None] = mapped_column(ARRAY(String(400)))
 
 
 class DatasetVersionItem(Base):

@@ -78,3 +78,40 @@ def test_large_dataset_version_builds_in_queue(ictx) -> None:
     seen = ctx.client.get("/v1/datasets", headers=ctx.as_user(CONSUMER)).json()["items"]
     assert [x["dataset_version_id"] for x in seen[0]["versions"]] == [vid]
     assert access(ctx, v2, "AI_TRAINING").status_code == 404
+
+
+def test_catalog_sample_thumbnails(ictx, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """13번 요구사항 7.1: 카탈로그에 샘플 썸네일 (항목의 공유용 파생본에서 뽑은 JPEG, 단기 URL)."""
+    import shutil
+
+    import httpx
+
+    from app.db.models import Asset
+    from tests.integration.test_pipeline import synth_video
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg 필요")
+    ctx = ictx
+    a = approved_pair(ctx, ORG_A, PRJ_A, DEV_A_CAMERA, ["AI_TRAINING"])
+    data = synth_video(tmp_path, seconds=2)  # 합성 영상 (실제 촬영물 아님)
+    with ctx.c.sessionmaker.begin() as db:
+        d = db.get(Asset, a["deid"])
+        d.byte_size, d.checksum_sha256, d.mime_type = len(data), hashlib.sha256(data).hexdigest(), "video/mp4"
+        key = d.storage_key
+    ctx.c.storage.put_object(ctx.c.settings.bucket_proc, key, data, "video/mp4")
+    share(ctx, ADMIN_A, a["deid"], "SANDBOX_PARTNERS")
+    ds = ctx.client.post("/v1/datasets", json={"title": "샘플 (합성)"}, headers=ctx.as_user(OP)).json()["dataset_id"]
+    r = ctx.client.post(f"/v1/datasets/{ds}/versions", headers=ctx.as_user(OP),
+                        json={"version": "1.0.0", "data_card": CARD, "item_asset_ids": [a["deid"]]})
+    assert r.status_code == 201, r.text
+    to_l3(ctx, ADMIN_A, a["deid"])
+    ctx.client.post(f"/v1/datasets/{ds}/publish", headers=ctx.as_user(OP))
+    r = ctx.client.get("/v1/datasets", headers=ctx.as_user(CONSUMER))
+    check(r, "GET", "/v1/datasets")
+    samples = r.json()["items"][0]["samples"]
+    assert len(samples) == 1
+    jpg = httpx.get(samples[0]["url"], timeout=30).content
+    assert jpg[:2] == b"\xff\xd8" and len(jpg) > 500  # JPEG
+    r = ctx.client.get(f"/v1/datasets/{ds}", headers=ctx.as_user(CONSUMER))
+    check(r, "GET", "/v1/datasets/{dataset_id}")
+    assert len(r.json()["samples"]) == 1 and a["orig"] not in r.text  # 원본은 드러나지 않는다

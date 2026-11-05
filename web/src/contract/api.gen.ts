@@ -3495,6 +3495,12 @@ export interface components {
                 build_error?: string | null;
             }[];
             data_card?: components["schemas"]["data_card"];
+            /** @description 최신 READY 버전의 샘플 썸네일 (항목의 공유용 파생본에서 뽑은 JPEG 한 장씩, 단기 URL). 13번 요구사항 7.1 */
+            samples?: {
+                /** Format: uri */
+                url: string;
+                expires_at: components["schemas"]["utc_datetime"];
+            }[];
         };
         DatasetVersionCreate: {
             version: string;

@@ -59,8 +59,16 @@ def _load_dataset(db: Session, p: Principal, dataset_id: str) -> Dataset:
     return ds
 
 
-def _view(db: Session, p: Principal, ds: Dataset) -> dict:
-    return datasets.dataset_view(db, ds, datasets.visible_versions(db, ds, consumer=_consumer(p)))
+def _with_samples(c: Container, view: dict, versions: list[DatasetVersion]) -> dict:
+    """최신 READY 버전의 샘플 썸네일 단기 URL (요구사항 7.1). 보이는 버전에서만 고른다."""
+    ready = [v for v in versions if v.status == "READY"]
+    samples = datasets.sample_urls(c, ready[-1] if ready else None)
+    return {**view, "samples": samples} if samples else view
+
+
+def _view(db: Session, c: Container, p: Principal, ds: Dataset) -> dict:
+    vs = datasets.visible_versions(db, ds, consumer=_consumer(p))
+    return _with_samples(c, datasets.dataset_view(db, ds, vs), vs)
 
 
 class DatasetCreate(BaseModel):
@@ -81,7 +89,8 @@ def create_dataset(body: DatasetCreate, request: Request, db: Session = Depends(
 
 
 @router.get("/v1/datasets")
-def list_datasets(db: Session = Depends(get_db), p: Principal = Depends(require("dataset:read"))) -> dict:
+def list_datasets(db: Session = Depends(get_db), c: Container = Depends(container),
+                  p: Principal = Depends(require("dataset:read"))) -> dict:
     stmt = select(Dataset).order_by(Dataset.dataset_id)
     if _consumer(p):
         stmt = stmt.where(Dataset.published.is_(True))
@@ -92,14 +101,14 @@ def list_datasets(db: Session = Depends(get_db), p: Principal = Depends(require(
         vs = datasets.visible_versions(db, ds, consumer=_consumer(p))
         if _consumer(p) and not vs:
             continue
-        out.append(datasets.dataset_view(db, ds, vs))
+        out.append(_with_samples(c, datasets.dataset_view(db, ds, vs), vs))
     return {"items": out, "next_cursor": None}
 
 
 @router.get("/v1/datasets/{dataset_id}")
-def get_dataset(dataset_id: str, db: Session = Depends(get_db),
+def get_dataset(dataset_id: str, db: Session = Depends(get_db), c: Container = Depends(container),
                 p: Principal = Depends(require("dataset:read"))) -> dict:
-    return _view(db, p, _load_dataset(db, p, dataset_id))
+    return _view(db, c, p, _load_dataset(db, p, dataset_id))
 
 
 class VersionCreate(BaseModel):
