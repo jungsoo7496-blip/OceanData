@@ -1,16 +1,19 @@
-"""스키마·코드표·사전 검증·장비 정책·계보 (03번 요구사항 1.3, 2, 8, 11, 13)."""
+"""스키마·코드표·사전 검증·장비 정책·계보·품질 집계 (03번 요구사항 1.3, 2, 8, 10, 11, 13)."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, Request
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text, true
 from sqlalchemy.orm import Session
 
 from app.api.deps import client_ip, container, get_db, load_scoped, require
 from app.container import Container
-from app.db.models import Asset, Device, OrgEventCode
+from app.db.models import Asset, Device, OrgEventCode, TrialSession
+from app.domain.normalize import parse_rfc3339
 from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services import contracts, device_policy
@@ -136,6 +139,55 @@ _LINEAGE_SQL = {
             FROM asset_lineage l JOIN down ON l.parent_asset_id = down.asset_id WHERE down.depth < 20)
         SELECT DISTINCT asset_id, relation, tool_version, model_ref, created_at FROM down""",
 }
+
+
+_QUALITY_STATUSES = ("PENDING", "PASSED", "WARNING", "FAILED")  # domain.md 8장 quality_status
+_TOP_REASONS = 10
+
+
+def _report_time(value: str | None, pointer: str) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        return parse_rfc3339(value)
+    except ValueError:
+        raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": pointer, "code": "invalid",
+                                                        "message": "RFC 3339 UTC 시각이어야 합니다"}]) from None
+
+
+@router.get("/v1/quality-reports", tags=["status"])
+def get_quality_report(request: Request, session_id: str | None = None, from_: str | None = Query(None, alias="from"),
+                       to: str | None = None, db: Session = Depends(get_db), c: Container = Depends(container),
+                       p: Principal = Depends(require("quality_report:read"))) -> dict:
+    """원본·삭제되지 않은 자산의 품질 상태 수와 상위 사유 (03번 요구사항 10.1, STD-03).
+
+    기관 범위는 인증 정보로만 정한다(scope_filter). 기간은 ingested_at 기준 [from, to)."""
+    start, end = _report_time(from_, "/query/from"), _report_time(to, "/query/to")
+    if start is not None and end is not None and start >= end:
+        raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/query/to", "code": "range",
+                                                        "message": "from < to 이어야 합니다"}])
+    conds = [scope_filter(Asset, p), Asset.variant == "ORIGINAL"]
+    if session_id is not None:
+        load_scoped(db, c, request, TrialSession, session_id, p)  # 보이지 않는 회차는 404
+        conds.append(Asset.session_id == session_id)
+    if start is not None:
+        conds.append(Asset.ingested_at >= start)
+    if end is not None:
+        conds.append(Asset.ingested_at < end)
+    counts = dict.fromkeys(_QUALITY_STATUSES, 0)
+    for status, n in db.execute(select(Asset.quality_status, func.count()).where(*conds)
+                                .group_by(Asset.quality_status)).all():
+        counts[status] = int(n)
+    reason = func.jsonb_array_elements_text(Asset.quality_reasons).table_valued("value").render_derived(name="r")
+    n_assets = func.count()
+    rows = db.execute(select(reason.c.value, n_assets).select_from(Asset).join(reason, true()).where(*conds)
+                      .group_by(reason.c.value).order_by(n_assets.desc(), reason.c.value).limit(_TOP_REASONS)).all()
+    out: dict = {"counts_by_quality_status": counts,
+                 "top_reasons": [{"reason": r, "count": int(n)} for r, n in rows]}
+    for key, value in (("session_id", session_id), ("from", start), ("to", end)):
+        if value is not None:
+            out[key] = value if isinstance(value, str) else iso(value)
+    return out
 
 
 @router.get("/v1/assets/{asset_id}/lineage", tags=["assets"])

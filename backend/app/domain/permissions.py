@@ -56,6 +56,7 @@ PERMISSIONS: dict[str, Rule] = {
     "code:read": Rule(ALL_USER_ROLES, scope="status:read"),
     "org_event_code:create": Rule(frozenset({"ORG_ADMIN"})),
     "contract:validate": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="upload:write"),
+    "quality_report:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),  # 03번 요구사항 10.1
     # 04 수집
     "upload:write": Rule(PROVIDER, scope="upload:write"),
     "upload:read": Rule(PROVIDER, scope="upload:write"),

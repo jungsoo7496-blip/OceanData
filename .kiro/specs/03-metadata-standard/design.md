@@ -53,6 +53,14 @@ DB 버전과 문서 버전을 맞추고 한 행만 활성으로 둔다. 지원�
 선택 대상은 삭제되지 않은 REGISTERED·PROXIED·READY_PRIVATE 자산이다. 재평가로 공유·격리·저장 위치를 변경하지 않는다.
 원래 범위 경고를 입증할 값이 없는 자산은 그대로 두고 건수를 보고한다. 공개 API와 DB 구조는 변경하지 않는다.
 
+## 품질 집계 (작업 18)
+
+`GET /v1/quality-reports`(10.1, STD-03)는 원본(variant=ORIGINAL)이면서 삭제되지 않은 자산의 quality_status별 수와
+사유가 붙은 자산 수 상위 10개(같으면 사유 이름순)를 돌려준다. 네 상태는 0이라도 모두 넣는다.
+범위는 `scope_filter`대로 제공기관(사람·status:read 기관 API 키)은 자기 기관, 운영자는 전체다. 관리기관 열람자·검수자·이용기관은 403.
+`session_id`가 보이지 않으면 404, 기간은 ingested_at 기준 [from, to)이고 from ≥ to면 400이다. 파생본은 원 자산의 품질을
+물려받지 않고 PASSED로 만들어지므로 세지 않는다. 신규 마이그레이션은 없다.
+
 ## 약정·연계 카드 (작업 17, ADR-0028)
 - 약정: `GET /v1/agreements`(운영자 전체·제공기관 자기 기관), `POST /v1/agreements`(운영자·다중 인증, TIER1 목적 없음·TIER2 목적 1개 이상·
   purpose 코드표·시간대 필수), `POST /v1/agreements/{id}/end`(사유, valid_until을 당김 — 새 상태 코드 없음, 13번 `tier2_valid()`에 바로 반영).

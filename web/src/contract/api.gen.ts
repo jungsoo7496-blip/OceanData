@@ -1558,7 +1558,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 품질 상태 집계 (회차·기간) */
+        /**
+         * 품질 상태 집계 (회차·기간)
+         * @description 원본(variant=ORIGINAL)이면서 삭제되지 않은 자산의 quality_status 수와 많이 나온 사유를 센다 (03번 요구사항 10.1, STD-03).
+         *     제공기관(ORG_ADMIN·ORG_MEMBER, status:read 범위의 기관 API 키)은 자기 기관만, 운영자는 전체 기관을 센다. 기관은 인증 정보로만 정한다.
+         *     session_id가 호출자에게 보이지 않으면 404. 기간은 ingested_at(플랫폼 수신 시각) 기준 [from, to)이며 from ≥ to면 400.
+         *     counts_by_quality_status에는 PENDING·PASSED·WARNING·FAILED가 0이라도 모두 들어간다.
+         *     top_reasons는 사유가 붙은 자산 수가 많은 순(같으면 사유 이름순)으로 최대 10개다.
+         */
         get: operations["getQualityReport"];
         put?: never;
         post?: never;
