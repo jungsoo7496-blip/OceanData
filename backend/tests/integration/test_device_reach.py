@@ -95,3 +95,21 @@ def test_permission_table_device_allowlist() -> None:
     allowed = {a for a in permissions.PERMISSIONS if permissions.allowed(dev, a)}
     assert allowed == {"me:read", "device_policy:read", "agent:heartbeat", "agent_health:read", "upload:write",
                        "upload:read", "asset:receipt", "observation:write", "mapping:read", "event:write"}
+
+
+def test_machine_cannot_create_human_verified_event_and_human_create_records_verifier(ctx) -> None:
+    """07번 요구사항 7.3: 확인 표시는 사람만 (등록 때도 PATCH와 같게). 검토 재현의 human_verified 부분."""
+    base = {"schema_version": "1.0.0", "session_id": SES_A, "event_code": "VESSEL",
+            "started_at": "2026-11-02T00:00:00Z", "timestamp_quality": {"source": "DEVICE", "verified": True},
+            "source": "MANUAL", "human_verified": True, "source_system_id": DEV_A_CAMERA}
+    dh = _device_headers(ctx)
+    r = ctx.client.post("/v1/events", json=base, headers=dh)
+    assert r.status_code == 403 and r.json()["code"] == "FORBIDDEN", r.text
+    # 확인 표시 없이 내는 것은 그대로 된다
+    ok = ctx.client.post("/v1/events", json={**base, "human_verified": False}, headers=dh)
+    assert ok.status_code == 201 and ok.json()["human_verified"] is False, ok.text
+    # 사람이 등록하며 확인하면 확인자·시각이 남는다
+    h = ctx.client.post("/v1/events", json=base, headers=ctx.as_user(102))
+    assert h.status_code == 201, h.text
+    assert h.json()["human_verified"] is True and h.json()["verified_by"] == "usr_" + "0" * 23 + "102"
+    assert h.json()["verified_at"]

@@ -1494,7 +1494,12 @@ export interface paths {
         /** 실증 이벤트 조회 */
         get: operations["listEvents"];
         put?: never;
-        /** 실증 이벤트 등록 */
+        /**
+         * 실증 이벤트 등록
+         * @description `human_verified: true`는 사람 사용자만 보낼 수 있다 (07번 요구사항 7.3, `PATCH /v1/events/{event_id}`와 같은 규칙).
+         *     기기·API 키 토큰이 true를 보내면 403 FORBIDDEN이다. 사람이 true로 등록하면 그 사용자와 등록 시각이
+         *     verified_by·verified_at에 남는다. MODEL 이벤트는 등록 때 확인됨일 수 없다 (스키마 규칙).
+         */
         post: operations["createEvent"];
         delete?: never;
         options?: never;
