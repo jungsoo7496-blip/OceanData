@@ -173,9 +173,14 @@ class Settings(BaseSettings):
     webhook_max_attempts: int = 8  # 이만큼 실패하면 구독을 끄고 기관에 알린다
     webhook_backoff_base_s: int = 30
     webhook_backoff_max_s: int = 6 * 3600
-    webhook_timeout_s: float = 5.0
-    webhook_dispatch_interval_s: int = 10
-    webhook_allow_private_targets: bool = False  # 개발용. 운영에서는 사설·루프백 주소로 보내지 않는다 (SSRF)
+    # 한 건 전체 기한: 이름 풀기·연결·TLS·요청·응답 헤더까지. 본문은 읽지 않는다 (ADR-0041)
+    webhook_timeout_s: float = Field(default=5.0, gt=0)
+    webhook_dispatch_interval_s: int = Field(default=10, ge=1)  # 보낼 것이 없을 때 다시 볼 간격 (전용 스레드)
+    # 한 라운드: 구독당 1건, 기관당 WEBHOOK_MAX_PER_ORG건, 모두 WEBHOOK_BATCH_SIZE건까지 동시에 보낸다 (ADR-0041)
+    webhook_batch_size: int = Field(default=20, ge=1)
+    webhook_max_per_org: int = Field(default=4, ge=1)
+    webhook_max_subscriptions_per_org: int = Field(default=10, ge=1)  # 지우지 않은 구독 수 (넘으면 409)
+    webhook_allow_private_targets: bool = False  # 개발용. 운영에서는 공인(global) 주소로만 보낸다 (SSRF)
     alert_webhook_url: str | None = None  # 운영자 알림 웹훅 (메신저 연동은 결정 대기)
     alert_webhook_secret: SecretStr | None = None  # 있으면 X-Signature(HMAC-SHA256)를 붙인다
     watch_eval_interval_s: int = 60

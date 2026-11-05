@@ -1234,8 +1234,11 @@ class WebhookDelivery(Base):
     organization_id: Mapped[str] = mapped_column(ID)
     event_type: Mapped[str] = mapped_column(String(40))
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
-    status: Mapped[str] = mapped_column(String(12))  # PENDING / DELIVERED / FAILED / CANCELLED
+    # PENDING / SENDING / DELIVERED / FAILED / CANCELLED.
+    # SENDING은 워커가 가져가 보내는 중(임대) — 내부 상태라 API로 내보내지 않는다
+    status: Mapped[str] = mapped_column(String(12))
     attempts: Mapped[int] = mapped_column(Integer, server_default="0")
+    # PENDING: 다음 시도 시각. SENDING: 임대 만료 시각 (지나면 워커가 죽은 것으로 보고 다시 보낸다, ADR-0041)
     next_attempt_at: Mapped[datetime] = mapped_column(TS)
     last_status_code: Mapped[int | None] = mapped_column(Integer)
     last_error: Mapped[str | None] = mapped_column(String(300))

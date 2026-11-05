@@ -3,6 +3,7 @@
 - 작업 유형은 `register()`로 등록한다. 다른 스펙(07 센서 파싱, 14 비식별 등)도 같은 방식으로 더한다 (05번 요구사항 2.4)
 - 실패는 지수 백오프로 최대 시도(job_policies.max_attempts)까지 재시도하고, 다 쓰면 FAILED (요구사항 7.1)
 - 주기 정리: 임대 만료 작업 회수(1.3), 만료 업로드 세션 정리(04번 3.3), 무결성 로그 일 단위 앵커(5.2)
+- 04번 웹훅 전송은 따로 도는 스레드가 맡는다 — 느린 수신 서버가 작업 처리·정리 주기를 멈추지 않게 (ADR-0041)
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import logging
 import os
 import signal
 import socket
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -248,10 +250,27 @@ def sweep(c: Container) -> int:
     return n
 
 
-def _dispatch_webhooks(c: Container) -> Any:
+def start_webhook_dispatcher(c: Container, stop: threading.Event) -> threading.Thread:
+    """04번 웹훅 전송 전용 스레드 (ADR-0041).
+
+    작업 처리·임대 회수·정리 주기와 떼어 둬서 느린 수신 서버가 그것들을 멈추지 않게 한다. 보낼 것이 있으면
+    라운드를 이어 돌고, 없거나 실패하면 WEBHOOK_DISPATCH_INTERVAL_S만큼 쉰다. stop이 설정되면 라운드 사이에
+    끝난다(보내던 건은 임대가 끝난 뒤 다른 워커가 다시 보낸다)."""
     from app.services import webhooks
 
-    return webhooks.deliver_due(c)
+    def run() -> None:
+        while not stop.is_set():
+            busy = False
+            try:
+                busy = any(webhooks.deliver_due(c, stop=stop).values())
+            except Exception as exc:  # noqa: BLE001 - DB 장애 등. 다음 주기에 다시
+                log.error("webhooks_failed", exc_info=exc)
+            if not busy:
+                stop.wait(c.settings.webhook_dispatch_interval_s)
+
+    thread = threading.Thread(target=run, name="webhook-dispatcher", daemon=True)
+    thread.start()
+    return thread
 
 
 def maintenance(c: Container) -> None:
@@ -363,8 +382,9 @@ def main() -> None:
         (300, lambda: sweep(c), "sweep"),
         (settings.job_lease_reap_interval_s, lambda: maintenance(c), "maintenance"),
         (settings.watch_eval_interval_s, lambda: watch(c), "watch"),  # 11번 감시 규칙
-        (settings.webhook_dispatch_interval_s, lambda: _dispatch_webhooks(c), "webhooks"),  # 04번 웹훅
     ]
+    webhooks_stop = threading.Event()
+    webhooks_thread = start_webhook_dispatcher(c, webhooks_stop)  # 04번 웹훅 (작업 루프와 다른 스레드)
     last_run = {name: 0.0 for _, _, name in periodic}
     while not stopping["flag"]:
         now = time.monotonic()
@@ -381,6 +401,8 @@ def main() -> None:
             last_depth = now
         if not run_once(c, worker_id):
             time.sleep(settings.worker_poll_interval_s)
+    webhooks_stop.set()
+    webhooks_thread.join(timeout=settings.webhook_timeout_s * 2)  # 진행 중인 라운드만 마치게 (못 마치면 임대 뒤 재전송)
     log.info("worker_stopped")
 
 

@@ -2237,8 +2237,12 @@ export interface paths {
         put?: never;
         /**
          * 웹훅 구독 등록 (서명 비밀은 이 응답에서 한 번만)
-         * @description 04번 요구사항 8. https만 받고 사설·루프백·링크로컬 주소로 풀리는 대상에는 보내지 않는다(400 또는 전송 시 차단).
-         *     전송은 지수 백오프로 재시도하고 WEBHOOK_MAX_ATTEMPTS번 실패하면 구독을 끄고 기관 ORG_ADMIN에게 알린다. 리디렉션은 따르지 않는다.
+         * @description 04번 요구사항 8. https만 받고 공인(global) 주소가 아닌 곳(사설·루프백·링크로컬·공유 100.64.0.0/10 등)으로 풀리는 대상에는
+         *     보내지 않는다(400 또는 전송 시 차단). 전송 때는 이름을 한 번 풀어 검사한 주소로 바로 연결하고(이름은 Host·TLS SNI·인증서 확인에만),
+         *     프록시 환경변수와 리디렉션은 따르지 않는다. 수신 서버는 연결부터 응답 헤더까지 WEBHOOK_TIMEOUT_S(기본 5초) 안에 보내야 하며
+         *     상태 코드만 보고 본문은 읽지 않는다(2xx만 성공). 실패하면 지수 백오프로 재시도하고 WEBHOOK_MAX_ATTEMPTS번 실패하면 구독을 끄고
+         *     기관 ORG_ADMIN에게 알린다. 구독 하나의 전송은 한 번에 하나씩 보낸다(ADR-0041).
+         *     기관당 구독(중지된 것 포함, 지운 것 제외)은 WEBHOOK_MAX_SUBSCRIPTIONS_PER_ORG(기본 10)개까지이고, 넘으면 409 CONFLICT.
          */
         post: operations["createWebhookSubscription"];
         delete?: never;
@@ -4036,6 +4040,7 @@ export interface components {
              * @description 전송이 계속 실패해 꺼진 시각
              */
             disabled_at?: string | null;
+            /** @description 꺼진 이유 (실패 횟수·마지막 오류). 이름을 못 푼 것과 공인 주소가 아닌 것은 같은 문구로 알린다 */
             disabled_reason?: string | null;
         };
         DatasetVersionLineage: {
@@ -9642,6 +9647,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             429: components["responses"]["TooManyRequests"];
         };
     };

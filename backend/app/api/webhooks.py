@@ -1,4 +1,4 @@
-"""웹훅 구독 등록·조회·삭제 (04번 요구사항 8.1). 전송은 워커 (services/webhooks.py)."""
+"""웹훅 구독 등록·조회·삭제 (04번 요구사항 8.1). 전송은 워커의 웹훅 전용 스레드 (services/webhooks.py, ADR-0041)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import client_ip, container, get_db, require
+from app.api.deps import client_ip, container, get_db, load_scoped, require
 from app.container import Container
 from app.db.models import WebhookSubscription
 from app.domain.principal import Principal
@@ -60,10 +60,10 @@ def create_subscription(body: SubscriptionCreate, request: Request, db: Session 
 def delete_subscription(webhook_id: str, request: Request, db: Session = Depends(get_db),
                         c: Container = Depends(container),
                         p: Principal = Depends(require("webhook:manage"))) -> Response:
-    s = db.execute(select(WebhookSubscription).where(
-        WebhookSubscription.webhook_id == webhook_id, WebhookSubscription.organization_id == p.organization_id,
-        WebhookSubscription.deleted_at.is_(None)).with_for_update()).scalar_one_or_none()
-    if s is None:
+    # 다른 기관 구독이면 존재를 숨기고 404 + CROSS_ORG_ACCESS_ATTEMPT 감사 (security.md 테넌트 격리)
+    s = load_scoped(db, c, request, WebhookSubscription, webhook_id, p)
+    db.refresh(s, with_for_update=True)  # 같은 구독을 동시에 지우는 요청과 겹치지 않게 잠그고 다시 읽는다
+    if s.deleted_at is not None:
         raise ProblemError("NOT_FOUND")
     cancelled = webhooks.unsubscribe(db, s, c.clock.now())
     c.audit.record("WEBHOOK_UNSUBSCRIBED", principal=p, organization_id=p.organization_id,

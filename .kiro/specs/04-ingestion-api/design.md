@@ -37,12 +37,22 @@ PATCH /v1/assets/{id} {session_id} → UNKNOWN_SESSION 격리 자산 재검증 (
 ## 시험
 `backend/tests/integration/test_ingest.py` — moto S3 서버 또는 `TEST_S3_ENDPOINT`(SeaweedFS)로 실제 사전 서명 업로드. 두 환경 모두 통과 확인 (2026-11-04).
 
-## 웹훅 (요구사항 8, ADR-0030)
+## 웹훅 (요구사항 8, ADR-0030·0041)
 - 구독 `GET/POST /v1/webhooks/subscriptions`, `DELETE …/{id}`(ORG_ADMIN 또는 webhook:manage API 키, 자기 기관). 비밀은 등록 응답에서 한 번,
-  저장은 salt만(서버 키로 다시 만듦). https만, 사설·루프백 주소 거부.
-- 발행: `services/webhooks.py`의 `before_flush` outbox → `webhook_deliveries`(0015). 전송: 워커 `WEBHOOK_DISPATCH_INTERVAL_S`마다
-  `deliver_due()`(SKIP LOCKED, HMAC-SHA256 `timestamp.body`, X-Event-Id, 리디렉션 안 따름), 지수 백오프, `WEBHOOK_MAX_ATTEMPTS`번 실패 시 구독 끔 +
-  남은 전송 취소 + 기관 ORG_ADMIN 메일.
+  저장은 salt만(서버 키로 다시 만듦). https만, 공인(global)이 아닌 주소(사설·루프백·공유 100.64/10 등) 거부. 기관당 구독은
+  `WEBHOOK_MAX_SUBSCRIPTIONS_PER_ORG`(기본 10, 중지 포함)개까지 — 넘으면 409 CONFLICT. 다른 기관 구독 삭제는 Tenant_Guard(`load_scoped`)로
+  404 + `CROSS_ORG_ACCESS_ATTEMPT` 감사.
+- 발행: `services/webhooks.py`의 `before_flush` outbox → `webhook_deliveries`(0015).
+- 전송 (ADR-0041): 워커의 전용 스레드(`start_webhook_dispatcher`)가 `deliver_due()` 라운드를 돈다 — 작업 루프와 떨어져 있어 느린 수신
+  서버가 작업 처리를 멈추지 않는다. 라운드마다 ① 가져오기: 구독당 1건, 기관당 `WEBHOOK_MAX_PER_ORG`건, 모두 `WEBHOOK_BATCH_SIZE`건을
+  구독·전송 행 모두 SKIP LOCKED로 골라 `SENDING`(임대 = `next_attempt_at`)으로 커밋 ② 트랜잭션 밖에서 동시에 보내기: 한 건 전체
+  (이름 풀기~응답 헤더) `WEBHOOK_TIMEOUT_S`, 상태 코드만(본문 안 읽음), 검사한 주소로 고정 연결(이름은 Host·SNI·인증서 확인에만),
+  프록시 환경변수·리디렉션 안 따름, HMAC-SHA256 `timestamp.body`·X-Event-Id ③ 건마다 짧은 트랜잭션으로 기록: 지수 백오프,
+  `WEBHOOK_MAX_ATTEMPTS`번 실패 시 구독 끔 + 남은 전송 취소 + (커밋 뒤) 기관 ORG_ADMIN 메일. 임대가 끝난 `SENDING`은 다시 보낸다
+  (최소 한 번). 거부 이유(이름 못 풂·공인 아닌 주소)는 기관에 같은 문구, 자세한 건 서버 로그.
+- 시험: `tests/integration/test_webhooks.py`(두 워커 동시·보내는 동안 행 잠금 없음·실제 전송 기한·임대·경합 재확인·공정성·구독 상한·
+  교차 기관 감사·전용 스레드), `tests/unit/test_webhook_send.py`(헤더·본문 흘리기, 이름 풀기 기한, 주소 고정·프록시 무시, TLS SNI·인증서,
+  공인 주소 판정).
 
 ## 악성코드 검사 (요구사항 4.7, ADR-0031)
 - `ports/malware.py` 스트리밍 포트, `adapters/malware_scanners.py`(`MALWARE_SCANNER=none | mock-eicar`). 기관 정책 `organizations.malware_scan_required`(0016),
