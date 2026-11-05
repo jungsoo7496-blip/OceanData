@@ -17,7 +17,7 @@ import (
 const (
 	Queued    = "QUEUED"    // 쓰기 완료 판정을 통과해 전송 대기
 	Uploading = "UPLOADING" // 서버 업로드 세션이 열려 있음 (재시작 시 남은 파트만)
-	Done      = "DONE"      // 서버가 받음(RECEIVED/등록/ALREADY_REGISTERED/메타 전용)
+	Done      = "DONE"      // 바이너리는 검증된 실영수증 보관 완료. C0만 메타데이터 등록 확인
 	Excluded  = "EXCLUDED"  // 정책상 보내지 않음 (06번 요구사항 2.4)
 	Failed    = "FAILED"    // 재시도해도 안 되는 거부 (형식 오류 등)
 )
@@ -45,6 +45,21 @@ type Store struct {
 	db *sql.DB
 	// Now는 재시도 시각 계산에 쓴다 (시험에서 바꾼다).
 	Now func() time.Time
+}
+
+// ErrStaleFile은 스캔·전송 사이 파일 버전이 바뀌었거나 행이 사라졌다는 뜻이다.
+// 이전 전송의 영수증으로 새 파일 버전을 완료 처리하지 않는다.
+var ErrStaleFile = errors.New("로컬 파일 상태가 바뀌어 이전 전송 결과를 적용하지 않습니다")
+
+func oneFile(result sql.Result) error {
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrStaleFile
+	}
+	return nil
 }
 
 func Open(dir string) (*Store, error) {
@@ -124,10 +139,30 @@ func (s *Store) Enqueue(ctx context.Context, f File) (bool, error) {
 		if cur.Status == Uploading {
 			return false, nil // 전송 중에 바뀐 파일은 서버 해시 검증이 걸러낸다
 		}
-		_, err = s.db.ExecContext(ctx, `UPDATE files SET size=?, mtime_ns=?, sha256='', status=?, upload_id='',
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return false, err
+		}
+		defer tx.Rollback()
+		result, err := tx.ExecContext(ctx, `UPDATE files SET size=?, mtime_ns=?, sha256='', status=?, upload_id='',
 			asset_id='', attempts=0, last_error='', rule_id=?, source_device_id=?, session_label=?, priority=?,
-			next_attempt_at=0, updated_at=? WHERE id=?`, f.Size, f.MtimeNs, Queued, f.RuleID, f.SourceDeviceID,
-			f.SessionLabel, f.Priority, now(), cur.ID)
+			next_attempt_at=0, updated_at=? WHERE id=? AND status!=? AND size=? AND mtime_ns=?`,
+			f.Size, f.MtimeNs, Queued, f.RuleID, f.SourceDeviceID, f.SessionLabel, f.Priority, now(), cur.ID,
+			Uploading, cur.Size, cur.MtimeNs)
+		if err != nil {
+			return false, err
+		}
+		if err := oneFile(result); err != nil {
+			if errors.Is(err, ErrStaleFile) {
+				return false, nil // Get 이후 다른 스캔·전송이 먼저 상태를 바꿨다.
+			}
+			return false, err
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM kv WHERE key IN (?,?)`,
+			fmt.Sprintf("receipt_pending:%d", cur.ID), fmt.Sprintf("receipt:%d", cur.ID)); err != nil {
+			return false, err
+		}
+		err = tx.Commit()
 		return err == nil, err
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO files (rel_path, rule_id, source_device_id, session_label, size,
@@ -174,6 +209,66 @@ func (s *Store) MarkDone(ctx context.Context, id int64, assetID string) error {
 		err = s.SetKV(ctx, "last_success_at", time.Now().UTC().Format(time.RFC3339))
 	}
 	return err
+}
+
+// AwaitReceipt는 완료 응답 뒤의 영수증 대기를 남긴다. 전송 세션·원본은 그대로 유지한다.
+func (s *Store) AwaitReceipt(ctx context.Context, f *File, assetID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE files SET status=?, asset_id=?, last_error=?, updated_at=?
+		WHERE id=? AND status=? AND sha256=? AND size=? AND mtime_ns=? AND upload_id=? AND asset_id=?`,
+		Uploading, assetID, "RECEIPT_PENDING", now(), f.ID, f.Status, f.SHA256, f.Size, f.MtimeNs,
+		f.UploadID, f.AssetID)
+	if err != nil {
+		return err
+	}
+	if err := oneFile(result); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO kv(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+		fmt.Sprintf("receipt_pending:%d", f.ID), "true"); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ReceiptPending(ctx context.Context, id int64) (bool, error) {
+	v, err := s.KV(ctx, fmt.Sprintf("receipt_pending:%d", id))
+	return v == "true", err
+}
+
+// MarkDoneWithReceipt는 검증된 영수증과 완료 상태를 같은 SQLite 트랜잭션으로 보관한다.
+func (s *Store) MarkDoneWithReceipt(ctx context.Context, f *File, receipt string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE files SET status=?, last_error='', updated_at=?
+		WHERE id=? AND status=? AND sha256=? AND size=? AND mtime_ns=? AND upload_id=? AND asset_id=?`,
+		Done, now(), f.ID, Uploading, f.SHA256, f.Size, f.MtimeNs, f.UploadID, f.AssetID)
+	if err != nil {
+		return err
+	}
+	if err := oneFile(result); err != nil {
+		return err
+	}
+	for key, value := range map[string]string{
+		fmt.Sprintf("receipt:%d", f.ID): receipt,
+		"last_success_at":               s.Now().UTC().Format(time.RFC3339),
+	} {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO kv(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+			key, value); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM kv WHERE key=?`, fmt.Sprintf("receipt_pending:%d", f.ID)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Reset은 업로드 세션을 버리고 처음부터 다시 보내게 한다 (세션 만료 410 등).

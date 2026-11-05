@@ -1,0 +1,33 @@
+# 17번 요구사항 1.1, T02-g. 업로드 API·DB·S3 응답을 모방하지 않고 실제 멀티파트 재개를 시험한다.
+name: web-e2e
+on:
+  push: {branches: [main]}
+  pull_request:
+permissions:
+  contents: read
+
+jobs:
+  upload-resume:
+    runs-on: ubuntu-24.04
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/var/playwright-browsers
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm, cache-dependency-path: web/package-lock.json}
+      - name: 브라우저 시험 의존성
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          node node_modules/playwright-core/cli.js install --with-deps chromium
+      - name: 탭 종료·동일 세션 재개·파트 재전송 방지·전체 해시
+        run: python tools/web_acceptance.py --out var/web-e2e-results.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-upload-resume
+          path: |
+            var/web-e2e-results.jsonl
+            var/marine-web-e2e-*/run.log

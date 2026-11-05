@@ -17,6 +17,9 @@ ID 접두사 추가: `agr_`(약정), `icd_`(연계 카드), `brk_`(긴급 열람
 ## 도메인 (순수 함수)
 - `domain/metadata.py`: 기본값(3.1), collection_mode별 variant 허용표, 파생 자산 엄격값 상속, schema_version 규칙(4.3)
 - `domain/normalize.py`: 촬영시각(근거 없으면 UNKNOWN·비움, 오프셋→UTC·원문 보존, mtime 무시), 위치(범위·위경도 뒤바뀜·(0,0) 거부, 정밀도 낮추기), 단위 사전 정규화
+- 정규 위치 없이 원래 좌표가 들어오면 수집 서비스가 PostGIS `ST_Transform`으로 EPSG:4326으로 바꾼다(6.3).
+  결과에 공통 GeoJSON 스키마와 위치 규칙을 모두 적용한다. 원본은 `source_location`에, 변환 방식·원래/대상 좌표계는 내부 `ingest_context.location_transform`에 저장한다.
+  검증된 `location`이 함께 전달되면 기존대로 이를 사용하고 원래 좌표를 보존한다. 신규 DB 마이그레이션/down은 해당 없다.
 - `domain/quality.py`: 규칙 기반 quality_status·사유
 
 ## 서비스
@@ -25,5 +28,27 @@ ID 접두사 추가: `agr_`(약정), `icd_`(연계 카드), `brk_`(긴급 열람
 ## API
 `GET /v1/schemas`, `GET /v1/schemas/{name}/{version}`(application/schema+json), `GET /v1/codes/{table}`, `POST /v1/contracts/validate`, `GET /v1/devices/{id}/policy`, `GET /v1/assets/{id}/lineage`(재귀, 권한 범위 밖 자산 제외)
 
+`POST /v1/codes/event-categories/subcodes`는 사람 `ORG_ADMIN`의 인증 기관에 `code`와 `label`을 등록한다(8.3, ADR-0026).
+기존 0002의 `org_event_codes`를 사용하며 신규 마이그레이션/down은 해당 없다. 기관 내 중복은 409, 미등록 상위분류는 422다.
+등록한 코드는 자기 기관의 코드표 조회와 이벤트 제출에 쓸 수 있다. 공통 상위분류와 버전은 공통 코드표에서 관리한다.
+같은 멱등성 키의 요청을 직렬화하고 등록·멱등성 응답·성공 감사를 한 트랜잭션으로 저장한다.
+
 ## Tenant_Guard 변경
 PROGRAM_VIEWER는 자산 테이블에서 배정 사업 + sharing_scope ≠ PRIVATE만 본다 (domain.md 2장 "L1 자산 메타데이터").
+
+## 품질 규칙 재평가
+
+운영 환경에서 DB 접근 권한이 있는 운영자가 아래 명령을 실행한다(10.2, ADR-0027).
+
+```bash
+python -m app.cli reevaluate-quality "$ORG_ID"
+python -m app.cli reevaluate-quality "$ORG_ID" --asset-id "$ASSET_ID"
+```
+
+활성 `quality_rule_sets` 문서 예시는 `{"version":2,"required_fields":{"VIDEO":["capture_start_at"]}}`이다.
+DB 버전과 문서 버전을 맞추고 한 행만 활성으로 둔다. 지원하는 필수 필드는 데이터 유형, MIME·크기·해시,
+시각 품질·시작/종료 시각, 회차, 위치, 원천 장비다. 활성 규칙이 없으면 기본 규칙을 사용한다.
+
+명령은 `rule_version`, `evaluated`, `changed`, `skipped_missing_facts`를 출력하고 기관별 실행을 감사 로그에 남긴다.
+선택 대상은 삭제되지 않은 REGISTERED·PROXIED·READY_PRIVATE 자산이다. 재평가로 공유·격리·저장 위치를 변경하지 않는다.
+원래 범위 경고를 입증할 값이 없는 자산은 그대로 두고 건수를 보고한다. 공개 API와 DB 구조는 변경하지 않는다.

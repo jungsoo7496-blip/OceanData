@@ -1,0 +1,38 @@
+# T02-g 전용 합성 시험 환경. tools/web_acceptance.py가 매 실행마다 고유 프로젝트로 만들고 정리한다.
+services:
+  postgres:
+    build: ../../deploy/compose/postgres
+    environment:
+      POSTGRES_USER: marine_e2e
+      POSTGRES_PASSWORD: test-e2e-owner
+      POSTGRES_DB: marine_e2e
+      APP_DB_PASSWORD: test-e2e-app
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marine_e2e -d marine_e2e"]
+      interval: 2s
+      timeout: 2s
+      retries: 40
+
+  api:
+    build: {context: ../.., dockerfile: backend/Dockerfile}
+    image: oceandata-web-e2e-api:local
+    user: "${E2E_UID:-10001}:${E2E_GID:-10001}"
+    environment:
+      E2E_DATABASE_URL: postgresql+pg8000://marine_e2e:test-e2e-owner@postgres:5432/marine_e2e
+      E2E_S3_PUBLIC_URL: http://127.0.0.1:${E2E_S3_PORT}
+      E2E_SESSION_FILE: /results/session.json
+      CONTRACTS_DIR: /repo/contracts
+    ports:
+      - "127.0.0.1:${E2E_API_PORT}:8000"
+      - "127.0.0.1:${E2E_S3_PORT}:8333"
+    volumes:
+      - "../..:/repo:ro"
+      - "${E2E_RESULTS_DIR}:/results"
+    command:
+      - sh
+      - -c
+      - >-
+        pip install -q --target /tmp/e2e-python 'moto[s3,server]>=5,<6' &&
+        PYTHONPATH=/tmp/e2e-python:/repo/backend python /repo/web/e2e/server.py
+    depends_on:
+      postgres: {condition: service_healthy}

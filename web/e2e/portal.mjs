@@ -4,19 +4,18 @@
 // axe(@axe-core/playwright, MPL-2.0)로 주요 화면의 심각(critical) 위반이 없는지 본다.
 import { AxeBuilder } from '@axe-core/playwright'
 import { mkdtempSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-// playwright는 로컬 설치본(npx playwright install chromium) 또는 전역 설치본을 쓴다
-const { chromium } = createRequire(import.meta.url)('playwright')
+// 명시한 playwright-core와 설치한 Chromium/Chrome을 쓴다.
+import { chromium } from 'playwright-core'
 const base = process.argv[2] ?? 'http://localhost:5173'
 const dir = mkdtempSync(join(tmpdir(), 'portal-'))
 const csv = join(dir, `e2e_${Date.now()}.csv`)
 writeFileSync(csv, `time,temp\n2026-11-02T00:00:00Z,${(Math.random() * 30).toFixed(3)}\n`)
 const fail = (m) => { console.error('실패:', m); process.exit(1) }
 
-const browser = await chromium.launch()
+const browser = await chromium.launch({ channel: process.env.E2E_BROWSER_CHANNEL || undefined })
 const page = await (await browser.newContext({ viewport: { width: 1400, height: 900 } })).newPage()
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message))

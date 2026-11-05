@@ -16,6 +16,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("init-buckets", help="존별 버킷 생성 (01번 요구사항 1.5)")
     sub.add_parser("seed", help="시험 데이터 생성 (01번 요구사항 6)")
     sub.add_parser("verify-audit", help="감사 로그 해시 체인 검증 (02번 요구사항 7.4)")
+    qe = sub.add_parser("reevaluate-quality", help="한 기관의 등록 자산 품질을 활성 규칙으로 재평가 (03번 10.2)")
+    qe.add_argument("organization_id")
+    qe.add_argument("--asset-id", help="자산 한 건으로 범위 제한")
     sp = sub.add_parser("set-policy", help="수집기 정책 등록 (device-policy.schema.json 검증, 새 버전으로 저장)")
     sp.add_argument("device_id")
     sp.add_argument("policy_file")
@@ -68,6 +71,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "set-policy":
         return _set_policy(c, args.device_id, args.policy_file)
+    if args.cmd == "reevaluate-quality":
+        import json
+
+        from app.services.quality import QualityRuleError, reevaluate
+
+        try:
+            result = reevaluate(c, args.organization_id, args.asset_id)
+        except QualityRuleError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
     if args.cmd == "enrollment-code":
         return _enrollment_code(c, args.device_id)
     if args.cmd == "retention":

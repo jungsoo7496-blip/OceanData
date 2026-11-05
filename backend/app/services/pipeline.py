@@ -28,9 +28,9 @@ from app.db.models import Asset, AssetLineage, Upload
 from app.domain import states
 from app.domain.ids import new_id
 from app.domain.normalize import check_location
-from app.domain.quality import evaluate
 from app.metrics import PIPELINE_FRAMES, PIPELINE_SECONDS
 from app.services.ingest import Quota, append_integrity, object_key, zone_for
+from app.services.quality import apply_rules, load_rules
 
 log = logging.getLogger(__name__)
 VIDEO_STEPS = ("media_probe", "make_proxy", "make_thumbnail")
@@ -147,6 +147,7 @@ def media_probe(c: Container, asset_id: str) -> str:
             return quarantine_corrupt(c, asset_id)
     with c.sessionmaker.begin() as db:
         asset = db.execute(select(Asset).where(Asset.asset_id == asset_id).with_for_update()).scalar_one()
+        rules = load_rules(db)
         asset.ext = {**(asset.ext or {}), "video_ext": {**(asset.ext or {}).get("video_ext", {}), **meta["video_ext"]}}
         ts = asset.timestamp_quality or {}
         if ts.get("source", "UNKNOWN") == "UNKNOWN" and meta["creation_time"] is not None:
@@ -160,14 +161,9 @@ def media_probe(c: Container, asset_id: str) -> str:
             asset.provenance = {**asset.provenance, "original_timestamps": originals}
         if asset.location is None and meta["location"] is not None:
             asset.location, asset.location_precision = meta["location"], "EXACT_RESTRICTED"
-        asset.quality_status, asset.quality_reasons = evaluate(_fields(asset), facts={"playable": True})
+        apply_rules(asset, rules, c.clock.now(), facts={"playable": True})
         asset.updated_at = c.clock.now()
     return "OK"
-
-
-def _fields(a: Asset) -> dict[str, Any]:
-    return {"data_type": a.data_type, "mime_type": a.mime_type, "byte_size": a.byte_size,
-            "checksum_sha256": a.checksum_sha256, "timestamp_quality": a.timestamp_quality}
 
 
 def quarantine_corrupt(c: Container, asset_id: str) -> str:
@@ -176,6 +172,8 @@ def quarantine_corrupt(c: Container, asset_id: str) -> str:
         asset.ingest_status = states.transition("ingest_status", asset.ingest_status, "QUARANTINED", {"SERVICE"})
         asset.quarantine_reason = "CORRUPT_FILE"
         asset.quality_status, asset.quality_reasons = "FAILED", ["not_playable"]
+        context = asset.ingest_context or {}
+        asset.ingest_context = {**context, "quality_facts": {**context.get("quality_facts", {}), "playable": False}}
         from app.services.retention import apply_retention
 
         apply_retention(db, asset, c.clock.now())

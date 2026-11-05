@@ -2,22 +2,25 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from app.api.deps import container, get_db, load_scoped, require
+from app.api.deps import client_ip, container, get_db, load_scoped, require
 from app.container import Container
 from app.db.models import Asset, Device, DevicePolicy, OrgEventCode
 from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services import contracts
+from app.services.idempotency import run_idempotent
+from app.services.org_event_codes import register_subcode
 from app.services.tenant import scope_filter
 from app.timefmt import iso
 
 router = APIRouter()
+_ORG_EVENT_SUBCODES = "/v1/codes/event-categories/subcodes"
 
 
 @router.get("/v1/schemas", tags=["contracts"])
@@ -45,6 +48,38 @@ def get_code_table(table: str, db: Session = Depends(get_db),
         out["items"] = [*out["items"], *({"code": s.code, "label": s.label, "organization_specific": True}
                                          for s in subs)]
     return out
+
+
+class OrgEventSubcodeCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    code: str = Field(max_length=80, pattern=r"^[A-Z][A-Z0-9_]{1,39}\.[a-z0-9_]{1,40}$")
+    label: str = Field(min_length=1, max_length=120, pattern=r"^[^\x00-\x1f\x7f]*[^\s\x00-\x1f\x7f][^\x00-\x1f\x7f]*$")
+
+
+@router.post(_ORG_EVENT_SUBCODES, status_code=201, tags=["contracts"])
+def create_org_event_subcode(
+    body: OrgEventSubcodeCreate, request: Request, db: Session = Depends(get_db),
+    c: Container = Depends(container), p: Principal = Depends(require("org_event_code:create")),
+    idempotency_key: str | None = Header(default=None, min_length=8, max_length=128),
+) -> JSONResponse:
+    method_path = f"POST {_ORG_EVENT_SUBCODES}"
+    if idempotency_key is not None:
+        # 같은 기관·주체의 같은 키를 트랜잭션 종료까지 직렬화해 동시 재시도도 첫 응답을 돌려준다.
+        scope = f"{method_path}:{p.organization_id}:{p.principal_id}:{idempotency_key}"
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"), {"scope": scope})
+
+    def create() -> tuple[int, dict]:
+        register_subcode(db, p, body.code, body.label, c.clock.now())
+        return 201, {**body.model_dump(), "organization_specific": True}
+
+    status, response, replayed = run_idempotent(
+        db, c.clock, c.settings.idempotency_retention_s, p, method_path, idempotency_key, body.model_dump(), create,
+    )
+    if not replayed:
+        c.audit.record("ORG_EVENT_CODE_CREATED", principal=p, organization_id=p.organization_id,
+                       target_type="OrgEventCode", source_ip=client_ip(request), details={"code": body.code},
+                       connection=db.connection())
+    return JSONResponse(response, status_code=status, headers={"Idempotent-Replayed": "true"} if replayed else None)
 
 
 class ValidateRequest(BaseModel):

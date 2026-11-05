@@ -153,6 +153,19 @@ def _pg_args(url: URL) -> tuple[list[str], dict[str, str]]:
     return args, {**os.environ, "PGPASSWORD": url.password or ""}
 
 
+def _check_pg_version(binary: str, server_major: int, tool: str) -> None:
+    """상위 버전 덤프를 하위 서버에 복원하지 않도록 도구·서버 주버전을 맞춘다."""
+    result = subprocess.run(  # noqa: S603  # nosec B603
+        [binary, "--version"], check=True, capture_output=True, text=True, timeout=10)
+    match = re.search(r"\(PostgreSQL\)\s+(\d+)(?:\D|$)", result.stdout)
+    if match is None:
+        raise ValueError(f"{tool} 주버전을 확인하지 못했습니다")
+    major = int(match.group(1))
+    if major != server_major:
+        raise ValueError(f"{tool} 주버전 {major}이 DB 서버 주버전 {server_major}과 다릅니다. "
+                         "PG_DUMP_BIN·PG_RESTORE_BIN을 서버와 같은 주버전으로 설정하세요")
+
+
 def _tables(conn: Any) -> list[str]:
     return list(conn.execute(text(
         "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' "
@@ -172,6 +185,8 @@ def _dump_db(c: Container, dst: StoragePort, run_id: str) -> tuple[str, str, dic
     os.close(fd)
     try:
         with eng.connect().execution_options(isolation_level="REPEATABLE READ") as conn, conn.begin():
+            major = int(conn.execute(text("SHOW server_version_num")).scalar_one()) // 10000
+            _check_pg_version(c.settings.pg_dump_bin, major, "pg_dump")
             snap = conn.execute(text("SELECT pg_export_snapshot()")).scalar_one()
             counts = _counts(conn)
             args, env = _pg_args(url)
@@ -300,6 +315,8 @@ def restore_test(c: Container, backup_run_id: str | None = None, sample: int | N
         if sha != dsha:
             out["table_mismatches"].append({"table": "*", "reason": "덤프 sha256 불일치"})
         with admin.connect() as conn:
+            major = int(conn.execute(text("SHOW server_version_num")).scalar_one()) // 10000
+            _check_pg_version(c.settings.pg_restore_bin, major, "pg_restore")
             conn.execute(text(f'CREATE DATABASE "{tmp}"'))
         args, env = _pg_args(url)
         cmd = [c.settings.pg_restore_bin, "--no-owner", "--no-privileges", "--exit-on-error", *args, "-d", tmp,

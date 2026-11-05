@@ -114,7 +114,7 @@
 | fsnotify | BSD-3 | 채택 | 06 | 폴더 감시 |
 | modernc.org/sqlite | BSD-3 | 채택 | 06 | 순수 Go SQLite (Local_State) |
 | kardianos/service | Zlib | 채택 | 06 | Windows 서비스·systemd 등록 |
-| creativeprojects/go-selfupdate | MIT | PoC | 06 | 자동 업데이트 (서명 검증 방식 확인) |
+| creativeprojects/go-selfupdate | MIT | 교체 primitive 채택 | 06 | v1.7.0 Linux·Windows 실제 프로세스 PoC 후 update 하위 패키지만 채택. 서명·기동 감독은 자체 계층 (ADR-0024) |
 | eclipse/paho.mqtt.golang | EPL-2.0 / EDL-1.0 (EDL 선택) | 채택 | 07 | Sensor_Plugin MQTT 구독 |
 | pgBackRest | MIT | PoC | 08 | DB 백업·시점 복구 |
 | datamodel-code-generator | MIT | 채택 | 03 | contracts JSON Schema → Pydantic 모델 |

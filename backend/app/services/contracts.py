@@ -114,8 +114,8 @@ def _ptr(path: Any) -> str:
     return "/" + "/".join(str(p).replace("~", "~0").replace("/", "~1") for p in path) if path else ""
 
 
-def schema_problems(name: str, doc: Any) -> list[Problem]:
-    validator = Draft202012Validator({"$ref": BASE + f"{name}.schema.json"}, registry=registry(),
+def schema_problems(name: str, doc: Any, *, fragment: str = "") -> list[Problem]:
+    validator = Draft202012Validator({"$ref": BASE + f"{name}.schema.json{fragment}"}, registry=registry(),
                                      format_checker=FormatChecker())
     out = []
     for e in sorted(validator.iter_errors(doc), key=lambda e: list(e.absolute_path)):

@@ -161,7 +161,11 @@ func (c *Client) accessToken(ctx context.Context, force bool) (string, error) {
 		return "", ErrRevoked
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", readProblem(resp)
+		problem := readProblem(resp)
+		if resp.StatusCode >= 500 {
+			return "", fmt.Errorf("%w: %v", ErrOffline, problem)
+		}
+		return "", problem
 	}
 	var tr struct {
 		AccessToken string `json:"access_token"`

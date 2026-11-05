@@ -1,13 +1,18 @@
-# 수용시험 결과 (2026-11-04, 클라우드 세션 `make test-acceptance`)
+# 수용시험 결과 (2026-11-05, 로컬 검증 누적)
 
-> 다시 만들기: `make test-acceptance` → var/acceptance.{json,md}. 이 파일은 그 시점 사본이다.
+> 백엔드 기준선은 2026-11-04 결과다. 2026-11-05에 T01-h 로컬 보안 보고서·T02-g 실제 브라우저 재개와 Go 전체 50건(MQTT 포함)·T03-b 에이전트 결과를 추가했다.
+> T03-b는 실제 프로세스 강제 종료와 주입 시계 72시간 모의 단절 시험이며, 실제 72시간·PC 전원 차단·15번 엣지 장비 검증은 별도다.
+> 다시 만들기: `make test-acceptance`, 보안 보고서는 `tools/security_acceptance.py`로 연결한다. 원본은 `var/acceptance-results.jsonl`이다.
+> 이 표는 로컬 검증 범위이며 새 원격 GitHub Actions나 전체 릴리스 성공을 뜻하지 않는다. strict 라이선스 검사는 미상·승인 대기 항목 때문에 차단 중이다.
+> 수용 ID 밖의 Windows 업데이트 native 시험 14개와 실제 제품 CLI 서명 갱신·롤백이 통과했다. OS 기동 지연 관찰과 운영 서비스 확인 범위는 ADR-0024에 기록했다.
+
 
 | 상태 | 건수 |
 |---|---|
 | NEEDS_HARDWARE | 2 |
-| NEEDS_INPUT | 5 |
-| NOT_IMPLEMENTED | 12 |
-| PASS | 65 |
+| NEEDS_INPUT | 4 |
+| NOT_IMPLEMENTED | 6 |
+| PASS | 72 |
 
 | ID | 케이스 | 상태 | 시험 / 사유 |
 |---|---|---|---|
@@ -18,17 +23,17 @@
 | T01-e | 사전 서명 URL의 객체 키·만료·서명 변조 | NOT_IMPLEMENTED |  |
 | T01-f | PROGRAM_VIEWER가 L1 자산의 원본·프록시·다운로드 URL 요청 | PASS | tests/acceptance/test_t01_tenant_isolation.py::test_T01_f_program_viewer_scope |
 | T01-g | 검수자·운영자 역할로 제공기관 승인을 대신하려 함 | PASS | tests/acceptance/test_t01_tenant_isolation.py::test_T01_g_operator_and_reviewer_cannot_act_as_provider_admin |
-| T01-h | 동적 보안 검사(ZAP)·의존성 취약점 검사 | NEEDS_INPUT | GitHub Actions security 작업(SBOM·Trivy·ZAP) 결과로 판정 — 클라우드 세션에서는 결과 미확인 |
+| T01-h | 동적 보안 검사(ZAP)·의존성 취약점 검사 | PASS | tools/security_acceptance.py::T01_h_local_scan_reports |
 | T02-a | 감시 폴더에 합성 영상 저장 | PASS | agent/internal/core::TestT02FolderToServerWithoutHumanIntervention |
 | T02-b | 쓰기 중인 파일 | PASS | agent/internal/core::TestWritingFileIsNotQueuedUntilSizeStable |
 | T02-c | 장비 정책이 C3→C2로 바뀜 | PASS | tests/integration/test_ingest.py::test_variant_rules_and_metadata_only<br>agent/internal/core::TestPolicyChangeExcludesQueuedFilesAndReports |
 | T02-d | C0(원본 이전 불가) 장비 | PASS | tests/integration/test_ingest.py::test_variant_rules_and_metadata_only |
 | T02-e | 모의 RTSP 카메라 → 엣지 클립 → 업로드 | NOT_IMPLEMENTED | 15번 엣지 수집기 (조건부, 하드웨어·연계 카드 확정 후) |
 | T02-f | 모의 NVR이 라이브 RTSP만 지원 | NOT_IMPLEMENTED | 15번 엣지 수집기 |
-| T02-g | 웹 업로드 (탭 닫았다 열기 포함) | NOT_IMPLEMENTED | 웹 업로드 재개는 브라우저 E2E(web/e2e)로 수동 확인, 자동 수용시험 미작성 |
+| T02-g | 웹 업로드 (탭 닫았다 열기 포함) | PASS | web/e2e/upload-resume.mjs::T02_g_tab_close_and_resume |
 | T02-h | C1 원천 장비가 ORIGINAL을 보냄 | PASS | tests/integration/test_ingest.py::test_variant_rules_and_metadata_only |
 | T03-a | 10GB 이상 파일 40% 지점 단절 후 재시작 | NEEDS_HARDWARE | 10GB 시험은 운영 스토리지·회선에서 (04번 tasks) |
-| T03-b | 에이전트 강제 종료·72시간 오프라인 후 재개 (엣지 포함) | NOT_IMPLEMENTED | 72시간 오프라인은 에이전트 Go 시험(06번) 축소판만, 엣지는 15번 |
+| T03-b | 에이전트 강제 종료·72시간 오프라인 후 재개 (엣지 포함) | PASS | agent/internal/core::TestT03ForcedKillAnd72HourOfflineResume |
 | T03-c | 업로드 세션 만료 | PASS | tests/integration/test_ingest.py::test_quota_abort_and_expiry |
 | T04-a | 해시 불일치 | PASS | tests/integration/test_ingest.py::test_T04_checksum_mismatch_is_quarantined |
 | T04-b | 확장자·MIME 위장 | PASS | tests/integration/test_ingest.py::test_T04_mime_mismatch_detected_by_content |
@@ -44,7 +49,7 @@
 | T05-e | `contracts/examples/invalid/` 전부 | PASS | tests/acceptance/test_t12_concurrency.py::test_t05_contract_examples_valid_and_invalid |
 | T05-f | 사전 검증 API로 같은 문서 검사 | PASS | tests/integration/test_catalog.py::test_validate_endpoint_uses_same_rules |
 | T06-a | 보고서 지표 → 회차 기록 → 이벤트·관측값 → 자산 → 원본 | PASS | tests/acceptance/test_t11_reports.py::test_t11_report_flow_and_t06a_trace |
-| T06-b | 데이터셋 → 원본·모델 버전·검수자 | NOT_IMPLEMENTED | 데이터셋 → 원본은 매니페스트로 확인(T06-d), 모델 버전·검수자를 한 번에 보여 주는 조회는 없음 |
+| T06-b | 데이터셋 → 원본·모델 버전·검수자 | PASS | tests/acceptance/test_t06d_journey.py::test_t06d_three_providers_full_journey |
 | T06-c | 원본 삭제·철회 | PASS | tests/acceptance/test_t08_t15_sharing.py::test_t08_t15_dataset_distribution |
 | T06-d | 가상 3사(선박·CCTV·센서) 전체 여정 | PASS | tests/acceptance/test_t06d_journey.py::test_t06d_three_providers_full_journey |
 | T06-e | 파생 자산(프록시·썸네일·클립·비식별본) → 원본 | PASS | tests/integration/test_catalog.py::test_lineage_and_asset_scope |
@@ -65,8 +70,8 @@
 | T09-a | 모델 처리만 끝난 비식별본 | PASS | tests/acceptance/test_t09_deid_review.py::test_t09_deid_review_flow |
 | T09-b | 검수 표본에서 누락 발견 | PASS | tests/acceptance/test_t09_deid_review.py::test_t09_deid_review_flow |
 | T09-c | 누락률 보고 | PASS | tests/acceptance/test_t09_deid_review.py::test_t09_deid_review_flow |
-| T10-a | `make restore-test` | NOT_IMPLEMENTED | 08번 백업·복원 (PoC 후) |
-| T10-b | 백업 대상 확인 | NOT_IMPLEMENTED | 08번 백업 대상 작업 (PoC 후) |
+| T10-a | `make restore-test` | PASS | tests/acceptance/test_t10_backup_restore.py::test_t10_tiered_backup_and_restore |
+| T10-b | 백업 대상 확인 | PASS | tests/acceptance/test_t10_backup_restore.py::test_t10_tiered_backup_and_restore |
 | T11-a | 템플릿으로 초안 | PASS | tests/acceptance/test_t11_reports.py::test_t11_report_flow_and_t06a_trace |
 | T11-b | 데이터 없는 지표 | PASS | tests/acceptance/test_t11_reports.py::test_t11_report_flow_and_t06a_trace |
 | T11-c | 정답 없이 모델 결과만으로 계산한 지표 | PASS | tests/acceptance/test_t11_reports.py::test_t11_report_flow_and_t06a_trace |
@@ -91,7 +96,7 @@
 | T16-b | `make bench` | PASS | tests/acceptance/test_t12_concurrency.py::test_t16b_bench_reports_per_step_throughput |
 | T16-c | 우선순위 | PASS | tests/integration/test_pipeline.py::test_queue_retry_lease_and_resource_classes |
 | T17-a | 반경·시간 창 결합 | PASS | tests/acceptance/test_t17_env_join.py::test_t17_collect_join_backfill_and_alert |
-| T17-b | 시간·해역이 맞지 않는 관측값 | NOT_IMPLEMENTED | 반경·시간 창 밖이면 결합하지 않음(구현), '경고' 표시는 미구현 |
+| T17-b | 시간·해역이 맞지 않는 관측값 | PASS | tests/acceptance/test_t17_env_join.py::test_t17_collect_join_backfill_and_alert |
 | T17-c | 재배포 불가 소스 | PASS | tests/acceptance/test_t17_env_join.py::test_t17_collect_join_backfill_and_alert |
 | T19-a | NGSI-LD 어댑터 꺼짐 | NOT_IMPLEMENTED | 16번 NGSI-LD 어댑터 (조건부) |
 | T19-b | 게이트 통과 후 적합성 | NOT_IMPLEMENTED | 16번 (조건부, 게이트 통과 후) |

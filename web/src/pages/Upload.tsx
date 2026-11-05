@@ -61,6 +61,8 @@ export function Upload() {
 
   const uppy = useMemo(() => {
     const urls = new Map<string, { at: number; byPart: Map<number, string> }>()
+    // Uppy의 getChunkSize는 UppyFile이 아닌 file.data(Blob)를 전달한다.
+    const partSizes = new WeakMap<object, number>()
     const refreshUrls = async (uploadId: string) => {
       const pl = await api<{ pending_parts: { part_number: number; url: string }[] }>(`/v1/uploads/${uploadId}/parts`)
       urls.set(uploadId, { at: Date.now(), byPart: new Map(pl.pending_parts.map((p) => [p.part_number, p.url])) })
@@ -91,6 +93,8 @@ export function Upload() {
             u.removeFile(id)
             continue
           }
+          if (!c.part_size) throw new Error('서버의 업로드 파트 크기를 확인하지 못했습니다')
+          partSizes.set(file.data, c.part_size)
           urls.set(c.upload_id!, { at: Date.now(), byPart: new Map((c.parts ?? []).map((p) => [p.part_number, p.url])) })
           u.setFileMeta(id, { uploadId: c.upload_id, assetId: c.asset_id, partSize: c.part_size, sha })
           // 이미 있는 세션이면 Uppy가 listParts로 받은 파트를 건너뛴다 (재개)
@@ -107,9 +111,12 @@ export function Upload() {
     u.use(AwsS3<Meta, Body>, {
       shouldUseMultipart: true,
       limit: 4,
-      // 서버가 정한 파트 크기를 그대로 쓴다 (실행 시 전달되는 값은 UppyFile이다)
-      getChunkSize: (file) => ((file as unknown as F).meta?.partSize as number | undefined)
-        ?? Math.max(64 * 1024 * 1024, Math.ceil(file.size / 10000)),
+      // 같은 Blob에 연결한 서버 파트 크기를 사용해 신규·재개 전송의 경계를 일치시킨다.
+      getChunkSize: (data) => {
+        const size = partSizes.get(data)
+        if (!size) throw new Error('서버의 업로드 파트 크기를 확인하지 못했습니다')
+        return size
+      },
       createMultipartUpload: async (file) => ({ uploadId: file.meta.uploadId as string, key: file.meta.assetId as string }),
       listParts: async (_file, { uploadId }) => {
         const pl = await api<{ completed_parts: { part_number: number; etag: string; size: number }[] }>(`/v1/uploads/${uploadId}/parts`)

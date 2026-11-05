@@ -15,6 +15,17 @@
 - 마일스톤별 필수 세부 케이스 목록은 `release_gate.py`의 `MILESTONE_CASES`(docs/ROADMAP.md 2장에서 옮김). M1은 기능 범위 확인용 부분 집합, M2는 운영 하드웨어 실측
 
 ## 확인 필요
-- GitHub Actions(ci·security) 결과는 이 클라우드 세션에서 확인하지 못했다 (gh 토큰 없음). Syft·Trivy·ZAP 이미지 버전 고정값은 첫 실행에서 확인
-- 웹 E2E(T02-g)를 수용 보고에 연결하는 일 — Playwright 결과를 같은 JSON Lines(`nodeid`·`covers`·`outcome`·`log`·`reproduce`)로 내보내면 된다
+- 기존 GitHub Actions 실패는 확인했고 로컬에서 보완했다. 변경 후 원격 CI 결과는 아직 없으며 릴리스 라이선스 확인·승인이 필요하다
+- 웹 E2E(T02-g)는 후속 보완에서 공통 JSON Lines로 연결했다. 실행 환경이 없으면 미실행/실패로 보고한다
 - T14 운영 인수(스테이징 Runbook 수행 기록), T12-b·T18 실측은 하드웨어 후
+
+## 로컬 후속 보완 (2026-11-05, ADR-0023)
+- `tools/run_acceptance.py`가 Python·Go·웹 시험을 실행하고 항상 수용 보고를 만든다. 실행기·수집 실패도 exit 1이다.
+- T02-g는 별도 Compose 프로젝트의 실제 제품 API·DB·S3 업로드를 사용한다. 시험 인증은 합성 IdP 어댑터 안에만 둔다.
+- `getChunkSize`가 Blob을 받는 Uppy 동작에 맞춰 서버 part_size를 Blob별로 연결한다. 3파트 실제 재개·해시 시험으로 검증했다.
+- 라이선스 파서는 SPDX 논리를 보존하고 PyPI 이름을 정규화한다. LicenseRef는 추출 원문만 해석한다.
+  개발 검사의 경고와 strict 릴리스 차단을 분리하며, 허용 목록·사람 승인 상태는 유지한다.
+- 게이트는 현재 npm ci·이미지/SBOM·모든 시험·임시 DB 왕복·보안 검사를 요구한다. 누락·생략은 실패다.
+  API·웹 ZAP 결과는 위험 등급까지 검사한다. 보안 CI는 라이선스 실패가 있어도 취약점 보고서를 남긴다.
+- 계약·도메인 코드값·DB 구조 변경 없음. 새 마이그레이션(down 포함)은 해당 없음이다.
+- 확인 필요는 원격 CI 재실행, 미상 라이선스 원문 확인·사람 승인, 스테이징 Runbook과 하드웨어 실측이다.

@@ -31,13 +31,13 @@ from app.db.models import (
 )
 from app.domain import metadata, states
 from app.domain.ids import new_id
-from app.domain.normalize import TimeRuleError, resolve_capture_time
+from app.domain.normalize import TimeRuleError, check_location, resolve_capture_time
 from app.domain.principal import Principal
-from app.domain.quality import evaluate
 from app.errors import ProblemError
 from app.ports.notifier import Notification
 from app.ports.storage import CompletedPart
 from app.services import contracts
+from app.services.quality import apply_rules, load_rules
 from app.services.tenant import NotFoundInScope, get_scoped
 from app.timefmt import iso
 
@@ -184,7 +184,18 @@ class IngestService:
             self.db.rollback()
             raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/source_location", "code": "transform_failed",
                                                             "message": "좌표계를 변환할 수 없습니다"}]) from None
-        return json.loads(g), {"from_crs": src["crs"], "to_crs": "EPSG:4326", "method": "ST_Transform"}
+        geometry = json.loads(g) if g is not None else None
+        pointer = "/source_location/geometry"
+        if contracts.schema_problems("common", geometry, fragment="#/$defs/geometry"):
+            raise ProblemError("VALIDATION_ERROR", errors=[{
+                "pointer": pointer, "code": "transform_failed",
+                "message": "변환된 위치의 GeoJSON 형식이 올바르지 않습니다",
+            }])
+        problems = check_location(geometry, pointer)
+        if problems:
+            raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": p.pointer, "code": p.code,
+                                                            "message": p.message} for p in problems])
+        return geometry, {"from_crs": src["crs"], "to_crs": "EPSG:4326", "method": "ST_Transform"}
 
     def create_upload(self, p: Principal, m: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         self._validate_manifest(m)
@@ -319,15 +330,11 @@ class IngestService:
             raise ProblemError("RULE_VIOLATION", detail="메타데이터 전용 등록에는 실증회차가 필요합니다",
                                unmet_conditions=[{"condition": "session_id 또는 session_label", "actual": None}])
         location, transform = self._location(m)
+        rules = load_rules(self.db)
         asset = self._new_asset(p, m, r, cap, location, transform, has_binary=False,
                                 status=states.transition("ingest_status", None, "READY_PRIVATE", actor_roles(p)))
-        asset.quality_status, asset.quality_reasons = evaluate(self._fields(asset))
+        apply_rules(asset, rules, self.c.clock.now())
         return 201, {"status": "METADATA_ONLY_REGISTERED", "asset_id": asset.asset_id}
-
-    @staticmethod
-    def _fields(a: Asset) -> dict[str, Any]:
-        return {"data_type": a.data_type, "mime_type": a.mime_type, "byte_size": a.byte_size,
-                "checksum_sha256": a.checksum_sha256, "timestamp_quality": a.timestamp_quality}
 
     def _part_urls(self, up: Upload, numbers: list[int]) -> list[dict[str, Any]]:
         ttl = self.c.settings.presign_upload_ttl_s
@@ -502,10 +509,12 @@ class IntegrityVerifier:
         with self.c.sessionmaker.begin() as db:
             asset = db.execute(select(Asset).where(Asset.asset_id == asset_id).with_for_update()).scalar_one()
             revalidate = asset.ingest_status == "VALIDATING" and asset.storage_zone == "QUARANTINE"
+            if asset.ingest_status != "RECEIVED" and not revalidate:
+                return asset.ingest_status  # 이미 처리됨 (작업 재실행)
+            # 규칙 오류로 RECEIVED 자산이 VALIDATING에 남지 않도록 전이 전에 한 버전을 고정한다.
+            rules = load_rules(db)
             if asset.ingest_status == "RECEIVED":
                 asset.ingest_status = states.transition("ingest_status", "RECEIVED", "VALIDATING", {"SERVICE"})
-            elif not revalidate:
-                return asset.ingest_status  # 이미 처리됨 (작업 재실행)
             bucket, key = self.c.settings.buckets[asset.storage_zone or "RAW"], asset.storage_key or ""
             up = db.execute(select(Upload).where(Upload.asset_id == asset_id, Upload.status == "RECEIVED")
                             .order_by(Upload.created_at.desc()).limit(1)).scalar_one_or_none()
@@ -551,7 +560,7 @@ class IntegrityVerifier:
                 q.quarantine_bytes = max(0, q.quarantine_bytes - size)
                 q.used_bytes += size
             asset.ingest_status = states.transition("ingest_status", "VALIDATING", "REGISTERED", {"SERVICE"})
-            asset.quality_status, asset.quality_reasons = evaluate(IngestService._fields(asset))
+            apply_rules(asset, rules, self.c.clock.now())
             asset.updated_at = self.c.clock.now()
             append_integrity(db, asset, self.c.clock.now())
             if not revalidate:  # 재검증은 위에서 격리 사용량을 사용량으로 옮겼다

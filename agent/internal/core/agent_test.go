@@ -37,6 +37,7 @@ type fakeUpload struct {
 	partCount int
 	parts     map[int][]byte
 	completed bool
+	status    string
 }
 
 type fakeServer struct {
@@ -51,11 +52,13 @@ type fakeServer struct {
 	failPutOnce map[int]bool      // 파트 번호 → 한 번 실패
 	heartbeats  []map[string]any
 	seq         int
+	receipts    map[string]api.Receipt
+	receiptGets int
 }
 
 func newFake(t *testing.T) *fakeServer {
 	f := &fakeServer{t: t, uploads: map[string]*fakeUpload{}, bySHA: map[string]string{}, putCount: map[string]int{},
-		failPutOnce: map[int]bool{}}
+		failPutOnce: map[int]bool{}, receipts: map[string]api.Receipt{}}
 	f.policy = api.Policy{PolicyVersion: "pv-1", CollectorDeviceID: collector, Timezone: "Asia/Seoul",
 		HeartbeatIntervalS: 60, SizeStableS: 1, MaxParallelParts: 2,
 		Sources: []api.Source{{DeviceID: camera, CollectionMode: "C3_APPROVED_FULL", AllowedDataRoles: []string{"CORE"}},
@@ -112,6 +115,14 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case strings.HasPrefix(p, "/v1/assets/") && strings.HasSuffix(p, "/receipt"):
+		f.receiptGets++
+		assetID := strings.Split(p, "/")[3]
+		if receipt, ok := f.receipts[assetID]; ok {
+			f.json(w, 200, receipt)
+		} else {
+			f.json(w, 404, map[string]any{"status": 404, "code": "NOT_FOUND"})
+		}
 	case p == "/v1/devices/"+collector+"/policy":
 		f.json(w, 200, f.policy)
 	case p == "/v1/agents/heartbeat":
@@ -142,6 +153,10 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(p, "/parts") && r.Method == "GET":
 		id := strings.Split(p, "/")[3]
 		u := f.uploads[id]
+		if u.completed {
+			f.json(w, 409, map[string]any{"status": 409, "code": "CONFLICT"})
+			return
+		}
 		var done []map[string]any
 		var pending []api.PartURL
 		for n := 1; n <= u.partCount; n++ {
@@ -166,11 +181,30 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		u.completed = true
+		u.status = "REGISTERED" // 기본 모의 워커는 해시 검증 직후 등록한다.
+		f.receipts["ast_"+id] = fakeReceipt("ast_"+id, hex.EncodeToString(sum[:]), int64(buf.Len()))
 		f.bySHA[hex.EncodeToString(sum[:])] = id
 		f.json(w, 202, map[string]any{"upload_id": id, "asset_id": "ast_" + id, "ingest_status": "RECEIVED"})
+	case strings.HasPrefix(p, "/v1/uploads/") && r.Method == "GET":
+		id := strings.Split(p, "/")[3]
+		if u, ok := f.uploads[id]; ok {
+			status := u.status
+			if status == "" {
+				status = "UPLOADING"
+			}
+			f.json(w, 200, map[string]any{"upload_id": id, "asset_id": "ast_" + id, "ingest_status": status})
+		} else {
+			f.json(w, 404, map[string]any{"status": 404, "code": "NOT_FOUND"})
+		}
 	default:
 		f.json(w, 404, map[string]any{"status": 404, "code": "NOT_FOUND"})
 	}
+}
+
+func fakeReceipt(assetID, sha string, size int64) api.Receipt {
+	entry := sha256.Sum256([]byte(assetID + sha))
+	return api.Receipt{AssetID: assetID, ChecksumSHA256: sha, ByteSize: &size,
+		RegisteredAt: "2026-11-04T00:00:00Z", IntegrityLogEntryID: "1", IntegrityEntryHash: hex.EncodeToString(entry[:])}
 }
 
 func (f *fakeServer) urls(id string, from, to int) []api.PartURL {
@@ -319,6 +353,7 @@ func TestAlreadyRegisteredIsNotResent(t *testing.T) {
 	data := []byte("time,temp\n2026-11-01T00:00:00Z,1\n")
 	sum := sha256.Sum256(data)
 	e.fake.bySHA[hex.EncodeToString(sum[:])] = "old"
+	e.fake.receipts["ast_x"] = fakeReceipt("ast_x", hex.EncodeToString(sum[:]), int64(len(data)))
 	e.write(t, "S1/sensor/a.csv", data)
 	e.scanStable(t, a)
 	_, _ = a.ProcessOnce(context.Background())

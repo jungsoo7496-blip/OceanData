@@ -7,12 +7,14 @@ package main
 import (
 	"archive/zip"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -38,7 +40,7 @@ func usage() {
   run        포그라운드 실행
   status     연결 상태·대기 파일·마지막 성공·최근 오류
   diag       진단 파일(zip) 만들기 (비밀값 제외)
-  install    서비스 설치 (Windows 서비스 / systemd)   uninstall | start | stop
+  install    서비스 설치 (--service-user 등록과 같은 계정, 비밀번호는 OS에서 별도 구성)   uninstall | start | stop
   update     서명 검증 후 수동 업데이트 (--file, --sig)   rollback
   version
 공통 옵션: --dir 데이터 폴더 (기본 `+config.DefaultDir()+`, 환경변수 MARINE_AGENT_DIR)
@@ -51,6 +53,9 @@ func main() {
 		os.Exit(2)
 	}
 	cmd, args := os.Args[1], os.Args[2:]
+	if cmd == "--version" {
+		cmd = "version"
+	}
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	dir := fs.String("dir", config.DefaultDir(), "데이터 폴더")
 	server := fs.String("server", "", "API 주소 (enroll)")
@@ -60,6 +65,10 @@ func main() {
 	out := fs.String("out", "", "진단 파일 경로 (diag)")
 	file := fs.String("file", "", "새 바이너리 (update)")
 	sig := fs.String("sig", "", "서명 파일 (update)")
+	serviceUser := fs.String("service-user", "", "등록과 같은 서비스 계정 이름 (install). 비밀번호를 받지 않습니다")
+	readyFile := fs.String("ready-file", "", "내부 워커 준비 파일")
+	readyToken := fs.String("ready-token", "", "내부 워커 준비 식별자")
+	parentStdin := fs.Bool("parent-stdin", false, "내부 감독 프로세스 종료 감지")
 	_ = fs.Parse(args)
 
 	var err error
@@ -73,18 +82,24 @@ func main() {
 	case "diag":
 		err = diag(*dir, *out)
 	case "install", "uninstall", "start", "stop":
-		err = serviceControl(*dir, cmd)
+		err = serviceControl(*dir, cmd, *serviceUser)
 	case "update":
 		err = manualUpdate(*dir, *file, *sig)
 	case "rollback":
 		var exe string
 		if exe, err = os.Executable(); err == nil {
-			err = update.Rollback(exe)
+			var unlock func()
+			if unlock, err = update.Lock(*dir); err == nil {
+				err = update.Rollback(exe)
+				unlock()
+			}
 		}
 	case "version":
 		fmt.Println(version)
 	case "service-run": // 서비스 관리자가 부르는 진입점
-		err = serviceControl(*dir, "run")
+		err = serviceControl(*dir, "run", "")
+	case "worker-run": // 감독 프로세스만 사용하는 실제 수집 워커
+		err = runWorker(*dir, *readyFile, *readyToken, *parentStdin)
 	default:
 		usage()
 		os.Exit(2)
@@ -174,16 +189,96 @@ func open(dir string, toStderr bool) (*runtimeDeps, error) {
 }
 
 func runForeground(dir string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return supervise(ctx, dir, true)
+}
+
+// runWorker의 준비 신호는 로컬 설정·자격증명·DB·감시 폴더 확인 뒤에만 쓰며 인터넷 연결을 요구하지 않는다.
+func runWorker(dir, readyFile, readyToken string, parentStdin bool) error {
+	if readyFile == "" || readyToken == "" || !parentStdin {
+		return errors.New("worker-run은 감독 프로세스에서만 실행할 수 있습니다")
+	}
+	absDir, dirErr := filepath.Abs(dir)
+	absReady, readyErrPath := filepath.Abs(readyFile)
+	_, tokenErr := hex.DecodeString(readyToken)
+	if dirErr != nil || readyErrPath != nil || tokenErr != nil || len(readyToken) != 48 ||
+		filepath.Dir(absReady) != absDir || filepath.Base(absReady) != ".update-ready-"+readyToken {
+		return errors.New("워커 준비 파일 경로가 올바르지 않습니다")
+	}
 	d, err := open(dir, true)
 	if err != nil {
 		return err
 	}
 	defer d.store.Close()
 	defer d.logw.Close()
+	if st, statErr := os.Stat(d.agent.Cfg.WatchRoot); statErr != nil || !st.IsDir() {
+		return errors.New("감시 폴더가 없어 워커를 시작할 수 없습니다")
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go func() { _, _ = io.Copy(io.Discard, os.Stdin); stop() }()
+	readyErr := make(chan error, 1)
+	d.agent.OnReady = func() { readyErr <- os.WriteFile(readyFile, []byte(readyToken), 0o600) }
 	d.agent.Log.Info("에이전트 시작", "version", version, "watch_root", d.agent.Cfg.WatchRoot)
-	return d.agent.Run(ctx)
+	runErr := make(chan error, 1)
+	go func() { runErr <- d.agent.Run(ctx) }()
+	select {
+	case err = <-readyErr:
+		if err != nil {
+			stop()
+			<-runErr
+			return errors.New("워커 준비 상태를 알리지 못했습니다")
+		}
+	case err = <-runErr:
+		return err
+	}
+	return <-runErr
+}
+
+func updateOptions(dir string, cfg *config.Config, log *slog.Logger) (update.Options, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return update.Options{}, err
+	}
+	exe, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		return update.Options{}, err
+	}
+	hc, err := api.NewHTTPClient(cfg.CAFile, time.Duration(cfg.UpdateTimeoutS)*time.Second)
+	if err != nil {
+		return update.Options{}, err
+	}
+	return update.Options{Binary: exe, Dir: dir, PublicKey: cfg.UpdatePublicKey,
+		Auto: cfg.AutoUpdate, URL: cfg.UpdateURL, SignatureURL: cfg.UpdateSignatureURL,
+		Interval: time.Duration(cfg.UpdateIntervalS) * time.Second, Timeout: time.Duration(cfg.UpdateTimeoutS) * time.Second,
+		StartupTimeout: time.Duration(cfg.UpdateStartupTimeoutS) * time.Second, Stable: time.Duration(cfg.UpdateStableS) * time.Second,
+		MaxBytes: cfg.UpdateMaxBytes, Client: hc, Log: log, WorkerArgs: []string{"worker-run", "--dir", dir}}, nil
+}
+
+func supervise(ctx context.Context, dir string, toStderr bool) error {
+	cfg, err := config.Load(dir)
+	if err != nil {
+		return err
+	}
+	if _, err = config.LoadCredentials(dir); err != nil {
+		return err
+	}
+	lw, err := logx.NewRotator(filepath.Join(dir, "logs", "supervisor.log"), cfg.LogMaxBytes, cfg.LogKeep)
+	if err != nil {
+		return err
+	}
+	defer lw.Close()
+	var writer io.Writer = lw
+	if toStderr {
+		writer = io.MultiWriter(lw, os.Stderr)
+	}
+	log := slog.New(slog.NewJSONHandler(writer, nil))
+	o, err := updateOptions(dir, cfg, log)
+	if err != nil {
+		return err
+	}
+	return update.Supervisor(ctx, o)
 }
 
 func status(dir string) error {
@@ -254,10 +349,20 @@ func diag(dir, out string) error {
 		_, err = io.Copy(w, r)
 		return err
 	}
-	if b, err := os.ReadFile(filepath.Join(dir, "config.json")); err == nil {
-		_ = add("config.json", strings.NewReader(string(b))) // 설정에는 비밀값이 없다 (자격증명은 별도 파일)
+	if cfg, err := config.Load(dir); err == nil {
+		// 설정도 MQTT 암호·URL 쿼리 자격증명을 담을 수 있다. 원문을 진단 파일에 넣지 않는다.
+		cfg.ServerURL, cfg.UpdateURL, cfg.UpdateSignatureURL = safeURL(cfg.ServerURL), safeURL(cfg.UpdateURL), safeURL(cfg.UpdateSignatureURL)
+		for i := range cfg.SensorPlugins {
+			cfg.SensorPlugins[i].Username, cfg.SensorPlugins[i].Password = "", ""
+			cfg.SensorPlugins[i].Broker = safeURL(cfg.SensorPlugins[i].Broker)
+		}
+		if b, err := json.MarshalIndent(cfg, "", "  "); err == nil {
+			_ = add("config.json", strings.NewReader(string(b)))
+		}
 	}
 	logs, _ := filepath.Glob(filepath.Join(dir, "logs", "agent.log*"))
+	supervisorLogs, _ := filepath.Glob(filepath.Join(dir, "logs", "supervisor.log*"))
+	logs = append(logs, supervisorLogs...)
 	for _, p := range logs {
 		if lf, err := os.Open(p); err == nil {
 			_ = add("logs/"+filepath.Base(p), lf)
@@ -288,6 +393,15 @@ func nonEmpty(s string) string {
 	return s
 }
 
+func safeURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "[주소 정보 제외]"
+	}
+	u.RawQuery, u.Fragment, u.User = "", "", nil
+	return u.String()
+}
+
 func manualUpdate(dir, file, sig string) error {
 	if file == "" || sig == "" {
 		return errors.New("--file과 --sig가 필요합니다")
@@ -296,17 +410,14 @@ func manualUpdate(dir, file, sig string) error {
 	if err != nil {
 		return err
 	}
-	if err := update.Verify(file, sig, cfg.UpdatePublicKey); err != nil {
-		return err
-	}
-	exe, err := os.Executable()
+	o, err := updateOptions(dir, cfg, nil)
 	if err != nil {
 		return err
 	}
-	if err := update.Apply(exe, file); err != nil {
+	if err := update.Manual(context.Background(), o, file, sig); err != nil {
 		return err
 	}
-	fmt.Println("업데이트 적용됨. 서비스를 다시 시작하세요. 문제가 있으면 'marine-agent rollback'")
+	fmt.Println("서명·버전·새 워커 기동 확인 완료. 서비스를 시작하세요. 문제가 있으면 'marine-agent rollback'")
 	return nil
 }
 
@@ -319,18 +430,13 @@ type program struct {
 }
 
 func (p *program) Start(s service.Service) error {
-	d, err := open(p.dir, false)
-	if err != nil {
-		return err
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel, p.done = cancel, make(chan struct{})
 	go func() {
 		defer close(p.done)
-		defer d.store.Close()
-		defer d.logw.Close()
-		if err := d.agent.Run(ctx); err != nil {
-			d.agent.Log.Error("에이전트 종료", "error", err.Error())
+		if err := supervise(ctx, p.dir, false); err != nil {
+			fmt.Fprintln(os.Stderr, "에이전트 감독 프로세스 종료:", err)
+			os.Exit(1) // 서비스 관리자의 기존 재시작 정책이 작동하도록 실제 프로세스를 종료한다.
 		}
 	}()
 	return nil
@@ -347,13 +453,26 @@ func (p *program) Stop(s service.Service) error {
 	return nil
 }
 
-func serviceControl(dir, action string) error {
+func serviceControl(dir, action, username string) error {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	if action == "install" {
+		if _, err = config.LoadCredentials(abs); err != nil {
+			return err
+		}
+		if err = config.CheckServiceUser(username); err != nil {
+			return err
+		}
+	}
 	svcCfg := &service.Config{
 		Name: "marine-agent", DisplayName: "Marine Data Sync Agent",
-		Description: "해양 실증데이터 플랫폼 동기화 에이전트", Arguments: []string{"service-run", "--dir", dir},
-		Option: service.KeyValue{"Restart": "always", "OnFailure": "restart"},
+		Description: "해양 실증데이터 플랫폼 동기화 에이전트", Arguments: []string{"service-run", "--dir", abs},
+		UserName: username,
+		Option:   service.KeyValue{"Restart": "always", "OnFailure": "restart"},
 	}
-	s, err := service.New(&program{dir: dir}, svcCfg)
+	s, err := service.New(&program{dir: abs}, svcCfg)
 	if err != nil {
 		return err
 	}

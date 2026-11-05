@@ -9,7 +9,7 @@ TEST_DATABASE_URL ?= postgresql+pg8000://marine_owner:change-me-owner@127.0.0.1:
 .PHONY: venv up down logs migrate seed verify-audit sample-video test test-unit test-integration test-acceptance \
         lint typecheck security license-check secrets-check web-check contracts-check traceability \
         traceability-write ci agent-build agent-test bench verify-integrity sample-observations \
-        release-gate release-notes sbom vuln-scan loadtest backup restore-test
+        release-gate release-notes sbom vuln-scan loadtest backup restore-test test-web-e2e agent-generate agent-generate-check
 
 venv:
 	cd backend && uv venv -q .venv && uv pip install -q -p .venv -e ".[dev]" -r ../tools/requirements.txt
@@ -45,11 +45,7 @@ test-integration:
 
 # 수용시험 (17번): covers 마커가 있는 시험·수용시험을 돌리고 세부 ID별 보고서 var/acceptance.{json,md}를 만든다
 test-acceptance:
-	mkdir -p var && $(VPY) -c "open('var/acceptance-results.jsonl', 'w').close()"
-	-cd backend && ACCEPTANCE_RESULTS=$(CURDIR)/var/acceptance-results.jsonl TEST_DATABASE_URL="$(TEST_DATABASE_URL)" \
-		.venv/bin/pytest -q -m "acceptance or covers"
-	-$(VPY) tools/go_acceptance.py --out var/acceptance-results.jsonl
-	$(VPY) tools/acceptance_report.py
+	TEST_DATABASE_URL="$(TEST_DATABASE_URL)" $(VPY) tools/run_acceptance.py
 
 # 릴리스 게이트 (17번 요구사항 6): make release-gate MILESTONE=M1 BASE_REF=<이전 태그>
 release-gate:
@@ -91,6 +87,10 @@ secrets-check:
 web-check:
 	cd web && npm run -s lint && npm run -s typecheck
 
+# T02-g: 전용 DB·모의 S3·실제 브라우저를 만들고 탭 종료 후 multipart 재개를 확인한다.
+test-web-e2e:
+	$(VPY) tools/web_acceptance.py --out var/acceptance-results.jsonl
+
 contracts-check:
 	$(PYTHON) tools/validate_contracts.py
 
@@ -104,6 +104,12 @@ ci: contracts-check traceability lint typecheck test-unit security license-check
 
 agent-build:
 	cd agent && go build -o bin/marine-agent ./cmd/marine-agent && GOOS=windows go build -o bin/marine-agent.exe ./cmd/marine-agent
+
+agent-generate:
+	$(VPY) tools/generate_agent_api.py
+
+agent-generate-check:
+	$(VPY) tools/generate_agent_api.py --check
 
 # MQTT 시험은 MQTT_TEST_BROKER가 있을 때만 (docker compose --profile sensor up mosquitto)
 agent-test:

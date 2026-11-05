@@ -43,13 +43,17 @@ def covers_map(agent: Path = AGENT) -> dict[tuple[str, str], list[str]]:
     return out
 
 
-def run_go(agent: Path = AGENT) -> str:
+def run_go(agent: Path = AGENT) -> tuple[str, int]:
     go = shutil.which("go")
     if not go:
         sys.exit("go가 없습니다 — Go 시험 결과를 연결하지 못했습니다")
-    r = subprocess.run([go, "test", "-json", "./..."], cwd=agent, capture_output=True, text=True,
-                       check=False)  # nosec B603
-    return r.stdout
+    r = subprocess.run(  # noqa: S603  # nosec B603
+        [go, "test", "-race", "-count=1", "-json", "./..."], cwd=agent, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+        check=False)
+    if r.returncode:
+        print(r.stderr[-2000:], file=sys.stderr)
+    return r.stdout, r.returncode
 
 
 def results(events_text: str, cmap: dict[tuple[str, str], list[str]], module: str) -> list[dict]:
@@ -96,14 +100,26 @@ def main() -> int:
     ap.add_argument("--input", help="go test -json 출력 파일 (없으면 직접 실행)")
     ap.add_argument("--out", default=str(ROOT / "var/acceptance-results.jsonl"))
     a = ap.parse_args()
-    text = Path(a.input).read_text(encoding="utf-8") if a.input else run_go()
+    if a.input:
+        text, code = Path(a.input).read_text(encoding="utf-8"), 0
+    else:
+        text, code = run_go()
+    # covers가 없는 시험·패키지의 실패도 전체 실행 실패다.
+    for line in text.splitlines():
+        try:
+            if json.loads(line).get("Action") == "fail":
+                code = 1
+        except json.JSONDecodeError:
+            continue
     rows = results(text, covers_map(), module_name())
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     with open(a.out, "a", encoding="utf-8") as f:
         f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
     bad = [r["nodeid"] for r in rows if r["outcome"] == "failed"]
     print(f"Go 수용 시험 {len(rows)}건 기록, 실패 {len(bad)}건" + (": " + ", ".join(bad) if bad else ""))
-    return 1 if bad else 0
+    if code and not bad:
+        print("수용 ID가 붙지 않은 시험 또는 패키지를 포함해 Go 실행이 실패했습니다", file=sys.stderr)
+    return 1 if bad or code else 0
 
 
 if __name__ == "__main__":

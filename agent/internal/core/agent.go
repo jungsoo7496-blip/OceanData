@@ -56,6 +56,8 @@ type Agent struct {
 	Version string
 	// Now는 시험에서 바꿀 수 있다.
 	Now func() time.Time
+	// OnReady는 로컬 상태 확인 뒤 한 번 호출한다. 오프라인도 정상 기동이므로 서버 연결과 분리한다.
+	OnReady func()
 
 	policy   atomic.Pointer[api.Policy]
 	limiter  *sched.Limiter
@@ -394,6 +396,11 @@ func (a *Agent) processFile(ctx context.Context, p *api.Policy, f *state.File) e
 	if err != nil {
 		return a.Store.MarkStatus(ctx, f.ID, state.Failed, "LOCAL_FILE_MISSING")
 	}
+	if pending, err := a.Store.ReceiptPending(ctx, f.ID); err != nil {
+		return err
+	} else if pending {
+		return a.confirmReceipt(ctx, f)
+	}
 	if f.Status == state.Uploading && f.UploadID != "" {
 		return a.resume(ctx, p, f, abs)
 	}
@@ -422,12 +429,23 @@ func (a *Agent) processFile(ctx context.Context, p *api.Policy, f *state.File) e
 	switch created.Status {
 	case "ALREADY_REGISTERED", "METADATA_ONLY_REGISTERED":
 		a.Log.Info("서버에 이미 있거나 메타데이터만 등록", "path", f.RelPath, "status", created.Status, "http", status)
-		return a.Store.MarkDone(ctx, f.ID, created.AssetID) // 다시 보내지 않는다 (요구사항 5.4)
+		if created.AssetID == "" {
+			return a.Store.MarkStatus(ctx, f.ID, state.Failed, "REGISTRATION_ASSET_MISSING")
+		}
+		if src := p.Source(f.SourceDeviceID); src != nil && src.CollectionMode == "C0_METADATA_ONLY" {
+			// C0는 바이너리를 수집하지 않으므로 수집 무결성 로그·영수증이 생기지 않는다.
+			return a.Store.MarkDone(ctx, f.ID, created.AssetID)
+		}
+		if created.Status == "METADATA_ONLY_REGISTERED" {
+			return a.Store.MarkStatus(ctx, f.ID, state.Failed, "UNEXPECTED_METADATA_ONLY")
+		}
+		return a.awaitReceipt(ctx, f, created.AssetID)
 	case "UPLOAD_CREATED":
 		if err := a.Store.MarkUploading(ctx, f.ID, created.UploadID, created.AssetID); err != nil {
 			return err
 		}
 		f.UploadID, f.AssetID = created.UploadID, created.AssetID
+		f.Status = state.Uploading
 		var done []api.CompletedPart
 		pending := created.Parts
 		if len(pending) < created.PartCount { // 응답의 URL 수가 한도로 잘렸으면 목록을 다시 받는다
@@ -449,7 +467,7 @@ func (a *Agent) resume(ctx context.Context, p *api.Policy, f *state.File, abs st
 			return a.Store.Reset(ctx, f.ID)
 		}
 		if errors.As(err, &pr) && pr.Status == 409 { // 이미 완료된 세션
-			return a.Store.MarkDone(ctx, f.ID, f.AssetID)
+			return a.awaitReceipt(ctx, f, f.AssetID)
 		}
 		return a.handleProblem(ctx, f, err)
 	}
@@ -482,7 +500,75 @@ func (a *Agent) sendAndComplete(ctx context.Context, p *api.Policy, f *state.Fil
 		return a.handleProblem(ctx, f, err)
 	}
 	a.Log.Info("업로드 완료", "path", f.RelPath, "asset_id", us.AssetID, "ingest_status", us.IngestStatus)
-	return a.Store.MarkDone(ctx, f.ID, f.AssetID)
+	if us.AssetID != f.AssetID {
+		return a.Store.MarkStatus(ctx, f.ID, state.Failed, "UPLOAD_ASSET_MISMATCH")
+	}
+	return a.awaitReceipt(ctx, f, f.AssetID)
+}
+
+func (a *Agent) awaitReceipt(ctx context.Context, f *state.File, assetID string) error {
+	if assetID == "" {
+		return a.Store.MarkStatus(ctx, f.ID, state.Failed, "RECEIPT_ASSET_MISSING")
+	}
+	if err := a.Store.AwaitReceipt(ctx, f, assetID); err != nil {
+		return err
+	}
+	f.AssetID = assetID
+	return a.confirmReceipt(ctx, f)
+}
+
+func (a *Agent) receiptRetry(ctx context.Context, f *state.File) error {
+	return a.Store.Retry(ctx, f.ID, "RECEIPT_PENDING", sched.Backoff(f.Attempts, time.Duration(a.Cfg.MaxBackoffS)*time.Second))
+}
+
+func (a *Agent) confirmReceipt(ctx context.Context, f *state.File) error {
+	status := ""
+	if f.UploadID != "" {
+		var us api.UploadStatus
+		_, err := a.Client.Do(ctx, "GET", "/v1/uploads/"+f.UploadID, nil, nil, &us)
+		if err != nil {
+			var pr *api.Problem
+			if errors.As(err, &pr) && pr.Status == 404 {
+				return a.receiptRetry(ctx, f)
+			}
+			return a.handleProblem(ctx, f, err)
+		}
+		if us.AssetID != f.AssetID {
+			return a.Store.MarkStatus(ctx, f.ID, state.Failed, "UPLOAD_ASSET_MISMATCH")
+		}
+		status = us.IngestStatus
+		switch status {
+		case "QUARANTINED", "REJECTED", "FAILED":
+			return a.Store.MarkStatus(ctx, f.ID, state.Failed, "SERVER_"+status)
+		case "UPLOADING", "RECEIVED", "VALIDATING", "REGISTERED", "PROXIED", "READY_PRIVATE":
+		default:
+			return a.Store.MarkStatus(ctx, f.ID, state.Failed, "UPLOAD_STATUS_INVALID")
+		}
+	}
+	receipt, err := a.Client.Receipt(ctx, f.AssetID)
+	if err != nil {
+		var pr *api.Problem
+		if errors.As(err, &pr) && pr.Status == 404 {
+			return a.receiptRetry(ctx, f)
+		}
+		return a.handleProblem(ctx, f, err)
+	}
+	if receipt.AssetID != f.AssetID || receipt.ChecksumSHA256 != f.SHA256 || receipt.ByteSize == nil || *receipt.ByteSize != f.Size {
+		return a.Store.MarkStatus(ctx, f.ID, state.Failed, "RECEIPT_MISMATCH")
+	}
+	_, timeErr := time.Parse(time.RFC3339, receipt.RegisteredAt)
+	entryHash, hashErr := hex.DecodeString(receipt.IntegrityEntryHash)
+	if timeErr != nil || receipt.IntegrityLogEntryID == "" || hashErr != nil || len(entryHash) != sha256.Size {
+		return a.Store.MarkStatus(ctx, f.ID, state.Failed, "RECEIPT_INVALID")
+	}
+	if f.UploadID != "" && status != "REGISTERED" && status != "PROXIED" && status != "READY_PRIVATE" {
+		return a.receiptRetry(ctx, f)
+	}
+	raw, err := json.Marshal(receipt)
+	if err != nil {
+		return err
+	}
+	return a.Store.MarkDoneWithReceipt(ctx, f, string(raw))
 }
 
 func (a *Agent) sendParts(ctx context.Context, p *api.Policy, abs string, size, partSize int64,
@@ -714,6 +800,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	if v, _ := a.Store.KV(ctx, KeyReenroll); v == "true" {
 		a.reenroll.Store(true)
 		return api.ErrRevoked
+	}
+	if a.OnReady != nil {
+		a.OnReady()
 	}
 	backoff := 0
 	for a.policy.Load() == nil {
