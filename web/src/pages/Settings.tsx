@@ -2,6 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, App, Button, Card, Checkbox, Form, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd'
 import { useState } from 'react'
+import type { components } from '../contract/api.gen'
 import { api, ApiError, post, type Device, type Me, type Page } from '../lib/api'
 import { kst } from '../lib/format'
 import { explain } from '../lib/problems'
@@ -17,9 +18,10 @@ interface CardT {
   content: CardContent; linked_policies?: { device_id: string; version: number }[]
 }
 type CardForm = Record<string, string | string[] | undefined>
-interface Hook { webhook_id: string; url: string; event_types: string[]; active: boolean; created_at: string; disabled_reason?: string | null; secret?: string }
-interface Agreement { agreement_id: string; tier: string; reference: string; valid_from: string; valid_until: string | null; allowed_purposes: string[]; in_effect: boolean }
-interface Grant { grant_id: string; target_type: string; target_id: string; reason: string; status: string; requested_by: string; approved_by: string | null; starts_at: string | null; expires_at: string | null }
+// 계약에서 생성한 타입 (09번 작업 16)
+type Hook = components['schemas']['WebhookSubscription']
+type Agreement = components['schemas']['Agreement']
+type Grant = components['schemas']['BreakGlassGrant']
 
 const EVENTS = ['upload.registered', 'upload.quarantined', 'asset.processed', 'share.status_changed', 'grant.revoked']
 const COPY = ['RETAINED', 'ROTATING', 'NONE', 'UNKNOWN']

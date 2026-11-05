@@ -9,7 +9,7 @@
 - [x] 7. 원래 좌표계 → EPSG:4326 변환(PostGIS ST_Transform), 결과 검증, 원본·변환 이력 보관 — 요구사항 6.3 · 계약 선행 검사, PostgreSQL 통합·응답 계약 6개 및 SDK 재생성 확인 통과
 - [x] 8. 단위 사전 정규화·원래 값 보존·미등록 단위 — 요구사항 7.1, 7.2 (관측값 SUSPECT 저장은 07번)
 - [x] 9. 스키마 게시·번들 일치 시험 — 요구사항 2.1, 2.2 · 시험 `test_schema_index_and_bundle_match_repository_files`
-- [ ] 10. 계약 → 타입 생성 (datamodel-code-generator·openapi-typescript) — 요구사항 2.3 (현재는 계약 시험으로 검증)
+- [x] 10. 계약 → 타입 생성·검증 — 요구사항 2.3 · 웹: openapi-typescript 생성 타입 + CI 일치 검사(09번 작업 16), Go: oapi-codegen SDK(06번, ADR-0025), 백엔드: 생성 대신 contracts 스키마로 직접 검증(`services/contracts.py`, 요구사항 2.3의 '검증'). datamodel-code-generator는 필요해지면 도입
 - [x] 11. 코드표 API (+ 기관 하위코드 조회) — 요구사항 8.1, 8.2
 - [x] 12. 기관 하위 이벤트 코드 추가 API (ORG_ADMIN), 공통 상위분류 유지 — 요구사항 8.3 · 계약 선행 검사, PostgreSQL 권한·기관 격리·동시 재시도·원자적 감사 시험 통과 (ADR-0026). 기존 0002 재사용
 - [x] 13. 품질 평가 함수 — 요구사항 10.1 · 시험 `test_quality_evaluator_rules`

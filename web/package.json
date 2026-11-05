@@ -8,7 +8,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "gen:api": "node scripts/api-types.mjs",
+    "check:api": "node scripts/api-types.mjs --check"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.2",
@@ -33,6 +35,7 @@
     "eslint": "9.39.5",
     "eslint-plugin-react-hooks": "5.0.0",
     "globals": "15.12.0",
+    "openapi-typescript": "7.13.0",
     "playwright-core": "1.64.1",
     "typescript": "5.6.3",
     "typescript-eslint": "8.15.0",

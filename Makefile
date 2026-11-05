@@ -85,7 +85,7 @@ secrets-check:
 	$(VPY) tools/check_secrets.py
 
 web-check:
-	cd web && npm run -s lint && npm run -s typecheck
+	cd web && npm run -s lint && npm run -s typecheck && npm run -s check:api
 
 # T02-g: 전용 DB·모의 S3·실제 브라우저를 만들고 탭 종료 후 multipart 재개를 확인한다.
 test-web-e2e:

@@ -2,14 +2,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { App, Button, Card, DatePicker, Form, Input, InputNumber, Modal, Progress, Select, Space, Table, Tag, Typography } from 'antd'
 import { useState } from 'react'
+import type { components } from '../contract/api.gen'
 import { api, ApiError, post, type Asset, type OrgUsage, type Page } from '../lib/api'
 import { bytes, kst, QUARANTINE_LABEL } from '../lib/format'
 import { explain } from '../lib/problems'
 
 interface Audit { audit_id: string; occurred_at: string; actor_kind: string; actor_id: string | null; action: string; target_id: string | null; result: string }
-interface Agreement { agreement_id: string; organization_id: string; tier: string; reference: string; valid_from: string; valid_until: string | null; allowed_purposes: string[]; in_effect: boolean }
-interface Grant { grant_id: string; organization_id: string; target_type: string; target_id: string; reason: string; duration_s: number; status: string; requested_by: string; approved_by: string | null; expires_at: string | null }
-interface BackupRun { backup_run_id: string; status: string; started_at: string; finished_at: string | null; object_count: number; copied_count: number; total_bytes: number; error: string | null; restore_test: { ok?: boolean; tested_at?: string } | null }
+// 계약에서 생성한 타입 (손으로 쓴 타입 대신, 09번 작업 16)
+type Agreement = components['schemas']['Agreement']
+type Grant = components['schemas']['BreakGlassGrant']
+type BackupRun = components['schemas']['BackupRun']
 const PURPOSES = ['JOINT_RESEARCH', 'AI_TRAINING', 'MODEL_IMPROVEMENT', 'COMMERCIAL_SERVICE', 'EXTERNAL_SALE']
 
 function failText(e: unknown): string {

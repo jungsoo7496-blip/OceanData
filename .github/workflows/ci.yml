@@ -83,6 +83,7 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run lint
       - run: npm run typecheck
+      - run: npm run check:api  # 계약 → TS 타입 재생성 일치 (09번 작업 16)
       - run: npm run build
       - run: npm audit --omit=dev --audit-level=high
 
