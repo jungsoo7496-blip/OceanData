@@ -1028,7 +1028,16 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 멀티파트 완료 → RECEIVED, 무결성 검증 작업 등록 */
+        /**
+         * 멀티파트 완료 → RECEIVED, 무결성 검증 작업 등록
+         * @description 파트 목록(ETag·누락 파트)이 저장소와 맞지 않으면 409 CONFLICT이고 세션은 그대로다 — GET /v1/uploads/{upload_id}/parts로
+         *     확인해 이어 올린 뒤 다시 완료한다.
+         *     저장소에 올라간 파트 크기가 계획(part_size, 마지막 파트는 신고 byte_size의 나머지)과 다르면 409 CONFLICT와 함께 세션을
+         *     취소한다(멀티파트 정리·쿼터 예약 해제, 이후 이 upload_id는 410). 문제 응답의 확장 필드 size_mismatch에 파트별
+         *     part_number·expected_size·actual_size를 담는다(최대 100개). 같은 파일은 새 업로드(POST /v1/uploads)로 다시 보낸다.
+         *     사전 서명 파트 URL은 계획한 파트 크기를 Content-Length로 서명하므로(X-Amz-SignedHeaders에 content-length) 다른 크기의
+         *     본문은 저장소가 먼저 거부할 수 있다.
+         */
         post: operations["completeUpload"];
         delete?: never;
         options?: never;
