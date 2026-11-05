@@ -70,9 +70,12 @@ func TestPolicyOutOfContractRangeKeepsPreviousPolicy(t *testing.T) {
 		{"heartbeat_interval_s가 계약 상한+1", func(p *api.Policy) { p.HeartbeatIntervalS = maxPolicySeconds + 1 }},
 		{"heartbeat_interval_s가 계약 하한 미만", func(p *api.Policy) { p.HeartbeatIntervalS = minHeartbeatIntervalS - 1 }},
 		{"heartbeat_interval_s가 음수", func(p *api.Policy) { p.HeartbeatIntervalS = -goDurationOverflowS }},
+		{"heartbeat_interval_s가 0", func(p *api.Policy) { p.HeartbeatIntervalS = 0 }},
 		{"size_stable_s가 넘쳐 0.29초가 되는 값", func(p *api.Policy) { p.SizeStableS = 18446744074 }},
 		{"size_stable_s가 음수", func(p *api.Policy) { p.SizeStableS = -1 }},
+		{"size_stable_s가 0", func(p *api.Policy) { p.SizeStableS = 0 }},
 		{"max_parallel_parts가 파트 번호 상한+1", func(p *api.Policy) { p.MaxParallelParts = maxParallelParts + 1 }},
+		{"max_parallel_parts가 0", func(p *api.Policy) { p.MaxParallelParts = 0 }},
 		{"max_kbps가 0", func(p *api.Policy) {
 			p.TransferWindows = []api.TransferWindow{{Days: []string{"MON"}, StartLocal: "00:00", EndLocal: "24:00", MaxKbps: &zero}}
 		}},
@@ -118,6 +121,30 @@ func TestPolicyOutOfContractRangeKeepsPreviousPolicy(t *testing.T) {
 	}
 	if got, want := a.heartbeatInterval(), time.Duration(maxPolicySeconds)*time.Second; got != want {
 		t.Fatalf("하트비트 주기 %v, want %v", got, want)
+	}
+}
+
+func TestServerRejectedPolicyKeepsPreviousPolicy(t *testing.T) {
+	e := newEnv(t)
+	a := e.agent(t)
+	e.fake.mu.Lock()
+	e.fake.override = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path != "/v1/devices/"+collector+"/policy" {
+			return false
+		}
+		e.fake.json(w, http.StatusUnprocessableEntity, map[string]any{"code": "RULE_VIOLATION"})
+		return true
+	}
+	e.fake.mu.Unlock()
+	ctx := context.Background()
+	if err := a.RefreshPolicy(ctx); !errors.Is(err, ErrPolicyInvalid) {
+		t.Fatalf("서버가 배포를 거부한 정책: %v", err)
+	}
+	if got := a.Policy().PolicyVersion; got != "pv-1" || storedPolicyVersion(t, a) != "pv-1" {
+		t.Fatalf("이전 정책을 유지하지 않았다: %s", got)
+	}
+	if a.lastErr.Load() != CodePolicyInvalid {
+		t.Fatal("정책 오류를 보고하지 않았다")
 	}
 }
 

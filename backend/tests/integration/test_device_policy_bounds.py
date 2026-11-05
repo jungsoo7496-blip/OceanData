@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import copy
 import json
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
 from sqlalchemy import func, select
 
 from app import cli
-from app.db.models import DevicePolicy
+from app.db.models import Device, DevicePolicy
 from app.domain.errors import RuleViolation
 from app.seed import DEV_A_CAMERA, DEV_A_COLLECTOR, DEV_A_SENSOR, ORG_A, PRJ_A
 from app.services.contracts import contracts_dir
@@ -125,4 +126,48 @@ def test_health_survives_heartbeat_interval_stored_before_the_bound(ctx) -> None
     r = ctx.client.get(f"/v1/agents/{DEV_A_COLLECTOR}/health", headers=ctx.as_user(102))
     check(r, "GET", "/v1/agents/{device_id}/health")
     assert r.status_code == 200 and r.json()["policy_mismatch"] is True, r.text
-    assert r.json()["next_expected_at"] is not None
+    health = r.json()
+    assert datetime.fromisoformat(health["next_expected_at"]) - datetime.fromisoformat(
+        health["last_heartbeat_at"]) == timedelta(seconds=60)
+    r = ctx.client.get(f"/v1/devices/{DEV_A_COLLECTOR}/policy", headers=ctx.as_user(102))
+    assert r.status_code == 422 and r.json()["code"] == "RULE_VIOLATION"
+    assert r.json()["unmet_conditions"][0]["condition"].endswith("/heartbeat_interval_s")
+    check(r, "GET", "/v1/devices/{device_id}/policy")
+
+
+def test_legacy_device_and_card_values_are_visible_but_not_published(ctx) -> None:
+    """이전 장비 값은 미리보기에 남고, 상한을 넘는 카드 값은 초안에 자동 반영되지 않는다."""
+    with ctx.c.sessionmaker.begin() as db:
+        device = db.get(Device, DEV_A_CAMERA)
+        assert device is not None
+        device.local_retention_days = 24856
+    admin = ctx.as_user(ADMIN_A)
+    policy_url = f"/v1/devices/{DEV_A_COLLECTOR}/policy"
+    r = ctx.client.get(policy_url, headers=admin)
+    assert r.status_code == 422
+    check(r, "GET", "/v1/devices/{device_id}/policy")
+
+    card = json.loads((CONTRACTS / "examples/integration-card.vessel-video.json").read_text(encoding="utf-8"))
+    card["current_storage"]["local_retention_days"] = 24856
+    r = ctx.client.post("/v1/integration-cards", headers=admin, json={"content": card})
+    assert r.status_code == 201
+    r = ctx.client.post("/v1/policy-drafts", headers=admin, json={
+        "device_id": DEV_A_CAMERA, "integration_card_id": r.json()["integration_card_id"],
+    })
+    assert r.status_code == 201
+    draft = r.json()
+    assert draft["fields"]["local_retention_days"] == {"status": "NEEDS_CONFIRMATION"}
+    assert draft["preview"]["current"]["local_retention_days"] == 24856
+    assert draft["preview"]["blockers"]
+    check(r, "POST", "/v1/policy-drafts")
+
+    path = f"/v1/policy-drafts/{draft['policy_draft_id']}"
+    r = ctx.client.patch(path, headers=admin, json={"revision": 1, "values": {"local_retention_days": 30}})
+    assert r.status_code == 200
+    check(r, "PATCH", "/v1/policy-drafts/{policy_draft_id}")
+    r = ctx.client.post(f"{path}/apply", headers=ctx.as_user(106, mfa=True),
+                        json={"revision": 2, "expected_policy_version": None, "reason": "합성 정책 정정"})
+    assert r.status_code == 200
+    r = ctx.client.get(policy_url, headers=admin)
+    assert r.status_code == 200
+    check(r, "GET", "/v1/devices/{device_id}/policy")

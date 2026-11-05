@@ -69,8 +69,8 @@ def test_bounds_do_not_overflow_downstream_arithmetic() -> None:
         assert (device[name]["minimum"], device[name]["maximum"]) == (source[name]["minimum"], source[name]["maximum"])
 
 
-def test_monitoring_clamps_heartbeat_interval_stored_before_the_bound() -> None:
+def test_monitoring_uses_default_for_heartbeat_interval_stored_before_the_bound() -> None:
     assert policy_heartbeat_interval_s({}) == 60
     assert policy_heartbeat_interval_s({"heartbeat_interval_s": 300}) == 300
     assert policy_heartbeat_interval_s({"heartbeat_interval_s": INT32_MAX}) == INT32_MAX
-    assert policy_heartbeat_interval_s({"heartbeat_interval_s": 10**20}) == INT32_MAX
+    assert policy_heartbeat_interval_s({"heartbeat_interval_s": 10**20}) == 60
