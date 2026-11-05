@@ -52,14 +52,6 @@ const LATER = '2026-11-05T01:00:00Z'
  */
 const free = (value) => value
 
-/**
- * 서버가 더 돌려주지만 계약 스키마에는 아직 없는 필드 (화면이 읽는다, 계약은 추가 속성을 막지 않는다)
- * @template T
- * @param {T} body
- * @param {Record<string, unknown>} extra
- * @returns {T}
- */
-const withExtra = (body, extra) => ({ ...body, ...extra })
 
 const ORG_A = id('org', 1) // 제공기관 A
 const ORG_B = id('org', 2) // 제공기관 B
@@ -405,10 +397,10 @@ const DATA_CARD = {
 
 /** 이용기관에는 게시된 데이터셋의 다 만든 버전만 보인다 @param {Ctx} ctx @returns {S['Dataset'][]} */
 function datasets(ctx) {
-  const ready = withExtra({ dataset_version_id: DSV1, version: '1.0.0', created_at: '2026-11-04T00:00:00Z', status: /** @type {const} */ ('READY'), build_error: null },
-    { scope: 'APPROVED_PARTNERS', item_count: 3, total_bytes: 734_003_200, manifest_sha256: sha(10) })
-  const building = withExtra({ dataset_version_id: DSV2, version: '1.1.0', created_at: '2026-11-05T00:00:00Z', status: /** @type {const} */ ('BUILDING'), build_error: null },
-    { scope: 'APPROVED_PARTNERS', item_count: 1200, total_bytes: 0, manifest_sha256: null })
+  const ready = { dataset_version_id: DSV1, version: '1.0.0', created_at: '2026-11-04T00:00:00Z', status: /** @type {const} */ ('READY'), build_error: null,
+    scope: /** @type {const} */ ('APPROVED_PARTNERS'), item_count: 3, total_bytes: 734_003_200, manifest_sha256: sha(10) }
+  const building = { dataset_version_id: DSV2, version: '1.1.0', created_at: '2026-11-05T00:00:00Z', status: /** @type {const} */ ('BUILDING'), build_error: null,
+    scope: /** @type {const} */ ('APPROVED_PARTNERS'), item_count: 1200, total_bytes: 0, manifest_sha256: null }
   const published = { dataset_id: DST1, title: '항만 부유물 비식별 영상 (합성)', published: true, published_at: '2026-11-04T01:00:00Z',
     data_card: DATA_CARD, samples: [{ url: ctx.media.image, expires_at: LATER }] }
   if (ctx.role === 'CONSUMER') return [{ ...published, versions: [ready] }]

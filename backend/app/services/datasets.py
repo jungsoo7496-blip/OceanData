@@ -288,8 +288,8 @@ def dataset_view(db: Session, ds: Dataset, versions: list[DatasetVersion]) -> di
             "published_at": iso(ds.published_at),
             "versions": [{"dataset_version_id": v.dataset_version_id, "version": v.version,
                           "created_at": iso(v.created_at), "scope": version_scope(db, v), "item_count": v.item_count,
-                          "total_bytes": v.total_bytes, "manifest_sha256": v.manifest_sha256, "status": v.status,
-                          "build_error": v.build_error} for v in versions],
+                          "total_bytes": v.total_bytes, "manifest_sha256": v.manifest_sha256 or None,  # 빌드 전 null
+                          "status": v.status, "build_error": v.build_error} for v in versions],
             **({"data_card": latest.data_card} if latest else {})}
 
 

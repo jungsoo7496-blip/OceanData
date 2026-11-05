@@ -6102,11 +6102,15 @@ components:
           type: array
           items:
             type: object
-            required: [dataset_version_id, version, created_at]
+            required: [dataset_version_id, version, created_at, scope, item_count, total_bytes, manifest_sha256]
             properties:
               dataset_version_id: {$ref: './schemas/common.schema.json#/$defs/dataset_version_id'}
               version: {type: string}
               created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+              scope: {$ref: './schemas/common.schema.json#/$defs/sharing_scope', description: 항목의 현재 등급 중 가장 낮은 것 (지워진 항목이 있으면 PRIVATE)}
+              item_count: {type: integer, minimum: 0}
+              total_bytes: {type: integer, minimum: 0}
+              manifest_sha256: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/sha256'}, {type: 'null'}], description: 다 만들기 전(BUILDING·FAILED)에는 null}
               status: {enum: [READY, BUILDING, FAILED], description: 이용기관에게는 READY만 보인다}
               build_error: {type: [string, 'null']}
         data_card: {$ref: './schemas/dataset-version-manifest.schema.json#/properties/data_card'}

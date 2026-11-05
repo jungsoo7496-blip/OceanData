@@ -3775,6 +3775,12 @@ export interface components {
                 dataset_version_id: components["schemas"]["dataset_version_id"];
                 version: string;
                 created_at: components["schemas"]["utc_datetime"];
+                /** @description 항목의 현재 등급 중 가장 낮은 것 (지워진 항목이 있으면 PRIVATE) */
+                scope: components["schemas"]["sharing_scope"];
+                item_count: number;
+                total_bytes: number;
+                /** @description 다 만들기 전(BUILDING·FAILED)에는 null */
+                manifest_sha256: components["schemas"]["sha256"] | null;
                 /**
                  * @description 이용기관에게는 READY만 보인다
                  * @enum {unknown}
