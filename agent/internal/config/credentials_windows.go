@@ -16,7 +16,7 @@ import (
 
 const dpapiProtection = "DPAPI_CURRENT_USER"
 
-var errCredentialProtection = errors.New("Windows DPAPI로 자격증명을 보호하거나 복호화하지 못했습니다. 등록한 Windows 실행 계정과 컴퓨터를 확인하세요")
+var errCredentialProtection = errors.New("자격증명을 Windows DPAPI로 보호하거나 복호화하지 못했습니다. 등록한 Windows 실행 계정과 컴퓨터를 확인하세요")
 
 type protectedCredentials struct {
 	Version    int    `json:"version"`
@@ -89,8 +89,9 @@ func dpapi(data []byte, protect bool) ([]byte, error) {
 	if out.Data == nil {
 		return nil, errCredentialProtection
 	}
-	// DPAPI가 할당한 포인터만 한 번 해제하며, Go 메모리로 복사한 뒤 원본을 지운다.
-	defer windows.LocalFree(windows.Handle(uintptr(unsafe.Pointer(out.Data)))) // #nosec G103 -- Windows LocalAlloc/LocalFree 경계.
+	// DPAPI가 할당한 포인터만 한 번 해제하며, Go 메모리로 복사한 뒤 원본을 지운다. 해제 실패는 되돌릴 방법이 없다.
+	outHandle := windows.Handle(uintptr(unsafe.Pointer(out.Data))) // #nosec G103 -- Windows LocalAlloc/LocalFree 경계.
+	defer func() { _, _ = windows.LocalFree(outHandle) }()
 	if uint64(out.Size) > uint64(^uint(0)>>1) {
 		return nil, errCredentialProtection
 	}

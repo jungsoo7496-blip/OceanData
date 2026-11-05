@@ -18,4 +18,4 @@
 - [x] 14. 합성 영상·대용량 파일 — 요구사항 6.3~6.5 (`make sample-video`, `LARGE_GB=10`)
 - [x] 15. /v1/system/capabilities — 요구사항 11.1, 11.2 · 시험 `test_capabilities_requires_auth_and_hides_settings`
 - [x] 16. CI 파이프라인 — 요구사항 9.1~9.5 (Go 린트·gosec은 06번에서 agent/ 생기면 활성)
-- [ ] 17. golangci-lint 설정 — 요구사항 9.1 (06번과 함께)
+- [x] 17. golangci-lint 설정 — 요구사항 9.1 · `agent/.golangci.yml`(v2 형식, standard 린터 errcheck·govet·ineffassign·staticcheck·unused + gofmt, 제외 규칙 없음). v2.15.0을 `go run`으로 실행(GPL-3.0 개발 도구라 go.mod에 넣지 않음). CI agent 작업·`make agent-lint`에서 Linux와 `GOOS=windows`로 두 번 검사. 처음 지적 43건(Windows 전용 2건 포함)을 모두 코드에서 처리하고 설정 제외·nolint는 0건: 쓰기 파일 닫기 오류 확인·반환 4건(진단 zip, 워커 로그·상태 DB, 감독 로그), 버리던 채널 오류 기록 3건, 설정 임시 파일을 닫은 뒤 지우도록 순서 수정 2건, staticcheck 3건·미사용 함수 1건 수정, 읽기 전용 닫기·응답 본문·rows.Close·Commit 뒤 Rollback·임시 파일 삭제·LocalFree 30건은 `_ =`로 명시

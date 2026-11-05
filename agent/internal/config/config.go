@@ -125,8 +125,12 @@ func writeAtomic(p string, b []byte, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	defer os.Remove(f.Name())
+	// 오류 경로 정리용: 먼저 닫아야 Windows에서도 임시 파일을 지울 수 있다. 정상 경로의 닫기 오류는 아래에서 확인하고,
+	// Rename 뒤에는 임시 이름이 없으므로 여기서 생기는 오류는 버린다.
+	defer func() {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+	}()
 	if err := f.Chmod(mode); err != nil {
 		return err
 	}

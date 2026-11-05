@@ -14,7 +14,7 @@ func TestQueueOrderAndLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	for _, f := range []File{
 		{RelPath: "a/general.mp4", RuleID: "r", SourceDeviceID: "dev_a", Size: 10, MtimeNs: 1, Priority: 2},
 		{RelPath: "a/clip.mp4", RuleID: "r", SourceDeviceID: "dev_a", Size: 20, MtimeNs: 1, Priority: 1},
@@ -86,7 +86,7 @@ func TestReceiptAndDonePersistTogetherAndChangedFileClearsReceipt(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if pending, err := s.ReceiptPending(ctx, f.ID); err != nil || !pending {
 		t.Fatal("영수증 대기 표시가 재시작 뒤 사라졌다", err)
 	}
@@ -123,7 +123,7 @@ func TestStaleOrMissingFileCannotReceiveOldReceipt(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer s.Close()
+			defer func() { _ = s.Close() }()
 			if _, err := s.Enqueue(ctx, File{RelPath: "sensor/a.csv", RuleID: "r", SourceDeviceID: "dev_a", Size: 10, MtimeNs: 1}); err != nil {
 				t.Fatal(err)
 			}
@@ -174,7 +174,7 @@ func TestScanCannotReplaceFileWhileAwaitingReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	first := File{RelPath: "sensor/a.csv", RuleID: "r", SourceDeviceID: "dev_a", Size: 10, MtimeNs: 1}
 	if _, err := s.Enqueue(ctx, first); err != nil {
 		t.Fatal(err)

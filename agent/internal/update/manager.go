@@ -97,7 +97,7 @@ func download(ctx context.Context, c *http.Client, raw string, limit int64) ([]b
 	if err != nil {
 		return nil, errors.New("업데이트 HTTPS 요청 실패 (인증서·연결·대기 시간 확인)")
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("업데이트 HTTP 상태 오류: %d", resp.StatusCode)
 	}
@@ -169,7 +169,7 @@ func candidate(ctx context.Context, o Options, data, signature []byte) (*Candida
 		return nil, err
 	}
 	path := f.Name()
-	defer os.Remove(path)
+	defer func() { _ = os.Remove(path) }() // 임시 파일 정리. 실패하거나 이미 없어도 결과는 바뀌지 않는다
 	if err = f.Chmod(0o700); err == nil {
 		_, err = f.Write(data)
 	}
@@ -256,7 +256,7 @@ func startWorker(ctx context.Context, o Options) (*worker, error) {
 	}
 	token := hex.EncodeToString(nonce[:])
 	ready := filepath.Join(o.Dir, ".update-ready-"+token)
-	defer os.Remove(ready)
+	defer func() { _ = os.Remove(ready) }() // 임시 파일 정리. 실패하거나 이미 없어도 결과는 바뀌지 않는다
 	args := append(append([]string(nil), o.WorkerArgs...), "--ready-file", ready, "--ready-token", token, "--parent-stdin")
 	cmd := exec.Command(o.Binary, args...) // #nosec G204 -- 현재 설치본·검증 후 설치한 경로, 고정 인자만 실행한다
 	configureBackgroundProcess(cmd)

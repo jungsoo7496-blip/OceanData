@@ -46,8 +46,8 @@ func TestVariantAllowedAndPriority(t *testing.T) {
 	if !VariantAllowed("C1_SAMPLE_PREVIEW", "SENSOR", "ORIGINAL") || VariantAllowed("C0_METADATA_ONLY", "SENSOR", "ORIGINAL") {
 		t.Fatal("비영상 규칙 오류")
 	}
-	if !(Priority("C0_METADATA_ONLY", "ORIGINAL") < Priority("C2_EVENT_CLIPS", "CLIP") &&
-		Priority("C2_EVENT_CLIPS", "CLIP") < Priority("C3_APPROVED_FULL", "ORIGINAL")) {
+	if Priority("C0_METADATA_ONLY", "ORIGINAL") >= Priority("C2_EVENT_CLIPS", "CLIP") ||
+		Priority("C2_EVENT_CLIPS", "CLIP") >= Priority("C3_APPROVED_FULL", "ORIGINAL") {
 		t.Fatal("전송 순위 오류")
 	}
 }

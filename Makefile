@@ -9,7 +9,8 @@ TEST_DATABASE_URL ?= postgresql+pg8000://marine_owner:change-me-owner@127.0.0.1:
 .PHONY: venv up down logs migrate seed verify-audit sample-video test test-unit test-integration test-acceptance \
         lint typecheck security license-check secrets-check web-check contracts-check traceability \
         traceability-write ci agent-build agent-test bench verify-integrity sample-observations \
-        release-gate release-notes sbom vuln-scan loadtest backup restore-test test-web-e2e agent-generate agent-generate-check
+        release-gate release-notes sbom vuln-scan loadtest backup restore-test test-web-e2e agent-generate agent-generate-check \
+        agent-lint
 
 venv:
 	cd backend && uv venv -q .venv && uv pip install -q -p .venv -e ".[dev]" -r ../tools/requirements.txt
@@ -114,6 +115,12 @@ agent-generate-check:
 # MQTT 시험은 MQTT_TEST_BROKER가 있을 때만 (docker compose --profile sensor up mosquitto)
 agent-test:
 	cd agent && go vet ./... && go test -race ./...
+
+# golangci-lint v2.15.0 (설정 agent/.golangci.yml). go.mod에 넣지 않고 go run으로 실행한다.
+# 두 번째 실행은 린터를 이 컴퓨터용으로 빌드하고 분석만 GOOS=windows로 한다 (*_windows.go 포함).
+agent-lint:
+	cd agent && go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run ./... && \
+		go run -exec "env GOOS=windows" github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run ./...
 
 bench:
 	cd backend && .venv/bin/python -m app.bench --out ../var/bench.json

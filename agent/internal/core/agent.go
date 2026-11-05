@@ -304,7 +304,7 @@ func hashFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // 읽기 전용
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil { // 스트리밍 (요구사항 4.1)
 		return "", err
@@ -580,7 +580,7 @@ func (a *Agent) sendParts(ctx context.Context, p *api.Policy, abs string, size, 
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()            // 읽기 전용
 	sem := make(chan struct{}, p.MaxParallelParts) // 동시 전송 수 (요구사항 5.1)
 	var mu sync.Mutex
 	var out []api.CompletedPart
@@ -823,7 +823,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	watcher := a.startWatcher(ctx)
 	if watcher != nil {
-		defer watcher.Close()
+		defer func() { _ = watcher.Close() }()
 	}
 	var wg sync.WaitGroup
 	loop := func(name string, every func() time.Duration, fn func() error, wake <-chan struct{}) {
@@ -921,7 +921,10 @@ func (a *Agent) startWatcher(ctx context.Context) *fsnotify.Watcher {
 				if pending.CompareAndSwap(false, true) { // 이벤트를 2초 모아 한 번 스캔
 					time.AfterFunc(2*time.Second, func() { pending.Store(false); _, _ = a.Scan(ctx) })
 				}
-			case <-w.Errors:
+			case err := <-w.Errors:
+				if err != nil { // 이벤트 유실(대기열 넘침 등)은 주기 스캔이 보완한다
+					a.Log.Debug("파일 감시 오류", "error", err.Error())
+				}
 			}
 		}
 	}()

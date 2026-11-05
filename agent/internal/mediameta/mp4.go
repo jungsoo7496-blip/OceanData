@@ -18,7 +18,7 @@ func MP4CreationTime(p string) (time.Time, bool) {
 	if err != nil {
 		return time.Time{}, false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // 읽기 전용
 	st, err := f.Stat()
 	if err != nil {
 		return time.Time{}, false
@@ -38,7 +38,8 @@ func findMvhd(r io.ReaderAt, start, end int64, depth int) (time.Time, bool) {
 		size := int64(binary.BigEndian.Uint32(hdr[:4])) // 32비트 값이라 넘치지 않는다
 		typ := string(hdr[4:8])
 		hlen := int64(8)
-		if size == 1 {
+		switch size {
+		case 1:
 			if _, err := r.ReadAt(hdr[8:16], off+8); err != nil {
 				return time.Time{}, false
 			}
@@ -48,7 +49,7 @@ func findMvhd(r io.ReaderAt, start, end int64, depth int) (time.Time, bool) {
 			}
 			size = int64(raw) // #nosec G115 -- 위에서 end 이하로 확인했다
 			hlen = 16
-		} else if size == 0 {
+		case 0:
 			size = end - off
 		}
 		if size < hlen || off+size > end {

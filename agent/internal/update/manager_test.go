@@ -342,7 +342,10 @@ func runSupervisorUntil(t *testing.T, o Options, message, version string, observ
 	t.Cleanup(func() {
 		cancel()
 		select {
-		case <-done:
+		case err := <-done: // 정리 단계는 종료만 기다린다. 판정은 본문이 하고 여기서는 기록만 남긴다
+			if err != nil {
+				t.Logf("정리 중 감독 프로세스 종료 오류: %v", err)
+			}
 		case <-time.After(3 * o.StartupTimeout):
 			t.Error("감독 시험 프로세스 정리 시간 초과")
 		}

@@ -202,7 +202,7 @@ func runForeground(dir string) error {
 }
 
 // runWorker의 준비 신호는 로컬 설정·자격증명·DB·감시 폴더 확인 뒤에만 쓰며 인터넷 연결을 요구하지 않는다.
-func runWorker(dir, readyFile, readyToken string, parentStdin bool) error {
+func runWorker(dir, readyFile, readyToken string, parentStdin bool) (err error) {
 	if readyFile == "" || readyToken == "" || !parentStdin {
 		return errors.New("worker-run은 감독 프로세스에서만 실행할 수 있습니다")
 	}
@@ -217,8 +217,8 @@ func runWorker(dir, readyFile, readyToken string, parentStdin bool) error {
 	if err != nil {
 		return err
 	}
-	defer d.store.Close()
-	defer d.logw.Close()
+	// 로그 파일·상태 DB는 쓰기 대상이라 닫기 오류도 돌려준다 (닫는 순서는 로그 → DB).
+	defer func() { err = errors.Join(err, d.logw.Close(), d.store.Close()) }()
 	if st, statErr := os.Stat(d.agent.Cfg.WatchRoot); statErr != nil || !st.IsDir() {
 		return errors.New("감시 폴더가 없어 워커를 시작할 수 없습니다")
 	}
@@ -234,7 +234,10 @@ func runWorker(dir, readyFile, readyToken string, parentStdin bool) error {
 	case err = <-readyErr:
 		if err != nil {
 			stop()
-			<-runErr
+			// 준비 실패로 멈춘 것이라 반환값은 그대로 두고, 취소가 아닌 실행 오류만 기록한다.
+			if runE := <-runErr; runE != nil && !errors.Is(runE, context.Canceled) {
+				d.agent.Log.Warn("준비 실패 뒤 워커 종료 중 오류", "error", runE.Error())
+			}
 			return errors.New("워커 준비 상태를 알리지 못했습니다")
 		}
 	case err = <-runErr:
@@ -263,7 +266,7 @@ func updateOptions(dir string, cfg *config.Config, log *slog.Logger) (update.Opt
 		MaxBytes: cfg.UpdateMaxBytes, Client: hc, Log: log, WorkerArgs: []string{"worker-run", "--dir", dir}}, nil
 }
 
-func supervise(ctx context.Context, dir string, toStderr bool) error {
+func supervise(ctx context.Context, dir string, toStderr bool) (err error) {
 	cfg, err := config.Load(dir)
 	if err != nil {
 		return err
@@ -275,7 +278,7 @@ func supervise(ctx context.Context, dir string, toStderr bool) error {
 	if err != nil {
 		return err
 	}
-	defer lw.Close()
+	defer func() { err = errors.Join(err, lw.Close()) }() // 쓰기 대상 로그 파일이라 닫기 오류도 돌려준다
 	var writer io.Writer = lw
 	if toStderr {
 		writer = io.MultiWriter(lw, os.Stderr)
@@ -297,7 +300,7 @@ func status(dir string) error {
 	if err != nil {
 		return err
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }() // 조회만 한다. 닫기 실패로 바뀌는 결과가 없다
 	ctx := context.Background()
 	s, err := st.Stats(ctx)
 	if err != nil {
@@ -346,7 +349,7 @@ func diag(dir, out string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // 오류 경로 정리용. 정상 경로는 아래에서 닫기 오류를 확인한다
 	zw := zip.NewWriter(f)
 	add := func(name string, r io.Reader) error {
 		w, err := zw.Create(name)
@@ -387,6 +390,9 @@ func diag(dir, out string) error {
 		_ = st.Close()
 	}
 	if err := zw.Close(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	fmt.Println("진단 파일:", out, "(credentials.json은 넣지 않았습니다)")

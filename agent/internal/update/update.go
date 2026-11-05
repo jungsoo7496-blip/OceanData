@@ -53,7 +53,7 @@ func readFile(path string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // 읽기 전용
 	return readLimited(f, limit)
 }
 
@@ -182,7 +182,7 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp)
+	defer func() { _ = os.Remove(tmp) }() // 임시 파일 정리. 실패하거나 이미 없어도 결과는 바뀌지 않는다
 	if err = f.Chmod(mode); err == nil {
 		_, err = f.Write(data)
 	}

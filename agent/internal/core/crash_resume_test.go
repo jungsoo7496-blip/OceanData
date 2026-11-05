@@ -221,7 +221,7 @@ func TestT03ForcedKillAnd72HourOfflineResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	f, err = st.Get(context.Background(), crashRelPath)
 	if err != nil || f.Status != state.Done {
 		t.Fatalf("검증된 영수증 뒤 완료 상태가 보존되지 않았다: %+v, %v", f, err)
@@ -272,7 +272,7 @@ func TestT03CrashRecoveryHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	cfg := &config.Config{ServerURL: spec.URL, WatchRoot: spec.Root, DeviceID: collector, MaxBackoffS: 1,
 		ScanIntervalS: 1, PolicyRefreshS: 1}
 	cfg.Defaults()

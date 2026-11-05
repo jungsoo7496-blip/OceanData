@@ -90,6 +90,10 @@ go test -race ./...     # 가짜 API로 T02(자동 등록)·T03(끊긴 뒤 남�
 이는 실제 72시간 대기·PC 전원 차단·15번 엣지 장비 시험을 대신하지 않는다.
 실제 스택 확인 절차는 `.kiro/specs/06-sync-agent/design.md`의 "실제 스택 확인".
 
+린트는 저장소 루트에서 `make agent-lint`로 실행한다. golangci-lint v2.15.0을 `go run`으로 받아 쓰며(GPL-3.0 개발 도구라
+go.mod에 넣지 않는다) 설정은 `.golangci.yml`이다. Linux 대상과 `GOOS=windows` 대상을 각각 검사한다.
+제외 규칙은 두지 않는다. 닫기·삭제 오류를 버릴 때는 코드에서 `_ =`로 드러내고, 쓰기 파일의 닫기 오류는 확인한다.
+
 ## MQTT 브로커 암호 (07번)
 
 `config.json`의 `sensor_plugins[].password`에 암호를 넣고 에이전트를 시작하면, 시작할 때 보안 저장소

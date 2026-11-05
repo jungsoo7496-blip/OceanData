@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -92,12 +91,6 @@ func New(baseURL string, hc *http.Client, creds *Credentials, version string) *C
 	return &Client{base: strings.TrimRight(baseURL, "/"), http: hc, creds: creds, ua: "marine-agent/" + version}
 }
 
-func isNetErr(err error) bool {
-	var ne net.Error
-	var ue *url.Error
-	return errors.As(err, &ne) || errors.As(err, &ue) || errors.Is(err, io.ErrUnexpectedEOF)
-}
-
 func readProblem(resp *http.Response) *Problem {
 	p := &Problem{Status: resp.StatusCode}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -123,7 +116,7 @@ func (c *Client) Enroll(ctx context.Context, code, agentVersion, osName string) 
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrOffline, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusCreated {
 		return nil, readProblem(resp)
 	}
@@ -156,7 +149,7 @@ func (c *Client) accessToken(ctx context.Context, force bool) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrOffline, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusUnauthorized {
 		return "", ErrRevoked
 	}
@@ -215,7 +208,7 @@ func (c *Client) Do(ctx context.Context, method, path string, in any, headers ma
 			_ = resp.Body.Close()
 			continue
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode == http.StatusUnauthorized {
 			return resp.StatusCode, ErrRevoked
 		}
@@ -250,7 +243,7 @@ func (c *Client) PutPart(ctx context.Context, partURL string, r io.Reader, size 
 		}
 		return "", fmt.Errorf("%w: 파트 전송 실패", ErrOffline)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode == http.StatusForbidden {
 		return "", &Problem{Status: 403, Code: "PART_URL_EXPIRED", Title: "파트 URL이 만료되었거나 거부되었습니다"}

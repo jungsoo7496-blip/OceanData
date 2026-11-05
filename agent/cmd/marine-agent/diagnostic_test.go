@@ -69,7 +69,7 @@ func TestDiagnosticArchiveExcludesCredentialsAndOriginals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer bundle.Close()
+	defer func() { _ = bundle.Close() }() // 읽기 전용
 	entries := map[string]bool{}
 	for _, file := range bundle.File {
 		entries[file.Name] = true

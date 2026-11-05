@@ -143,7 +143,7 @@ func (s *Store) Enqueue(ctx context.Context, f File) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		defer tx.Rollback()
+		defer func() { _ = tx.Rollback() }() // Commit 뒤에는 ErrTxDone만 돌려준다
 		result, err := tx.ExecContext(ctx, `UPDATE files SET size=?, mtime_ns=?, sha256='', status=?, upload_id='',
 			asset_id='', attempts=0, last_error='', rule_id=?, source_device_id=?, session_label=?, priority=?,
 			next_attempt_at=0, updated_at=? WHERE id=? AND status!=? AND size=? AND mtime_ns=?`,
@@ -179,7 +179,7 @@ func (s *Store) Next(ctx context.Context, limit int) ([]*File, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }() // 반복 오류는 rows.Err()로 확인한다
 	var out []*File
 	for rows.Next() {
 		f, err := scan(rows)
@@ -217,7 +217,7 @@ func (s *Store) AwaitReceipt(ctx context.Context, f *File, assetID string) error
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }() // Commit 뒤에는 ErrTxDone만 돌려준다
 	result, err := tx.ExecContext(ctx, `UPDATE files SET status=?, asset_id=?, last_error=?, updated_at=?
 		WHERE id=? AND status=? AND sha256=? AND size=? AND mtime_ns=? AND upload_id=? AND asset_id=?`,
 		Uploading, assetID, "RECEIPT_PENDING", now(), f.ID, f.Status, f.SHA256, f.Size, f.MtimeNs,
@@ -246,7 +246,7 @@ func (s *Store) MarkDoneWithReceipt(ctx context.Context, f *File, receipt string
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }() // Commit 뒤에는 ErrTxDone만 돌려준다
 	result, err := tx.ExecContext(ctx, `UPDATE files SET status=?, last_error='', updated_at=?
 		WHERE id=? AND status=? AND sha256=? AND size=? AND mtime_ns=? AND upload_id=? AND asset_id=?`,
 		Done, now(), f.ID, Uploading, f.SHA256, f.Size, f.MtimeNs, f.UploadID, f.AssetID)
@@ -312,7 +312,7 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	if err != nil {
 		return st, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }() // 반복 오류는 rows.Err()로 확인한다
 	per := map[string]*SourceQueue{}
 	var order []string
 	for rows.Next() {
@@ -414,7 +414,7 @@ func (s *Store) ObservationSources(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }() // 반복 오류는 rows.Err()로 확인한다
 	var out []string
 	for rows.Next() {
 		var d string
@@ -433,7 +433,7 @@ func (s *Store) PeekObservations(ctx context.Context, sourceDeviceID string, lim
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }() // 반복 오류는 rows.Err()로 확인한다
 	var out []QueuedObservation
 	for rows.Next() {
 		var q QueuedObservation

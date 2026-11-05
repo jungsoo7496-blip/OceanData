@@ -77,7 +77,7 @@ func TestMQTTPluginSubscribeQueueAndSendInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	hc, _ := api.NewHTTPClient("", 10*time.Second)
 	a := New(cfg, dir, api.New(srv.URL, hc, &api.Credentials{ClientID: "dcr_x", ClientSecret: "s"}, "test"), st,
 		slog.New(slog.NewTextHandler(io.Discard, nil)), "test")
