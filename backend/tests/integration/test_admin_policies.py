@@ -128,3 +128,30 @@ def test_job_policy_priority_applies_to_queued_jobs(ctx) -> None:
     assert ctx.client.get("/v1/job-policies", headers=ctx.as_user(ADMIN_A)).status_code == 403
     with ctx.c.sessionmaker() as db:
         assert db.get(Asset, "ast_0") is None  # 합성 작업만 넣었다 (자산 없음)
+
+
+def test_policy_audit_is_written_only_when_the_change_commits(ctx, monkeypatch) -> None:
+    """보안 검토 발견 3: 감사가 따로 커밋되어, 실패한 변경도 SUCCESS 감사로 남던 문제."""
+    path, h = f"/v1/organization-policies/{ORG_A}", ctx.as_user(OP, mfa=True)
+    r = ctx.client.patch(path, json={"quota_bytes": 2**63, "reason": "bigint 넘는 값 (합성)"}, headers=h)
+    check(r, "PATCH", "/v1/organization-policies/{organization_id}")
+    assert r.status_code == 400 and _audit(ctx, "ORG_POLICY_CHANGED") == []
+    max_ok = ctx.client.patch(path, json={"quota_bytes": 2**63 - 1, "reason": "상한 값 (합성)"}, headers=h)
+    assert max_ok.status_code == 200, max_ok.text
+    assert len(_audit(ctx, "ORG_POLICY_CHANGED")) == 1
+
+    # 감사를 쓴 뒤 요청이 실패하면 변경과 감사가 함께 롤백된다
+    from app.api import admin_policies
+
+    def boom(*_a, **_k):  # type: ignore[no-untyped-def]
+        raise RuntimeError("응답 만들기 실패 (합성)")
+
+    monkeypatch.setattr(admin_policies, "_job_view", boom)
+    with ctx.c.sessionmaker() as db:
+        before = db.execute(text("SELECT priority FROM job_policies WHERE job_type = 'make_proxy'")).scalar_one()
+    r = ctx.client.patch("/v1/job-policies/make_proxy", json={"priority": before + 1, "reason": "롤백 확인 (합성)"},
+                         headers=h)
+    assert r.status_code == 500
+    with ctx.c.sessionmaker() as db:
+        assert db.execute(text("SELECT priority FROM job_policies WHERE job_type = 'make_proxy'")).scalar_one() == before
+    assert _audit(ctx, "JOB_POLICY_CHANGED") == []

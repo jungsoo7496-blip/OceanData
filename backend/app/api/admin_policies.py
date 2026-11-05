@@ -42,7 +42,7 @@ def _changes(before: dict[str, Any], after: dict[str, Any]) -> dict[str, dict[st
 # ---------------------------------------------------------------- 기관 정책
 class OrganizationPolicyPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    quota_bytes: int | None = Field(default=None, ge=0)
+    quota_bytes: int | None = Field(default=None, ge=0, le=2**63 - 1)  # 저장 열(bigint) 상한
     malware_scan_required: bool | None = None
     reason: str = Field(min_length=2, max_length=500)
 
@@ -80,11 +80,11 @@ def update_organization_policy(organization_id: str, body: OrganizationPolicyPat
     after = {"quota_bytes": q.quota_bytes if q is not None else before["quota_bytes"],
              "malware_scan_required": bool(org.malware_scan_required)}
     changes = _changes(before, after)
-    if changes:
+    db.flush()  # DB가 값을 거부하면(범위 초과 등) 감사 전에 실패한다
+    if changes:  # 감사는 변경과 같은 트랜잭션 — 변경이 롤백되면 감사도 남지 않는다
         c.audit.record("ORG_POLICY_CHANGED", principal=p, organization_id=organization_id,
                        target_type="Organization", target_id=organization_id, reason=body.reason,
-                       source_ip=client_ip(request), details={"changes": changes})
-    db.flush()
+                       source_ip=client_ip(request), details={"changes": changes}, connection=db.connection())
     return _org_view(org, q, c.settings.default_org_quota_bytes)
 
 
@@ -138,10 +138,11 @@ def update_retention_policy(target: str, body: RetentionPolicyPatch, request: Re
     after = _retention_view(r)
     keys = ("retention_days", "expiry_action", "notify_days_before")
     changes = _changes({k: before[k] for k in keys}, {k: after[k] for k in keys})
+    db.flush()
     if changes:
         c.audit.record("RETENTION_POLICY_CHANGED", principal=p, target_type="RetentionPolicy", target_id=r.target,
-                       reason=body.reason, source_ip=client_ip(request), details={"changes": changes})
-    db.flush()
+                       reason=body.reason, source_ip=client_ip(request), details={"changes": changes},
+                       connection=db.connection())
     return after
 
 
@@ -192,8 +193,9 @@ def update_job_policy(job_type: str, body: JobPolicyPatch, request: Request, db:
     if body.max_attempts is not None:
         j.max_attempts = body.max_attempts
     changes = _changes(before, {"priority": j.priority, "max_attempts": j.max_attempts})
+    db.flush()
     if changes:
         c.audit.record("JOB_POLICY_CHANGED", principal=p, target_type="JobPolicy", target_id=job_type,
-                       reason=body.reason, source_ip=client_ip(request), details={"changes": changes})
-    db.flush()
+                       reason=body.reason, source_ip=client_ip(request), details={"changes": changes},
+                       connection=db.connection())
     return _job_view(j, _queued(db))
