@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query'
 import AwsS3, { type AwsS3Part } from '@uppy/aws-s3'
 import Uppy, { type UppyFile } from '@uppy/core'
 import Dashboard from '@uppy/dashboard'
+import ko_KR from '@uppy/locales/lib/ko_KR'
 import { Alert, Card, Form, Grid, Select, Space, Table, Tag, Typography } from 'antd'
 import { createSHA256 } from 'hash-wasm'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -68,7 +69,8 @@ export function Upload() {
       const pl = await api<{ pending_parts: { part_number: number; url: string }[] }>(`/v1/uploads/${uploadId}/parts`)
       urls.set(uploadId, { at: Date.now(), byPart: new Map(pl.pending_parts.map((p) => [p.part_number, p.url])) })
     }
-    const u = new Uppy<Meta, Body>({ autoProceed: false, restrictions: { maxNumberOfFiles: 50 } })
+    // 한국어 문구 (09번 요구사항 11.1) — @uppy/locales는 Uppy 같은 저장소의 문구 묶음(MIT, ADR-0016)
+    const u = new Uppy<Meta, Body>({ autoProceed: false, locale: ko_KR, restrictions: { maxNumberOfFiles: 50 } })
     u.addPreProcessor(async (ids) => {
       for (const id of ids) {
         const file = u.getFile(id) as F
