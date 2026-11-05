@@ -305,12 +305,12 @@ def _enrollment_code(c, device_id: str) -> int:  # type: ignore[no-untyped-def]
     from app.services.tokens import hash_secret
 
     code = secrets.token_urlsafe(18)
-    now = c.clock.now()
     with c.sessionmaker.begin() as db:
-        dev = db.get(Device, device_id)
+        dev = db.get(Device, device_id, with_for_update={"key_share": True})
         if dev is None or dev.kind != "COLLECTOR":
             print("수집기 장비가 아닙니다", file=sys.stderr)
             return 1
+        now = c.clock.now()
         db.add(EnrollmentCode(code_hash=hash_secret(code), device_id=device_id, organization_id=dev.organization_id,
                               expires_at=now + timedelta(seconds=c.settings.enrollment_code_ttl_s),
                               created_by="cli", created_at=now))

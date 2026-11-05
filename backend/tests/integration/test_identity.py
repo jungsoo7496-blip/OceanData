@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+from time import monotonic, sleep
+
 import pytest
 from sqlalchemy import create_engine, text
 
@@ -98,6 +102,69 @@ def test_device_enrollment_token_and_revocation(ctx) -> None:
     assert r.status_code == 200 and r.json()["revoked_credentials"] == 1
     assert ctx.client.get("/v1/me", headers=dh).status_code == 401
     assert _token(ctx, e["client_id"], e["client_secret"]).status_code == 401
+
+
+def test_revocation_invalidates_unused_enrollment_codes(ctx) -> None:
+    """폐기 전에 발급해 두고 쓰지 않은 등록 코드로는 폐기된 수집기를 다시 등록할 수 없다 (02번 요구사항 5.4)."""
+    admin = ctx.as_user(101, mfa=True)
+    _enroll(ctx)
+    issued = ctx.client.post(f"/v1/devices/{DEV_A_COLLECTOR}/enrollment-codes", headers=admin)
+    assert issued.status_code == 201
+    spare = issued.json()["code"]
+    r = ctx.client.post(f"/v1/devices/{DEV_A_COLLECTOR}/credentials/revoke", headers=admin)
+    assert r.status_code == 200 and r.json()["revoked_credentials"] == 1
+    r = ctx.client.post("/v1/agents/enroll", json={"enrollment_code": spare, "agent_version": "0.1.0", "os": "linux"})
+    assert r.status_code == 410
+    assert r.json()["reason"] == "EXPIRED"
+    with ctx.c.engine.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM device_credentials WHERE status = 'ACTIVE'")).scalar_one() == 0
+        details = conn.execute(text("SELECT details FROM audit_log WHERE action = 'DEVICE_CREDENTIAL_REVOKED'")) \
+            .scalar_one()
+    assert details["enrollment_codes_invalidated"] == 1
+    # 폐기 뒤 새로 발급한 코드로는 재등록된다
+    fresh = _enroll(ctx)
+    assert fresh["device_id"] == DEV_A_COLLECTOR
+
+
+def test_revocation_blocks_concurrent_enrollment_with_old_code(ctx, monkeypatch: pytest.MonkeyPatch) -> None:
+    """폐기와 등록이 겹쳐도 폐기 전에 발급된 코드로 새 자격을 만들 수 없다 (요구사항 5.4)."""
+    admin = ctx.as_user(101, mfa=True)
+    issued = ctx.client.post(f"/v1/devices/{DEV_A_COLLECTOR}/enrollment-codes", headers=admin)
+    assert issued.status_code == 201
+    payload = {"enrollment_code": issued.json()["code"], "agent_version": "0.1.0", "os": "linux"}
+    revoking, finish_revoke = Event(), Event()
+    record = ctx.c.audit.record
+
+    def pause_revocation(action, **kwargs):
+        if action == "DEVICE_CREDENTIAL_REVOKED":
+            revoking.set()
+            assert finish_revoke.wait(15), "폐기 시험 대기 시간 초과"
+        return record(action, **kwargs)
+
+    monkeypatch.setattr(ctx.c.audit, "record", pause_revocation)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        revoke = pool.submit(ctx.client.post, f"/v1/devices/{DEV_A_COLLECTOR}/credentials/revoke", headers=admin)
+        try:
+            assert revoking.wait(5), "폐기 요청이 감사 기록 단계에 도달하지 못했습니다"
+            enroll = pool.submit(ctx.client.post, "/v1/agents/enroll", json=payload)
+            # 등록이 완료되거나 실제로 DB 잠금을 기다릴 때까지 폐기 요청을 멈춰 둔다.
+            with ctx.c.engine.connect() as conn:
+                deadline = monotonic() + 5
+                while not enroll.done() and not conn.scalar(text("""
+                    SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+                                   AND pid <> pg_backend_pid() AND cardinality(pg_blocking_pids(pid)) > 0)
+                """)):
+                    conn.rollback()  # 다음 조회에서 최신 pg_stat_activity를 본다.
+                    assert monotonic() < deadline, "등록 요청이 처리 단계에 도달하지 못했습니다"
+                    sleep(0.02)
+        finally:
+            finish_revoke.set()
+        assert revoke.result(timeout=10).status_code == 200
+        response = enroll.result(timeout=10)
+    assert response.status_code == 410
+    assert response.json()["reason"] == "EXPIRED"
+    with ctx.c.engine.connect() as conn:
+        assert conn.scalar(text("SELECT count(*) FROM device_credentials WHERE status = 'ACTIVE'")) == 0
 
 
 def test_enrollment_code_only_for_own_collectors(ctx) -> None:
