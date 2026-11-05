@@ -7,7 +7,7 @@
 **검증 상태 (이 브랜치 마지막 커밋 기준, 로컬 컨테이너에서 실행):** 백엔드 전체 298건 통과(선택 실행 탐색 2건 제외), 마이그레이션 0023까지 임시 DB
 head→base→head→base 왕복, 계약 검사(158개 작업·중복 키 검사)·Go SDK·웹 타입 재생성 일치, 에이전트 `go test -race`·Linux/Windows golangci-lint 0건,
 웹 lint·typecheck·build·`npm run test:a11y`(역할 6개 × 데스크톱·휴대폰 92개 상태, axe serious·critical 0), 전체 작업 Schemathesis 탐색(작업당 25개, 구성원·운영자)
-불일치 0건. **원격 GitHub Actions는 아직 돌려 보지 못했다** (토큰 없음) — 로컬에서 push 뒤 CI 결과부터 확인할 것.
+불일치 0건. 수용시험 표(docs/ACCEPTANCE-STATUS.md) PASS 74 — 이번에 T01-e(실제 SeaweedFS로 사전 서명 URL 변조 거부)·T15-f(회차 미상 격리 자동 삭제 안 함)를 더했고, 남은 NOT_IMPLEMENTED 4건은 모두 조건부 15·16번이다. **원격 GitHub Actions는 아직 돌려 보지 못했다** (토큰 없음) — 로컬에서 push 뒤 CI 결과부터 확인할 것.
 
 **이번 세션에 끝낸 것 (ADR):** 08 삭제 보호 보완 · 03 약정·연계 카드 API(0028) · 02 긴급 열람(0029) · 04 웹훅(0030)·악성코드 검사 포트(0031)·
 예제 클라이언트·Schemathesis(0035) · 07 이벤트 겹침 조회·MQTT 암호 보안 저장 · 08 백업 신청·용량 예측·월간 리포트·SSE·데이터셋 사본 보존·Hot/Warm 계층(0036) ·
