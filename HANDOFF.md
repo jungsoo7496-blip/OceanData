@@ -5,7 +5,7 @@
 
 ## 요약 — 로컬에서 이어 갈 때 먼저 읽기 (2026-11-05 클라우드 세션 끝)
 **검증 상태 (이 브랜치 마지막 커밋 기준, 클라우드 컨테이너에서 실행):** 백엔드 전체 **381건 통과·5건 건너뜀**(건너뜀은 `SCHEMATHESIS_ALL=1`로만 도는 선택 탐색 5개), 마이그레이션 head 0023(이번 병합에 새 마이그레이션 없음 — 0024는 `wip/hot-path-indexes`에만) 임시 DB head→base→head→base 왕복 통과, 계약 검사(158개 작업·중복 키 검사)·Go SDK·웹 타입 재생성 일치, 계약-라우트 일치 시험, 에이전트 `go vet`·`go test -race` 전체 통과·`GOOS=windows go vet`, 웹 lint·typecheck·build·`npm run test:a11y`(로그인 전·역할 6개 × 데스크톱·휴대폰 92개 상태, axe serious·critical 0건), 런타임 의존성 취약점(Trivy 0.58.1) HIGH·CRITICAL 0건, 새 클론에서 `make ci` 통과. 수용시험 표(docs/ACCEPTANCE-STATUS.md) PASS 74 (NOT_IMPLEMENTED 4건은 모두 조건부 15·16번). **이번 마지막 병합 뒤 다시 돌리지 못한 것:** 전체 작업 Schemathesis 탐색(`SCHEMATHESIS_ALL=1`, 그 전에는 구성원·운영자 작업당 25개·열람자·검수자·이용기관 12개 모두 불일치 0건), 수용시험 표 재생성, 실제 스택(Keycloak·SeaweedFS) 확인.
-**원격 GitHub Actions는 아직 돌려 보지 못했다** (토큰 없음) — 로컬에서 push 뒤 CI 결과부터 확인할 것.
+**원격 CI는 이 브랜치로 돌려 본 적이 없다.** `ci`·`web-e2e`는 `main` push와 `pull_request`에서만, `security`는 main push·주간·수동에서만 돌아서 이 브랜치에 push하는 것만으로는 시작되지 않는다 — **`fix/backup-runtime-pg16` → `main` draft PR을 열어 두면 push마다 돈다** (사람이 연다).
 
 **이번 세션에 끝낸 것 (ADR):** 08 삭제 보호 보완 · 03 약정·연계 카드 API(0028)·품질 집계 `GET /v1/quality-reports` · 02 긴급 열람(0029)·기기 토큰 범위 축소 ·
 04 웹훅(0030)·웹훅 전송 격리(0041)·악성코드 검사 포트(0031)·예제 클라이언트·Schemathesis(0035)·업로드 취소·만료 정리 복구 ·
@@ -22,7 +22,7 @@
 끊긴 것은 `wip/*` 브랜치에 진행분을 그대로 보존했다(미완·검토 전). 아래 표가 그 상태다.
 
 ### 1. 먼저 확인할 것
-1. **원격 GitHub Actions** — 이 브랜치는 한 번도 원격 CI를 돌리지 못했다(토큰 없음). push 뒤 CI 결과부터 본다.
+1. **원격 GitHub Actions** — `ci`·`web-e2e`는 `main` push와 `pull_request`에서만 돈다(`security`는 main push·주간·수동). 이 브랜치로는 한 번도 돌지 않았다(main에는 2026-11-04 실행 기록이 있고 마지막은 실패). `fix/backup-runtime-pg16` → `main` draft PR을 열어 CI 결과부터 본다(PR을 열어 두면 이 브랜치에 push할 때마다 돈다).
 2. **독립 검토를 못 받은 병합분** — 아래는 구현자 시험만 거쳤고 적대적 검토 단계가 한도로 돌지 못했다. 로컬에서 코드를 한 번 읽을 것:
    - 웹훅 격리(ADR-0041: 전송 전용 스레드·총 기한·IP 고정·구독 수 상한) — 새 설정 `WEBHOOK_*`, 워커에 스레드가 하나 늘었다.
    - 클립 보안 보완(ADR-0033 갱신: 쿼터·기관별 대기 한도·삭제 경쟁 잠금) — 자산 행 → 쿼터 행 → 감사 순서의 잠금.
@@ -33,17 +33,16 @@
 
 ### 2. 끊긴 작업 — `wip/*` 브랜치 (원격에 있음, 모두 미완·검토 전)
 기반은 이 브랜치의 옛 커밋이다. 이어 하려면 `git switch -c <이름> origin/wip/<…>` → `git rebase fix/backup-runtime-pg16`
-(계약·생성 파일 충돌은 손으로 합치지 말고 `tools/validate_contracts.py`·`npm run gen:api`·`tools/generate_agent_api.py`로 재생성) → 해당 시험 →
-백엔드 전체 시험 → 검토. 마이그레이션 번호(0024)·ADR 번호(0040)는 `wip/hot-path-indexes`가 쓴다.
+(`contracts/openapi.yaml` 충돌은 손으로 풀어 양쪽을 살리고, 생성 파일 `web/src/contract/api.gen.ts`·`agent/internal/contractapi/client.gen.go`는 충돌 부분을 버리고 `npm run gen:api`·`tools/generate_agent_api.py`로 재생성 — 충돌이 없어도 rebase 뒤 `npm run check:api`를 돌린다) → 해당 시험 → 백엔드 전체 시험 → 검토. 상세한 단계는 `docs/GPT-HANDOFF-PROMPT.md` [3]. **번호:** 마이그레이션 0024는 `wip/hot-path-indexes` 몫. ADR-0040은 `wip/agent-policy-overflow`의 코드·계약 주석 41곳이 이미 인용하므로 그 결정(정책 숫자 기술 상한)의 ADR로 쓰고(ADR 파일은 아직 없다), `wip/hot-path-indexes`의 ADR은 0042로 옮긴다(9곳 수정).
 
 | 브랜치 | 무엇 | 진행 | 남은 것 |
 |---|---|---|---|
-| `wip/ingest-size-enforcement` | 검토 2 **#2(높음)** 선언 크기 강제 → 쿼터 우회 막기 | 파트 URL에 Content-Length 서명, 완료 시 크기 확인(7개 파일·계약·Go SDK 갱신 포함) | 시험 통과 확인, 격리 용량 계산(더할 때 실제·뺄 때 선언) 일치, 완료 응답 계약 문구, 검토 |
-| `wip/commit-before-response-tests` | 검토 2 **#4** 커밋이 응답 뒤에 일어남 | **재현 시험 2개만**(구현은 첫 시도를 되돌림) | 방법 선택(`Depends(get_db, scope="function")` 또는 공용 commit 도우미), 스트리밍·SSE·내보내기 응답이 세션을 계속 쓰는지 확인, 멱등 키 선점(INSERT … ON CONFLICT) |
-| `wip/auth-enrollment-codes` | 장비 자격 폐기 뒤 쓰지 않은 등록 코드로 재등록 | 폐기 시 코드 무효화 + 시험 일부 | 시험 마무리 |
+| `wip/ingest-size-enforcement` | 검토 2 **#2(높음)** 선언 크기 강제 → 쿼터 우회 막기 | **구현은 이미 있다**: 파트 URL Content-Length 서명, 완료 시 ListParts 파트별 크기 확인(어긋나면 409 `size_mismatch` + 세션 취소), 격리 용량을 양쪽 모두 `byte_size`로 계산, 계약 설명, 시험 2개 — **한 번도 실행하지 않음** | 시험·백엔드 전체 실행, **실제 SeaweedFS로 서명 확인**(moto는 서명을 안 본다), 클라이언트 3곳이 서버 파트 크기로 자르는지, `size_mismatch` 계약 보강, 검토 |
+| `wip/commit-before-response-tests` | 검토 2 **#4** 커밋이 응답 뒤에 일어남 | **재현 시험 2개만**(구현은 첫 시도를 되돌림 — 이 브랜치는 rebase하지 않는다: 첫 커밋 `5220f6b`이 `webhooks.py`에서 충돌. 시험 파일만 `git checkout`으로 가져온다) | 방법 선택(`Depends(get_db, scope="function")` 또는 공용 commit 도우미), 스트리밍·SSE·내보내기 응답이 세션을 계속 쓰는지 확인, 멱등 키 선점(INSERT … ON CONFLICT) |
+| `wip/auth-enrollment-codes` | 장비 자격 폐기 뒤 쓰지 않은 등록 코드로 재등록 | **구현·시험 1개·계약 설명이 이미 있다**(폐기 때 쓰지 않은 등록 코드 만료 + 감사 `enrollment_codes_invalidated`) — 사람 결정(5장) 대기라 기본값으로 무효화 | rebase 뒤 웹 타입 재생성(지금 `check:api` 실패), 시험 실행, 5장 행에 '기본값 구현, 확인 대기' 기록 |
 | `wip/report-scope-leaks` | 보고서 지표 출처 PRIVATE 자산 ID·추적, 다른 기관에 원래 파일명 노출 | 보이는 것만 거르기(서비스·API, 계약) | 시험, `asset_view`의 `original_filename` 처리, 검토 |
-| `wip/agent-policy-overflow` | 06 서버 정책 값 시간 넘침 방어(`heartbeat_interval_s` 등이 매우 크면 `time.Duration` 곱셈이 넘쳐 하트비트가 쉬지 않고 돎) | 18개 파일: 스키마 최댓값·`timex`·에이전트 검사·Go/Python 시험·잘못된 예시 | 전체 검증(`make agent-test agent-lint`, `GOOS=windows go vet`), 기존 정책 호환 확인, 검토. mvhd 상자 크기 검사 포함 여부 확인 |
-| `wip/hot-path-indexes` | 08 DB 핫패스 인덱스(큐 폴링·보존 만료·계층 이동·테넌트 목록) | 마이그레이션 0024(down 포함)·시험·ADR-0040 초안 | **전·후 EXPLAIN 측정을 못 했다** — 실제 부피(예: 자산 50만·관측값 500만)로 재서 쓰이는 색인만 남길 것, 마이그레이션 왕복 시험 |
+| `wip/agent-policy-overflow` | 06 서버 정책 값 시간 넘침 방어(`heartbeat_interval_s` 등이 매우 크면 `time.Duration` 곱셈이 넘쳐 하트비트가 쉬지 않고 돎) | 18개 파일: 스키마 최댓값·`timex`·에이전트 검사·Go/Python 시험·잘못된 예시 — `Retry-After`·`expires_in`·mvhd 상자 크기 방어도 포함. **'ADR-0040'을 41곳에서 인용하는데 ADR 파일이 없다** | 전체 검증(`make agent-test agent-lint`, `GOOS=windows go vet`), 기존 정책 호환 확인, 검토. mvhd 상자 크기 검사 포함 여부 확인 |
+| `wip/hot-path-indexes` | 08 DB 핫패스 인덱스(큐 폴링·보존 만료·계층 이동·테넌트 목록) | 마이그레이션 0024(down 포함)·시험·ADR 초안(파일명 `0040-…`, 상태 'accepted'와 전·후 표가 적혀 있으나 **측정 DB·스크립트가 남아 있지 않아 재현·검토되지 않은 값**) | **믿지 말고 새 임시 DB에 합성해 다시 잰다**(자산 50만·작업 109만·업로드 27만·관측값 177만·감사 150만, `marine`에는 넣지 않는다), 표를 새 값으로, 상태는 `proposed`, ADR을 `0042-…`로 옮기고 인용 9곳 수정, 쓰이는 색인만 남길 것, 마이그레이션 왕복 시험 |
 
 ### 3. 아직 시작하지 않은 것
 - **검토 2 #5·#6·#7·#8** (`docs/review-2026-11-05/README.md`): 바이트 없는 파일에 `ALREADY_REGISTERED`(순환 녹화 원천 조용한 유실 가능 — **우선**),
@@ -196,17 +195,8 @@ HANDOFF.md, AGENTS.md, .kiro/steering/*.md를 읽고 각 스펙 tasks.md의 남�
 ```
 
 ### GPT(Codex·ChatGPT)로 이어서 할 때
-- Codex는 저장소 루트의 `AGENTS.md`를 자동으로 읽는다. ChatGPT(웹)라면 저장소를 연결하거나 아래 파일을 직접 올린다.
-- 첫 지시 예시:
-
-```
-저장소 https://github.com/jungsoo7496-blip/OceanData 를 이어서 개발해줘.
-먼저 AGENTS.md, HANDOFF.md(특히 0장 '남은 일'), .kiro/steering/*.md, docs/ROADMAP.md를 읽어.
-규칙: 한 번에 스펙 하나, 계약(contracts/) 먼저 고치고 make contracts-check 통과 후 구현,
-domain.md 코드값은 바꾸지 말고 제안만, 확인 안 된 외부 사양은 지어내지 말고 '확인 필요'+모의 구현,
-완료 = 코드+시험+마이그레이션(down 포함)+계약·문서 갱신, 시험이 실패하면 성공이라고 하지 마.
-0장 1번(전체 시험 재실행: make test-integration, make test-acceptance, make agent-test)부터 하고 결과를 보고해.
-```
+- **`docs/GPT-HANDOFF-PROMPT.md`를 쓴다.** 붙여 넣을 짧은 '첫 메시지'와 끊겼을 때의 '후속 프롬프트', 그리고 GPT가 읽는 작업 지시서(규칙·기준선·해야 할 일 1~13번·하지 말 것·멈춤 규칙)가 한 파일에 있다.
+- Codex는 저장소 루트의 `AGENTS.md`를 자동으로 읽는다. ChatGPT(웹)는 셸·git·Docker를 실행하지 못하므로 시험을 돌린 것처럼 쓰지 말고 코드 읽기·변경안만 하게 한다(지시서 [2] '실행 전제').
 
 Kiro를 쓸 경우: Specs 패널에서 03번을 열고 README의 "Kiro에 줄 지시 예시"를 따른다. 01·02번 design.md·tasks.md는 이미 있다.
 
@@ -284,7 +274,7 @@ tools/         validate_contracts.py, check_traceability.py, check_licenses.py, 
 - ADR-0028 약정·연계 카드 API: 약정 종료는 valid_until, 카드는 분야별 자유 기록 + 정책 코드 검사
 - ADR-0018 보고서 내보내기: PDF(WeasyPrint)·XLSX(openpyxl)·HWPX(양식 XML 치환), Pillow·Pyphen 예외 승인 대기
 - ADR-0030~0039 (이번 세션): 웹훅 outbox·전송(0030, 0041로 보강) · 악성코드 검사 포트(0031) · golangci-lint 개발 도구(0032) · 구간 클립(0033, 쿼터·대기 한도·삭제 경쟁 갱신) · Keycloak 역할 MFA acr(0034) · 계약 기반 조회 조건 검사(0035) · Hot/Warm 계층(0036) · 온보딩 정책 초안(0037) · 운영 정책 편집(0038) · 모의 응답 접근성 검사(0039)
-- ADR-0041 웹훅 전송 격리: 전송 전용 스레드·총 기한·IP 고정·구독 상한. **ADR-0040(DB 핫패스 인덱스)은 `wip/hot-path-indexes`에만 있다 — 번호를 비워 두었다**
+- ADR-0041 웹훅 전송 격리: 전송 전용 스레드·총 기한·IP 고정·구독 상한. **ADR-0040은 아직 파일이 없다** — `wip/agent-policy-overflow`의 코드·계약 주석 41곳이 인용하므로 그 결정(정책 숫자 기술 상한)의 ADR로 쓴다. `wip/hot-path-indexes`의 ADR(지금 파일명 `0040-…`)은 0042로 옮긴다
 
 ## 7. 알아 둘 점
 - **클라우드 컨테이너가 재시작되면** Docker 데몬과 PostgreSQL이 꺼진다 — 백엔드 시험이 한꺼번에 `connection refused`로 실패한다(코드 문제가 아님). `dockerd`를 다시 띄우고 `docker start marine-postgres-1` 한 뒤 `psql … -c 'select 1'`로 확인한다. 로컬 PC에서는 `make up`.
@@ -296,4 +286,4 @@ tools/         validate_contracts.py, check_traceability.py, check_licenses.py, 
 - 알림 메일 확인: `.env`에 `SMTP_HOST=mailpit` 후 `docker compose --env-file .env -f deploy/compose/docker-compose.yml --profile ops up -d mailpit`, 받은 메일은 http://localhost:8025. 워커가 `WATCH_EVAL_INTERVAL_S`마다 감시 규칙을 평가한다. 수동 평가: `python -m app.cli watch`, 모의 하드웨어 신호: `python -m app.cli hardware-signal --status CRITICAL`.
 - 운영 절차는 `docs/runbook/` (10종). 스테이징에서 수행하면 `docs/runbook/records/`에 기록을 남긴다 (T14).
 - 부하 시험: `pip install -r loadtest/requirements.txt` 후 `make loadtest LOAD_HOST=... ` (loadtest/README.md). SBOM·취약점: syft·trivy 설치 후 `make sbom`, `make vuln-scan`.
-- `.github/workflows/ci.yml`·`security.yml`은 GitHub에 push하면 돈다. 기존 main 실행의 실패와 후속 우선순위는 0장 2번 참고. 이번 08·17·06번 변경은 아직 원격 CI 미실행이다.
+- `.github/workflows/ci.yml`·`web-e2e.yml`은 `main` push와 `pull_request`에서만, `security.yml`은 main push·주간 스케줄·수동 실행에서만 돈다 — 이 브랜치에 push만 해서는 CI가 시작되지 않는다(draft PR을 열면 돈다). 기존 main 실행의 실패와 후속 우선순위는 0장 2번 참고. 이번 08·17·06번 변경은 아직 원격 CI 미실행이다.
