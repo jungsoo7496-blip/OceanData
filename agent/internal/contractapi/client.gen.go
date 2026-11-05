@@ -123,6 +123,9 @@ type ExternalCommonSchemaDefsApiKeyId8ab4b47d = string
 // ExternalCommonSchemaDefsAssetIdE675b324 defines model for External_common_schema_defs_asset_id_e675b324.
 type ExternalCommonSchemaDefsAssetIdE675b324 = string
 
+// ExternalCommonSchemaDefsBreakGlassId19c82fa4 defines model for External_common_schema_defs_break_glass_id_19c82fa4.
+type ExternalCommonSchemaDefsBreakGlassId19c82fa4 = string
+
 // ExternalCommonSchemaDefsCctvExt26b1e830 defines model for External_common_schema_defs_cctv_ext_26b1e830.
 type ExternalCommonSchemaDefsCctvExt26b1e830 struct {
 	// DetectedAt RFC 3339 UTC (Z로 끝남)

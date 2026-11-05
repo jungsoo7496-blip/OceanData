@@ -9,6 +9,7 @@ from app.api import (
     agents,
     assets,
     auth,
+    break_glass,
     catalog,
     context,
     datasets,
@@ -50,6 +51,7 @@ def create_app(c: Container | None = None) -> FastAPI:
     app.include_router(observations.router)
     app.include_router(lifecycle.router)
     app.include_router(onboarding.router)
+    app.include_router(break_glass.router)
     app.include_router(monitoring.router)
     app.include_router(reports.router)
     app.include_router(sharing.router)

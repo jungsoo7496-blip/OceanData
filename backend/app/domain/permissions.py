@@ -59,7 +59,11 @@ PERMISSIONS: dict[str, Rule] = {
     "asset:read": Rule(PROVIDER | {"PROGRAM_VIEWER", "PLATFORM_OPERATOR"}, scope="asset:read"),
     "asset:receipt": Rule(PROVIDER, scope="upload:write"),
     "asset:write": Rule(PROVIDER),
-    "asset:download": Rule(PROVIDER),  # 운영자 원본 열람은 긴급 열람(02번 요구사항 8)으로만, 관리기관 열람자는 불가
+    # 운영자는 유효한 긴급 열람 승인이 있을 때만 (판단은 download-url 처리기, 02번 요구사항 8). 관리기관 열람자는 불가
+    "asset:download": Rule(PROVIDER | {"PLATFORM_OPERATOR"}),
+    "break_glass:read": Rule(frozenset({"ORG_ADMIN", "PLATFORM_OPERATOR"})),
+    "break_glass:request": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),
+    "break_glass:decide": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),
     "asset:reprocess": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),
     "webhook:manage": Rule(frozenset({"ORG_ADMIN"}), scope="webhook:manage"),
     # 08 저장·보존

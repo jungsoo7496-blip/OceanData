@@ -26,3 +26,12 @@
 
 ## 테스트
 `backend/tests/integration/test_identity.py`, `backend/tests/acceptance/test_t01_tenant_isolation.py`, `backend/tests/contract/`
+
+## 긴급 열람 (요구사항 8, ADR-0029)
+- `POST /v1/break-glass-grants`(운영자·다중 인증, 대상 ASSET/SESSION·사유·기간 60초~24시간) → `POST …/{id}/decision`(다른 운영자,
+  `BREAK_GLASS_SINGLE_APPROVAL`이면 본인 허용) → ACTIVE(승인 시각부터) + 대상 기관 ORG_ADMIN 메일 → `POST …/{id}/revoke`(조기 종료).
+- 원본 접근: `asset:download`에 PLATFORM_OPERATOR를 넣고, 처리기에서 요청한 운영자의 유효 권한(자산 또는 그 회차, `expires_at > now`)이
+  있을 때만 URL 발급 + `BREAK_GLASS_ACCESS` 감사. 없으면 403.
+- 만료: 접근 판단에서 즉시, 워커 정비 주기에서 상태 EXPIRED + `BREAK_GLASS_EXPIRED` 감사. 조회 `GET /v1/break-glass-grants`(운영자 전체,
+  ORG_ADMIN 자기 기관). 기존 0001 표 사용, 새 마이그레이션 없음.
+

@@ -223,8 +223,16 @@ def create_download_url(asset_id: str, request: Request, db: Session = Depends(g
     from datetime import timedelta
 
     a = load_scoped(db, c, request, Asset, asset_id, p)
+    grant = None
     if a.organization_id != p.organization_id:  # 바이너리는 자기 기관만 (domain.md 2장)
-        raise ProblemError("FORBIDDEN", detail="다른 기관 자산의 바이너리는 받을 수 없습니다")
+        if p.has_role("PLATFORM_OPERATOR") and not p.is_machine:  # 운영자는 긴급 열람 승인으로만 (02번 요구사항 8)
+            from app.services.break_glass import active_grant_for
+
+            grant = active_grant_for(db, a, p.principal_id, c.clock.now())
+            if grant is None:
+                raise ProblemError("FORBIDDEN", detail="운영자의 원본 접근은 유효한 긴급 열람 승인이 있어야 합니다")
+        else:
+            raise ProblemError("FORBIDDEN", detail="다른 기관 자산의 바이너리는 받을 수 없습니다")
     if not a.has_binary or not a.storage_key or a.ingest_status in ("UPLOADING", "RECEIVED", "VALIDATING"):
         raise ProblemError("CONFLICT", detail="아직 내려받을 수 있는 바이너리가 없습니다")
     if a.ingest_status == "QUARANTINED":
@@ -233,4 +241,9 @@ def create_download_url(asset_id: str, request: Request, db: Session = Depends(g
     url = c.storage.presign_get(c.settings.buckets[a.storage_zone or "RAW"], a.storage_key, ttl)
     c.audit.record("DOWNLOAD_URL_ISSUED", principal=p, organization_id=a.organization_id, target_type="Asset",
                    target_id=a.asset_id, source_ip=client_ip(request), details={"variant": a.variant})
+    if grant is not None:  # 긴급 열람 중 원본 접근은 따로 남긴다 (요구사항 8.3)
+        c.audit.record("BREAK_GLASS_ACCESS", principal=p, organization_id=a.organization_id, target_type="Asset",
+                       target_id=a.asset_id, source_ip=client_ip(request),
+                       details={"grant_id": grant.grant_id, "variant": a.variant,
+                                "grant_expires_at": grant.expires_at.isoformat() if grant.expires_at else None})
     return {"asset_id": a.asset_id, "url": url, "expires_at": iso(c.clock.now() + timedelta(seconds=ttl))}

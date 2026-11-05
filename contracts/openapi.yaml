@@ -2474,6 +2474,118 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
 
+  /v1/break-glass-grants:
+    get:
+      tags: [system]
+      operationId: listBreakGlassGrants
+      summary: 긴급 열람 기록 (운영자는 전체, ORG_ADMIN은 자기 기관 대상)
+      description: 02번 요구사항 8. 대상 기관이 자기 원본에 누가 왜 언제까지 접근했는지 볼 수 있다.
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 긴급 열람 기록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/BreakGlassGrant'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      tags: [system]
+      operationId: requestBreakGlass
+      summary: 긴급 열람 요청 (PLATFORM_OPERATOR, 다중 인증). 사유·대상·기간(최대 24시간)
+      description: 다른 운영자가 승인해야 권한이 생긴다(BREAK_GLASS_SINGLE_APPROVAL=true면 본인 승인 허용). 대상은 자산 또는 실증회차.
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [target_type, target_id, reason, duration_s]
+              properties:
+                target_type: {enum: [ASSET, SESSION]}
+                target_id: {type: string, maxLength: 64}
+                reason: {type: string, minLength: 10, maxLength: 1000, description: 장애·사고 번호 등 구체적 사유}
+                duration_s: {type: integer, minimum: 60, maximum: 86400}
+      responses:
+        '201':
+          description: 요청됨 (승인 대기)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BreakGlassGrant'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /v1/break-glass-grants/{grant_id}/decision:
+    parameters:
+      - {name: grant_id, in: path, required: true, schema: {$ref: './schemas/common.schema.json#/$defs/break_glass_id'}}
+    post:
+      tags: [system]
+      operationId: decideBreakGlass
+      summary: 긴급 열람 승인·거절 (다른 PLATFORM_OPERATOR, 다중 인증). 승인하면 지금부터 기간만큼 유효, 대상 기관 ORG_ADMIN에게 통지
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [decision]
+              properties:
+                decision: {enum: [APPROVE, DENY]}
+                reason: {type: string, maxLength: 1000}
+      responses:
+        '200':
+          description: 결정됨
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BreakGlassGrant'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
+  /v1/break-glass-grants/{grant_id}/revoke:
+    parameters:
+      - {name: grant_id, in: path, required: true, schema: {$ref: './schemas/common.schema.json#/$defs/break_glass_id'}}
+    post:
+      tags: [system]
+      operationId: revokeBreakGlass
+      summary: 긴급 열람 조기 종료 (PLATFORM_OPERATOR, 다중 인증). 기간 만료와 같은 EXPIRED가 된다
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties:
+                reason: {type: string, minLength: 2, maxLength: 1000}
+      responses:
+        '200':
+          description: 종료됨
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BreakGlassGrant'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
   /v1/retention/dry-run:
     post:
       tags: [status]
@@ -2496,9 +2608,9 @@ paths:
     post:
       tags: [assets]
       operationId: createDownloadUrl
-      summary: 자산 바이너리 단기 사전 서명 URL (자기 기관 ORG 역할만, 발급 감사)
+      summary: 자산 바이너리 단기 사전 서명 URL (자기 기관 ORG 역할, 운영자는 긴급 열람 승인으로만, 발급 감사)
       description: |
-        09번 요구사항 7. 관리기관 열람자는 어떤 등급이든 받지 않는다 (domain.md 2장). 운영자 원본 열람은 긴급 열람 승인으로만 (02번, 미구현 → 403).
+        09번 요구사항 7. 관리기관 열람자는 어떤 등급이든 받지 않는다 (domain.md 2장). 운영자는 유효한 긴급 열람 승인(대상 자산 또는 그 회차)이 있을 때만 받고, 발급은 BREAK_GLASS_ACCESS로 따로 감사한다 (02번 요구사항 8). 승인이 없으면 403.
         격리 자산은 내려받지 않는다. URL은 로그에 남기지 않는다.
       x-freeze: G1
       x-status: draft
@@ -3860,6 +3972,23 @@ components:
             quarantine_bytes: {type: integer, minimum: 0}
             reserved_bytes: {type: integer, minimum: 0, description: 진행 중 업로드 예약량}
             backup_bytes: {type: integer, minimum: 0, description: 기관이 신청한 백업 용량}
+
+    BreakGlassGrant:
+      type: object
+      required: [grant_id, organization_id, target_type, target_id, reason, duration_s, status, requested_by, created_at]
+      properties:
+        grant_id: {$ref: './schemas/common.schema.json#/$defs/break_glass_id'}
+        organization_id: {$ref: './schemas/common.schema.json#/$defs/organization_id'}
+        target_type: {enum: [ASSET, SESSION]}
+        target_id: {type: string}
+        reason: {type: string}
+        duration_s: {type: integer}
+        status: {enum: [REQUESTED, ACTIVE, EXPIRED, DENIED], description: ACTIVE라도 expires_at이 지나면 EXPIRED로 보인다}
+        requested_by: {type: string}
+        approved_by: {type: [string, 'null']}
+        starts_at: {type: [string, 'null'], format: date-time}
+        expires_at: {type: [string, 'null'], format: date-time}
+        created_at: {type: string, format: date-time}
 
     BackupRun:
       type: object

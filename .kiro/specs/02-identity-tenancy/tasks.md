@@ -10,6 +10,6 @@
 - [x] 8. API 키 발급·범위·폐기·만료 — 요구사항 6.1~6.4 · 시험 `test_api_key_lifecycle_and_scope`
 - [x] 9. 감사 로그 해시 체인·추가 전용·검증 명령 — 요구사항 7.1~7.4 · 시험 `test_audit_chain_verification_and_tamper_detection`, `make verify-audit`
 - [x] 10. 감사 조회 범위 — 요구사항 7.5 · 시험 `test_org_admin_sees_only_own_audit_records`
-- [ ] 11. 긴급 열람(Break_Glass): 요청·다른 운영자 승인·ORG_ADMIN 통지·만료 회수 — 요구사항 8.1~8.4 (테이블만 있음, 서비스·API 없음 → contracts 먼저)
+- [x] 11. 긴급 열람(Break_Glass): 요청·다른 운영자 승인(설정으로 본인 승인)·ORG_ADMIN 통지·원본 접근 감사·만료 즉시 회수·조기 종료 — 요구사항 8.1~8.4 · `/v1/break-glass-grants`(+`/decision`, `/revoke`), download-url 운영자 경로 · 시험 `tests/integration/test_break_glass.py` · ADR-0029, Runbook 05
 - [ ] 12. 구성원 관리: 초대·역할 변경(감사)·비활성화 — 요구사항 9.1, 9.2, 3.3 (Keycloak 관리 API 연동 방식 결정 필요)
 - [x] 13. T01 수용시험 — T01-a, b, c, d, f, g

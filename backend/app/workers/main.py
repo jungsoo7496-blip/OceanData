@@ -220,6 +220,14 @@ def maintenance(c: Container) -> None:
         changed = datasets.expire(c, db)
         if any(changed.values()):
             log.info("grants_expired", extra=changed)
+    # 긴급 열람 만료 회수 (02번 요구사항 8.4). 접근 판단은 만료 시각으로 바로 막고, 여기서는 상태·감사를 맞춘다
+    from app.services import break_glass
+
+    with c.sessionmaker.begin() as db:
+        ended = break_glass.expire(db, c.clock.now())
+    for g in ended:
+        c.audit.record("BREAK_GLASS_EXPIRED", actor_kind="SYSTEM", actor_id="worker", organization_id=g.organization_id,
+                       target_type="BreakGlassGrant", target_id=g.grant_id)
     # 정기 백업 (08번 요구사항 6.1): BACKUP_ENABLED일 때 BACKUP_INTERVAL_H마다
     from app.services import backup
 
