@@ -1206,6 +1206,12 @@ type ClientInterface interface {
 	//
 	// 사용자 로그인은 Keycloak OIDC를 쓴다. 이 엔드포인트는 기기와 기관 서버용이다. 발급 방식은 보안 설계에서 확정한다 (tech.md 결정 대기).
 	//
+	// 기기(수집기) 토큰으로 할 수 있는 일은 02번 요구사항 5.5로 정해져 있다 — 매핑된 원천 장비의 업로드(생성·조회·완료·
+	// 등록 영수증)·관측값 제출·이벤트 제출, 자기 수집기의 하트비트·장비 정책·원격 상태 조회, 매핑된 원천 장비의 매핑 프로필
+	// 조회, `GET /v1/me`(자기 확인). 그 밖의 작업(보고서·실증 기록·회차·관측값·이벤트·사용량·장애 조회, 실증 기록 작성 등)은
+	// 토큰의 scope와 관계없이 403 FORBIDDEN이고, 매핑되지 않은 원천 장비의 자원은 404 NOT_FOUND다.
+	// 기관 API 키 토큰은 발급 기관 범위와 지정 scope 안의 동작만 할 수 있다 (02번 요구사항 6.3).
+	//
 	// Takes any type of body and a specified content type.
 	//
 	// Corresponds with POST /v1/auth/token (the `IssueToken` operationId).
@@ -1214,6 +1220,12 @@ type ClientInterface interface {
 	// IssueTokenWithFormdataBody 기기 자격증명·API 키를 단기 액세스 토큰으로 교환
 	//
 	// 사용자 로그인은 Keycloak OIDC를 쓴다. 이 엔드포인트는 기기와 기관 서버용이다. 발급 방식은 보안 설계에서 확정한다 (tech.md 결정 대기).
+	//
+	// 기기(수집기) 토큰으로 할 수 있는 일은 02번 요구사항 5.5로 정해져 있다 — 매핑된 원천 장비의 업로드(생성·조회·완료·
+	// 등록 영수증)·관측값 제출·이벤트 제출, 자기 수집기의 하트비트·장비 정책·원격 상태 조회, 매핑된 원천 장비의 매핑 프로필
+	// 조회, `GET /v1/me`(자기 확인). 그 밖의 작업(보고서·실증 기록·회차·관측값·이벤트·사용량·장애 조회, 실증 기록 작성 등)은
+	// 토큰의 scope와 관계없이 403 FORBIDDEN이고, 매핑되지 않은 원천 장비의 자원은 404 NOT_FOUND다.
+	// 기관 API 키 토큰은 발급 기관 범위와 지정 scope 안의 동작만 할 수 있다 (02번 요구사항 6.3).
 	//
 	// Takes a body of the `application/x-www-form-urlencoded` content type.
 	//
@@ -1391,6 +1403,12 @@ func (c *Client) GetAssetReceipt(ctx context.Context, assetId AssetId, reqEditor
 //
 // 사용자 로그인은 Keycloak OIDC를 쓴다. 이 엔드포인트는 기기와 기관 서버용이다. 발급 방식은 보안 설계에서 확정한다 (tech.md 결정 대기).
 //
+// 기기(수집기) 토큰으로 할 수 있는 일은 02번 요구사항 5.5로 정해져 있다 — 매핑된 원천 장비의 업로드(생성·조회·완료·
+// 등록 영수증)·관측값 제출·이벤트 제출, 자기 수집기의 하트비트·장비 정책·원격 상태 조회, 매핑된 원천 장비의 매핑 프로필
+// 조회, `GET /v1/me`(자기 확인). 그 밖의 작업(보고서·실증 기록·회차·관측값·이벤트·사용량·장애 조회, 실증 기록 작성 등)은
+// 토큰의 scope와 관계없이 403 FORBIDDEN이고, 매핑되지 않은 원천 장비의 자원은 404 NOT_FOUND다.
+// 기관 API 키 토큰은 발급 기관 범위와 지정 scope 안의 동작만 할 수 있다 (02번 요구사항 6.3).
+//
 // Takes any type of body and a specified content type.
 //
 // Corresponds with POST /v1/auth/token (the `IssueToken` operationId).
@@ -1409,6 +1427,12 @@ func (c *Client) IssueTokenWithBody(ctx context.Context, contentType string, bod
 // IssueTokenWithFormdataBody 기기 자격증명·API 키를 단기 액세스 토큰으로 교환
 //
 // 사용자 로그인은 Keycloak OIDC를 쓴다. 이 엔드포인트는 기기와 기관 서버용이다. 발급 방식은 보안 설계에서 확정한다 (tech.md 결정 대기).
+//
+// 기기(수집기) 토큰으로 할 수 있는 일은 02번 요구사항 5.5로 정해져 있다 — 매핑된 원천 장비의 업로드(생성·조회·완료·
+// 등록 영수증)·관측값 제출·이벤트 제출, 자기 수집기의 하트비트·장비 정책·원격 상태 조회, 매핑된 원천 장비의 매핑 프로필
+// 조회, `GET /v1/me`(자기 확인). 그 밖의 작업(보고서·실증 기록·회차·관측값·이벤트·사용량·장애 조회, 실증 기록 작성 등)은
+// 토큰의 scope와 관계없이 403 FORBIDDEN이고, 매핑되지 않은 원천 장비의 자원은 404 NOT_FOUND다.
+// 기관 API 키 토큰은 발급 기관 범위와 지정 scope 안의 동작만 할 수 있다 (02번 요구사항 6.3).
 //
 // Takes a body of the `application/x-www-form-urlencoded` content type.
 //
@@ -2197,6 +2221,12 @@ type ClientWithResponsesInterface interface {
 	//
 	// 사용자 로그인은 Keycloak OIDC를 쓴다. 이 엔드포인트는 기기와 기관 서버용이다. 발급 방식은 보안 설계에서 확정한다 (tech.md 결정 대기).
 	//
+	// 기기(수집기) 토큰으로 할 수 있는 일은 02번 요구사항 5.5로 정해져 있다 — 매핑된 원천 장비의 업로드(생성·조회·완료·
+	// 등록 영수증)·관측값 제출·이벤트 제출, 자기 수집기의 하트비트·장비 정책·원격 상태 조회, 매핑된 원천 장비의 매핑 프로필
+	// 조회, `GET /v1/me`(자기 확인). 그 밖의 작업(보고서·실증 기록·회차·관측값·이벤트·사용량·장애 조회, 실증 기록 작성 등)은
+	// 토큰의 scope와 관계없이 403 FORBIDDEN이고, 매핑되지 않은 원천 장비의 자원은 404 NOT_FOUND다.
+	// 기관 API 키 토큰은 발급 기관 범위와 지정 scope 안의 동작만 할 수 있다 (02번 요구사항 6.3).
+	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with POST /v1/auth/token (the `IssueToken` operationId).
@@ -2205,6 +2235,12 @@ type ClientWithResponsesInterface interface {
 	// IssueTokenWithFormdataBodyWithResponse 기기 자격증명·API 키를 단기 액세스 토큰으로 교환
 	//
 	// 사용자 로그인은 Keycloak OIDC를 쓴다. 이 엔드포인트는 기기와 기관 서버용이다. 발급 방식은 보안 설계에서 확정한다 (tech.md 결정 대기).
+	//
+	// 기기(수집기) 토큰으로 할 수 있는 일은 02번 요구사항 5.5로 정해져 있다 — 매핑된 원천 장비의 업로드(생성·조회·완료·
+	// 등록 영수증)·관측값 제출·이벤트 제출, 자기 수집기의 하트비트·장비 정책·원격 상태 조회, 매핑된 원천 장비의 매핑 프로필
+	// 조회, `GET /v1/me`(자기 확인). 그 밖의 작업(보고서·실증 기록·회차·관측값·이벤트·사용량·장애 조회, 실증 기록 작성 등)은
+	// 토큰의 scope와 관계없이 403 FORBIDDEN이고, 매핑되지 않은 원천 장비의 자원은 404 NOT_FOUND다.
+	// 기관 API 키 토큰은 발급 기관 범위와 지정 scope 안의 동작만 할 수 있다 (02번 요구사항 6.3).
 	//
 	// Takes a body of the `application/x-www-form-urlencoded` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -3712,6 +3748,12 @@ func (c *ClientWithResponses) GetAssetReceiptWithResponse(ctx context.Context, a
 //
 // 사용자 로그인은 Keycloak OIDC를 쓴다. 이 엔드포인트는 기기와 기관 서버용이다. 발급 방식은 보안 설계에서 확정한다 (tech.md 결정 대기).
 //
+// 기기(수집기) 토큰으로 할 수 있는 일은 02번 요구사항 5.5로 정해져 있다 — 매핑된 원천 장비의 업로드(생성·조회·완료·
+// 등록 영수증)·관측값 제출·이벤트 제출, 자기 수집기의 하트비트·장비 정책·원격 상태 조회, 매핑된 원천 장비의 매핑 프로필
+// 조회, `GET /v1/me`(자기 확인). 그 밖의 작업(보고서·실증 기록·회차·관측값·이벤트·사용량·장애 조회, 실증 기록 작성 등)은
+// 토큰의 scope와 관계없이 403 FORBIDDEN이고, 매핑되지 않은 원천 장비의 자원은 404 NOT_FOUND다.
+// 기관 API 키 토큰은 발급 기관 범위와 지정 scope 안의 동작만 할 수 있다 (02번 요구사항 6.3).
+//
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
 // Corresponds with POST /v1/auth/token (the `IssueToken` operationId).
@@ -3726,6 +3768,12 @@ func (c *ClientWithResponses) IssueTokenWithBodyWithResponse(ctx context.Context
 // IssueTokenWithFormdataBodyWithResponse 기기 자격증명·API 키를 단기 액세스 토큰으로 교환
 //
 // 사용자 로그인은 Keycloak OIDC를 쓴다. 이 엔드포인트는 기기와 기관 서버용이다. 발급 방식은 보안 설계에서 확정한다 (tech.md 결정 대기).
+//
+// 기기(수집기) 토큰으로 할 수 있는 일은 02번 요구사항 5.5로 정해져 있다 — 매핑된 원천 장비의 업로드(생성·조회·완료·
+// 등록 영수증)·관측값 제출·이벤트 제출, 자기 수집기의 하트비트·장비 정책·원격 상태 조회, 매핑된 원천 장비의 매핑 프로필
+// 조회, `GET /v1/me`(자기 확인). 그 밖의 작업(보고서·실증 기록·회차·관측값·이벤트·사용량·장애 조회, 실증 기록 작성 등)은
+// 토큰의 scope와 관계없이 403 FORBIDDEN이고, 매핑되지 않은 원천 장비의 자원은 404 NOT_FOUND다.
+// 기관 API 키 토큰은 발급 기관 범위와 지정 scope 안의 동작만 할 수 있다 (02번 요구사항 6.3).
 //
 // Takes a body of the `application/x-www-form-urlencoded` content type, and returns a wrapper object for the known response body format(s).
 //

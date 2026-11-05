@@ -34,7 +34,9 @@ def scope_filter(model: Any, principal: Principal, *, purpose: str = "metadata")
 
 def _role_filter(model: Any, principal: Principal, purpose: str) -> ColumnElement[bool]:
     org_col = model.organization_id
-    if principal.kind in ("DEVICE", "API_KEY") or principal.has_role("ORG_ADMIN", "ORG_MEMBER"):
+    if principal.kind == "DEVICE":
+        return and_(org_col == principal.organization_id, _device_filter(model, principal))
+    if principal.kind == "API_KEY" or principal.has_role("ORG_ADMIN", "ORG_MEMBER"):
         return org_col == principal.organization_id
     if principal.has_role("PLATFORM_OPERATOR") and purpose == "metadata":
         return true()  # 운영 목적 메타데이터 열람 (감사 기록은 호출자가 남긴다)
@@ -47,6 +49,19 @@ def _role_filter(model: Any, principal: Principal, purpose: str) -> ColumnElemen
             cond = and_(cond, model.sharing_scope != "PRIVATE")
         return cond
     return false()
+
+
+def _device_filter(model: Any, principal: Principal) -> ColumnElement[bool]:
+    """수집기는 자기 수집기와 매핑된 원천 장비의 것만 (domain.md 2장 DEVICE 행, 02번 요구사항 5.2·5.5).
+
+    원천 장비 열(source_system_id, 장비 표는 device_id)이 없는 표(회차 같은 맥락)는 기관 범위만 적용한다.
+    기기가 할 수 있는 동작 자체는 Permission_Table의 device 표시로 제한한다."""
+    own = sorted(principal.mapped_source_ids | ({principal.device_id} if principal.device_id else set()))
+    if hasattr(model, "source_system_id"):
+        return model.source_system_id.in_(own)  # type: ignore[no-any-return]
+    if hasattr(model, "device_id"):
+        return model.device_id.in_(own)  # type: ignore[no-any-return]
+    return true()
 
 
 def scoped_select(model: Any, principal: Principal, *, purpose: str = "metadata") -> Any:

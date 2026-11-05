@@ -92,7 +92,7 @@ def test_device_enrollment_token_and_revocation(ctx) -> None:
     assert me["principal_kind"] == "DEVICE" and me["device_id"] == DEV_A_COLLECTOR
     # 기기는 매핑 범위 밖 동작 불가
     assert ctx.client.get("/v1/devices", headers=dh).status_code == 403
-    assert ctx.client.get("/v1/sessions", headers=dh).status_code == 200
+    assert ctx.client.get("/v1/sessions", headers=dh).status_code == 403  # 회차 목록은 기기 동작이 아니다 (요구사항 5.5)
     # 폐기 후 즉시 401
     r = ctx.client.post(f"/v1/devices/{DEV_A_COLLECTOR}/credentials/revoke", headers=ctx.as_user(101, mfa=True))
     assert r.status_code == 200 and r.json()["revoked_credentials"] == 1
