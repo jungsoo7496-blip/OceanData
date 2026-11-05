@@ -8,7 +8,7 @@
 - [x] 6. MQTT Sensor_Plugin·오프라인 대기열·시간순 전송, Mosquitto 통합 시험 — 요구사항 6.1, 6.2, 6.4 · 시험 `TestMQTTPluginSubscribeQueueAndSendInOrder` (실제 토픽·페이로드는 연계 카드 후 확인 필요)
 - [x] 7. 센터 MQTT 포트 미개방 (compose 브로커는 sensor 프로필의 시험용) — 요구사항 6.3
 - [x] 8. 실증 이벤트 등록·코드 확인·자산 연결·MODEL 확인·중복 방지 — 요구사항 7.1~7.5 · 시험 `test_events`
-- [ ] 9. 이벤트 구간과 겹치는 자산 조회 전용 API (지금은 자산 목록의 촬영 시각 필터) — 요구사항 7.6
+- [x] 9. 이벤트 구간과 겹치는 자산 조회 전용 API — 요구사항 7.6 · `GET /v1/events/{id}/overlapping-assets`(같은 회차, 구간 겹침·겹친 초·연결 여부, 촬영시각 미상은 개수만, margin_s·장비 필터) · 시험 `tests/integration/test_event_overlap.py`
 - [x] 10. 관측값 조회·구간 집계(결측 분리)·이벤트 조회 — 요구사항 8.1~8.3
 - [x] 11. 합성 관측값 생성기 — 요구사항 9.1 · `make sample-observations`
 - [x] 12. 세 경로 같은 저장 결과 — 요구사항 9.2 · CSV↔REST 시험 + MQTT는 REST로만 전송

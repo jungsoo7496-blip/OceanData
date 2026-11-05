@@ -44,3 +44,9 @@ paho.mqtt.golang(EDL). config.json `sensor_plugins`(브로커·client_id·QoS·�
 ## 실제 스택 확인 (2026-11-04)
 - 합성 관측값 78건(`tools/sample_observations.py`) → 단위 오류 SUSPECT, 시간대 없음·미래 시각 거부, KST 원천 시각 변환, 결측, 중복 판정이 기대대로
 - Mosquitto(compose `sensor` 프로필) → 에이전트 MQTT 플러그인 → 실제 API → 저장, -999는 null+MISSING
+
+## 이벤트 구간 겹침 조회 (요구사항 7.6)
+`GET /v1/events/{event_id}/overlapping-assets?margin_s=&source_system_id=` — 이벤트 [started_at, ended_at|started_at]을 margin_s만큼 넓힌 구간과
+자산 [capture_start_at, capture_end_at|capture_start_at]이 겹치는 같은 회차 자산(보는 사람의 Tenant_Guard 범위). 항목마다 겹친 초·이미 연결됐는지.
+촬영시각 미상 자산은 넣지 않고 개수(unknown_capture_count)만. 최대 500개, 촬영 시작 순. 새 마이그레이션 없음(ix_events_session_time·자산 회차 색인 사용).
+

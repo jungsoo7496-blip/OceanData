@@ -403,6 +403,39 @@ def get_event(event_id: str, request: Request, db: Session = Depends(get_db), c:
     return event_view(db, load_scoped(db, c, request, Event, event_id, p))
 
 
+@router.get("/v1/events/{event_id}/overlapping-assets", tags=["events"])
+def overlapping_assets(event_id: str, request: Request, margin_s: int = Query(0, ge=0, le=3600),
+                       source_system_id: str | None = Query(None, pattern=r"^dev_[0-9A-HJKMNP-TV-Z]{26}$"),
+                       db: Session = Depends(get_db), c: Container = Depends(container),
+                       p: Principal = Depends(require("event:read"))) -> dict:
+    """이벤트 구간과 촬영 구간이 겹치는 같은 회차 자산 (요구사항 7.6). 촬영시각 미상은 개수만."""
+    from datetime import timedelta
+
+    from app.api.assets import asset_view
+
+    e = load_scoped(db, c, request, Event, event_id, p)
+    start = e.started_at - timedelta(seconds=margin_s)
+    end = (e.ended_at or e.started_at) + timedelta(seconds=margin_s)
+    base = scoped_select(Asset, p).where(Asset.session_id == e.session_id)
+    if source_system_id is not None:
+        base = base.where(Asset.source_system_id == source_system_id)
+    a_end = func.coalesce(Asset.capture_end_at, Asset.capture_start_at)
+    rows = list(db.execute(base.where(Asset.capture_start_at.is_not(None), Asset.capture_start_at <= end,
+                                      a_end >= start).order_by(Asset.capture_start_at, Asset.asset_id)
+                           .limit(500)).scalars())
+    unknown = db.execute(select(func.count()).select_from(
+        base.where(Asset.capture_start_at.is_(None)).subquery())).scalar_one()
+    linked = set(db.execute(select(EventAsset.asset_id).where(EventAsset.event_id == e.event_id)).scalars())
+    items = []
+    for a in rows:
+        a_start = a.capture_start_at
+        assert a_start is not None  # noqa: S101 - 위 조건
+        overlap = (min(a.capture_end_at or a_start, end) - max(a_start, start)).total_seconds()
+        items.append({"asset": asset_view(a, p), "overlap_s": max(0.0, overlap), "linked": a.asset_id in linked})
+    return {"event_id": e.event_id, "session_id": e.session_id, "window": {"from": iso(start), "to": iso(end)},
+            "items": items, "unknown_capture_count": int(unknown)}
+
+
 class EventPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     human_verified: bool | None = None

@@ -2372,6 +2372,54 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
 
+  /v1/events/{event_id}/overlapping-assets:
+    parameters:
+      - {$ref: '#/components/parameters/EventId'}
+    get:
+      tags: [events]
+      operationId: listEventOverlappingAssets
+      summary: 이벤트 구간과 촬영 구간이 겹치는 같은 회차 자산 (07번 요구사항 7.6)
+      description: |
+        이벤트 [started_at, ended_at(없으면 started_at)]과 자산 [capture_start_at, capture_end_at(없으면 capture_start_at)]이 겹치는 자산.
+        촬영시각을 모르는 자산은 넣지 않는다(unknown_capture_count로 개수만). margin_s만큼 이벤트 구간을 앞뒤로 넓힌다.
+        보는 사람의 자산 범위(Tenant_Guard) 안에서만, 촬영 시작 순.
+      x-freeze: G1
+      x-status: draft
+      parameters:
+        - {name: margin_s, in: query, schema: {type: integer, minimum: 0, maximum: 3600, default: 0}}
+        - {name: source_system_id, in: query, schema: {$ref: './schemas/common.schema.json#/$defs/device_id'}}
+      responses:
+        '200':
+          description: 겹치는 자산
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [event_id, session_id, window, items, unknown_capture_count]
+                properties:
+                  event_id: {$ref: './schemas/common.schema.json#/$defs/event_id'}
+                  session_id: {$ref: './schemas/common.schema.json#/$defs/session_id'}
+                  window:
+                    type: object
+                    required: [from, to]
+                    properties:
+                      from: {type: string, format: date-time}
+                      to: {type: string, format: date-time}
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [asset, overlap_s, linked]
+                      properties:
+                        asset: {$ref: './schemas/asset-metadata.schema.json'}
+                        overlap_s: {type: number, minimum: 0, description: 이벤트 구간(여유 포함)과 겹치는 길이(초). 순간끼리면 0}
+                        linked: {type: boolean, description: 이미 이벤트에 연결된 자산인가}
+                  unknown_capture_count: {type: integer, minimum: 0}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
   /v1/ingest-status:
     get:
       tags: [status]
