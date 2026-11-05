@@ -150,7 +150,13 @@ export function ReportDetail({ me }: { me: Me }) {
         <Table rowKey="metric_code" size="small" pagination={false} dataSource={r.metrics}
           onRow={(m) => ({ onClick: () => void openTrace(m), style: { cursor: 'pointer' } })}
           columns={[
-            { title: '지표', key: 'n', render: (_, m) => `${m.name} (v${m.metric_version})` },
+            // 행 누르기는 마우스용. 키보드로도 열 수 있게 지표 이름을 버튼으로 (요구사항 11.2)
+            { title: '지표', key: 'n', render: (_, m) => (
+              <Button type="link" size="small" style={{ padding: 0, height: 'auto', whiteSpace: 'normal', textAlign: 'left' }}
+                aria-label={`${m.name} (v${m.metric_version}) 근거 보기`} onClick={(e) => { e.stopPropagation(); void openTrace(m) }}>
+                {m.name} (v{m.metric_version})
+              </Button>
+            ) },
             { title: '값', key: 'v', render: (_, m) => (m.status === 'OK' ? metricValue(m) : <Typography.Text type="secondary">{metricValue(m)}</Typography.Text>) },
             { title: '상태', dataIndex: 'status', render: (s: string) => <Tag color={METRIC[s].color}>{METRIC[s].label}</Tag> },
             { title: '계산식', dataIndex: 'formula' },
@@ -197,7 +203,7 @@ export function ReportDetail({ me }: { me: Me }) {
             ))}
             <Typography.Text strong>자산 → 원본</Typography.Text>
             {trace.data.assets.map((a) => (
-              <div key={a.asset_id}>{isOrg ? <Link to={`/assets/${a.asset_id}`}>{a.asset_id}</Link> : a.asset_id} ({a.variant}) → {a.originals.join(', ')}</div>
+              <div key={a.asset_id}>{isOrg ? <Link className="inline-link" to={`/assets/${a.asset_id}`}>{a.asset_id}</Link> : a.asset_id} ({a.variant}) → {a.originals.join(', ')}</div>
             ))}
             {trace.data.hidden_count > 0 && <Typography.Text type="secondary">권한 범위 밖 근거 {trace.data.hidden_count}건은 숨겼습니다</Typography.Text>}
           </Space>

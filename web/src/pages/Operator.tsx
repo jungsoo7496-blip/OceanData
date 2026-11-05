@@ -205,7 +205,8 @@ export function OperatorConsole() {
       <Card title="기관 사용량">
         <Table rowKey="organization_id" size="small" pagination={false} dataSource={usage.data?.items ?? []}
           columns={[{ title: '기관', dataIndex: 'organization_id' },
-            { title: '사용률', key: 'r', render: (_, u) => <Progress percent={Math.round(u.usage_ratio * 1000) / 10} size="small" style={{ width: 160 }} /> },
+            { title: '사용률', key: 'r', render: (_, u) => <Progress percent={Math.round(u.usage_ratio * 1000) / 10} size="small" style={{ width: 160 }}
+              aria-label={`${u.organization_id} 쿼터 사용률`} /> },
             { title: '등록', key: 's', render: (_, u) => bytes(u.breakdown.stored_bytes) },
             { title: '격리', key: 'q', render: (_, u) => bytes(u.breakdown.quarantine_bytes) },
             { title: '업로드 예약', key: 'res', render: (_, u) => bytes(u.breakdown.reserved_bytes) },

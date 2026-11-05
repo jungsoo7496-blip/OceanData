@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { api, type Capabilities, type Me } from './lib/api'
 import { currentUser, login, logout, userManager } from './lib/auth'
+import { useScrollableTables } from './lib/scrollRegions'
 import { AssetDetail, Assets } from './pages/Assets'
 import { Dashboard } from './pages/Dashboard'
 import { Devices } from './pages/Devices'
@@ -83,13 +84,16 @@ function CapabilityBanner() {
 function Shell({ me }: { me: Me }) {
   const loc = useLocation()
   const selected = '/' + (loc.pathname.split('/')[1] ?? '')
+  useScrollableTables()
+  // 좁은 화면에서는 제목·사용자 아래 줄로 메뉴를 내리고 메뉴 항목은 여러 줄로 감싼다 (a11y.css .app-header, 요구사항 11.2).
+  // AntD의 '…' 접기(overflow)는 숨긴 항목에 aria-hidden만 붙이고 안의 링크는 Tab으로 갈 수 있게 남겨 두므로 쓰지 않는다
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Layout.Header style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
-        <Typography.Text style={{ color: '#fff', fontWeight: 600, whiteSpace: 'nowrap' }}>해양 실증데이터 플랫폼</Typography.Text>
-        <Menu theme="dark" mode="horizontal" selectedKeys={[selected]} items={menuFor(me.roles)} style={{ flex: 1 }} />
-        <Space>
-          <Typography.Text style={{ color: '#ddd' }}>{me.roles.join(', ')}</Typography.Text>
+      <Layout.Header className="app-header">
+        <Typography.Text className="app-title">해양 실증데이터 플랫폼</Typography.Text>
+        <Menu className="app-menu" theme="dark" mode="horizontal" disabledOverflow selectedKeys={[selected]} items={menuFor(me.roles)} />
+        <Space className="app-user" wrap size={[8, 0]}>
+          <Typography.Text className="app-roles">{me.roles.join(', ')}</Typography.Text>
           <Button size="small" onClick={() => void logout()}>로그아웃</Button>
         </Space>
       </Layout.Header>

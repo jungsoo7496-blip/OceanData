@@ -124,9 +124,6 @@ function groupBy<T>(xs: T[], key: (x: T) => string, name: (k: string) => string)
   return [...m.entries()].sort(([a], [b]) => name(a).localeCompare(name(b), 'ko'))
 }
 
-// 표가 비었을 때 문구: AntD 기본 흐린 글자는 대비가 모자라 보조 글자색으로 (요구사항 11.2)
-const empty = (text: string) => ({ emptyText: <Typography.Text type="secondary">{text}</Typography.Text> })
-
 function failText(e: unknown): string {
   return e instanceof ApiError ? `${explain(e.code).cause}${e.problem.detail ? ` — ${e.problem.detail}` : ''}` : String(e)
 }
@@ -351,7 +348,7 @@ export function SessionTimeline({ me }: { me: Me }) {
       <Card>
         <Tabs items={[
           { key: 'events', label: `이벤트 (${allEvents.length})`, children: (
-            <Table rowKey="event_id" size="small" scroll={{ x: 'max-content' }} dataSource={allEvents} loading={events.isLoading} pagination={{ pageSize: 20 }} locale={empty('이벤트가 없습니다')}
+            <Table rowKey="event_id" size="small" scroll={{ x: 'max-content' }} dataSource={allEvents} loading={events.isLoading} pagination={{ pageSize: 20 }} locale={{ emptyText: '이벤트가 없습니다' }}
               columns={[
                 { title: '시작', dataIndex: 'started_at', render: kst },
                 { title: '끝', dataIndex: 'ended_at', render: kst },
@@ -365,7 +362,7 @@ export function SessionTimeline({ me }: { me: Me }) {
               ]} />
           ) },
           { key: 'unknown', label: `촬영시각 미상 (${unknown.length})`, children: (
-            <Table rowKey="asset_id" size="small" scroll={{ x: 'max-content' }} dataSource={unknown} pagination={{ pageSize: 20 }} locale={empty('촬영시각 미상 자산이 없습니다')}
+            <Table rowKey="asset_id" size="small" scroll={{ x: 'max-content' }} dataSource={unknown} pagination={{ pageSize: 20 }} locale={{ emptyText: '촬영시각 미상 자산이 없습니다' }}
               columns={[
                 { title: '파일', key: 'f', render: (_, a) => <Link to={`/assets/${a.asset_id}`}>{fileOf(a)}</Link> },
                 { title: '유형·변형', key: 't', render: (_, a) => `${a.data_type} · ${a.variant}` },
@@ -378,7 +375,7 @@ export function SessionTimeline({ me }: { me: Me }) {
           { key: 'obs', label: `관측값 (${coverage.length})`, children: (
             <>
               <Table rowKey={(c) => `${c.device}|${c.metric}`} size="small" scroll={{ x: 'max-content' }} dataSource={coverage} loading={obsLoading && !coverage.length} pagination={false}
-                locale={empty('이 기간의 관측값이 없습니다')}
+                locale={{ emptyText: '이 기간의 관측값이 없습니다' }}
                 columns={[
                   { title: '장비', key: 'd', render: (_, c) => devName(c.device) },
                   { title: '항목', dataIndex: 'metric', render: (m: string) => <code>{m}</code> },
@@ -397,7 +394,7 @@ export function SessionTimeline({ me }: { me: Me }) {
           ) },
           { key: 'env', label: `환경 정보 (${env.points.length})`, children: (
             <Table rowKey={(p) => `${p.o.metric}|${p.o.station_name}|${p.t}`} size="small" scroll={{ x: 'max-content' }} dataSource={env.points} pagination={{ pageSize: 20 }}
-              locale={empty('자산에 붙은 환경 정보가 없습니다')}
+              locale={{ emptyText: '자산에 붙은 환경 정보가 없습니다' }}
               columns={[
                 { title: '관측 시각', key: 't', render: (_, p) => kst(utc(p.t)) },
                 { title: '항목', key: 'm', render: (_, p) => <code>{p.o.metric}</code> },
@@ -435,7 +432,7 @@ function OverlapModal({ event, devName, onClose }: { event: EventT; devName: (id
         </Space>
         {q.error && <Alert type="error" showIcon message={failText(q.error)} />}
         <Table rowKey={(x) => x.asset.asset_id} size="small" scroll={{ x: 'max-content' }} loading={q.isLoading} dataSource={q.data?.items ?? []} pagination={{ pageSize: 10 }}
-          locale={empty('겹치는 자산이 없습니다')}
+          locale={{ emptyText: '겹치는 자산이 없습니다' }}
           columns={[
             { title: '파일', key: 'f', render: (_, x) => <Link to={`/assets/${x.asset.asset_id}`}>{fileOf(x.asset)}</Link> },
             { title: '장비', key: 'd', render: (_, x) => devName(x.asset.source_system_id) },

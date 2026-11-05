@@ -1,8 +1,46 @@
-/* KWCAG 명도 대비 4.5:1 (09번 요구사항 11.2): AntD 기본 색 태그 글자를 진하게.
-   AntD 태그 스타일은 처음 그릴 때 이 파일보다 뒤에 들어오므로 .ant-tag를 붙여 우선순위를 높인다 */
+/* 접근성 보정 (09번 요구사항 11.2). 검사: npm run test:a11y (e2e/a11y-mock.mjs)
+   AntD 스타일(실행 중에 head에 넣는다)과의 순서에 기대지 않도록 선택자 우선순위로 이긴다 */
+
+/* KWCAG 명도 대비 4.5:1: AntD 기본 색 태그 글자를 진하게 */
 .ant-tag.ant-tag-green, .ant-tag.ant-tag-success { color: #135200; }
 .ant-tag.ant-tag-orange, .ant-tag.ant-tag-warning { color: #873800; }
 .ant-tag.ant-tag-blue, .ant-tag.ant-tag-processing { color: #003a8c; }
 .ant-tag.ant-tag-red, .ant-tag.ant-tag-error { color: #820014; }
 .ant-tag.ant-tag-purple { color: #22075e; }
 .ant-tag.ant-tag-default { color: rgba(0, 0, 0, 0.78); }
+
+/* Uppy 대시보드 안내 문구: 기본 #757575 / #f4f4f4 바탕은 4.18:1 */
+.uppy-Dashboard .uppy-Dashboard-note { color: rgba(0, 0, 0, 0.68); }
+
+/* 표가 비었을 때 문구: AntD는 흐린 글자(colorTextDisabled, 대비 약 1.6:1)로 그린다 → 보조 글자색 (대비 4.5:1 이상).
+   AntD 규칙(.ant-table-wrapper .ant-table-tbody > tr.ant-table-placeholder)보다 td만큼 우선한다 */
+.ant-table-wrapper .ant-table-tbody > tr.ant-table-placeholder > td { color: rgba(0, 0, 0, 0.68); }
+
+/* 링크 키보드 초점 (KWCAG 초점 표시): AntD 전역 링크 스타일 :where(.css-…) a:focus { outline: 0 }이 윤곽선을 없앤다.
+   키보드 초점(:focus-visible)에만 다시 그린다. 우선순위 (0,1,2)는 AntD (0,1,1)보다 높고, 타임라인 표시처럼
+   클래스로 따로 그리는 초점(.tl-mark:focus-visible, (0,2,0))보다는 낮다 */
+html a:focus-visible { outline: 2px solid #0958d9; outline-offset: 2px; border-radius: 2px; }
+html .ant-layout-header a:focus-visible { outline-color: #fff; } /* 어두운 머리글 메뉴 */
+
+/* 문장 속 링크는 색만으로 구분하지 않는다 (밑줄, WCAG 1.4.1). 표 칸에 홀로 있는 링크는 해당 없음 */
+a.inline-link, a.inline-link:hover { text-decoration: underline; }
+
+/* 휴대폰 폭에서 문서가 가로로 넓어지지 않게 (KWCAG 재배치, WCAG 1.4.10 — 390px 폭 검사) */
+/* 브라우저 기본 body 여백(8px): 대화상자가 열릴 때 AntD 스크롤 잠금이 body에 width: calc(100% - 스크롤바)를 주면
+   여백만큼 문서가 화면보다 넓어진다 */
+body { margin: 0; }
+
+/* 머리글: 메뉴 항목이 한 줄에 다 들어가지 않으면 다음 줄로 감싼다 (Menu disabledOverflow — App.tsx 주석 참고).
+   768px 미만은 제목·사용자 한 줄, 메뉴는 그 아래 전체 폭 */
+.ant-layout-header.app-header { display: flex; flex-wrap: wrap; align-items: center; column-gap: 24px; height: auto; min-height: 64px; }
+.app-header .app-title { color: #fff; font-weight: 600; white-space: nowrap; }
+.app-header .app-menu.ant-menu { flex: 1 1 0; min-width: 0; flex-wrap: wrap; }
+.app-header .app-roles { color: #ddd; }
+@media (max-width: 767.98px) {
+  .ant-layout-header.app-header { padding: 8px 16px 0; line-height: 32px; column-gap: 12px; }
+  .app-header .app-title { flex: 1 1 auto; white-space: normal; }
+  .app-header .app-menu.ant-menu { order: 3; flex: 1 0 100%; line-height: 46px; }
+}
+
+/* 표: 열이 많아 좁은 화면에 다 들어가지 않으면 문서 대신 표 안에서 가로로 스크롤한다 (자료표는 WCAG 1.4.10 예외) */
+.ant-table-wrapper .ant-table-content { overflow-x: auto; }

@@ -155,7 +155,8 @@ export function SharingConsole() {
             { title: '버전 (눌러서 계보)', key: 'v', render: (_, d) => d.versions.map((v) => (
               v.status && v.status !== 'READY'
                 ? <Tag key={v.dataset_version_id} color={v.status === 'FAILED' ? 'red' : 'blue'} title={v.build_error ?? ''}>{v.version} · {v.status === 'FAILED' ? '만들기 실패' : '만드는 중'} · {v.item_count}개</Tag>
-                : <Button key={v.dataset_version_id} size="small" type="link" aria-label={`${v.version} 계보 보기`} onClick={() => setLineageOf({ ds: d.dataset_id, vid: v.dataset_version_id })}>
+                : <Button key={v.dataset_version_id} size="small" type="link" aria-label={`${v.version} · ${SCOPE_LABEL[v.scope]} · ${v.item_count}개 계보 보기`}
+                    onClick={() => setLineageOf({ ds: d.dataset_id, vid: v.dataset_version_id })}>
                     {v.version} · {SCOPE_LABEL[v.scope]} · {v.item_count}개
                   </Button>)) },
             { title: '게시', dataIndex: 'published', render: (p: boolean) => (p ? <Tag color="green">게시</Tag> : '-') },
@@ -278,7 +279,7 @@ export function Catalog() {
         </Form>
       </Modal>
       <Modal open={!!files} title="다운로드 (링크는 몇 분 뒤 만료)" onCancel={() => setFiles(null)} footer={null}>
-        {files?.map((f) => <div key={f.path}><a href={f.url} target="_blank" rel="noreferrer">{f.path}</a> ({bytes(f.byte_size)})</div>)}
+        {files?.map((f) => <div key={f.path}><a className="inline-link" href={f.url} target="_blank" rel="noreferrer">{f.path}</a> ({bytes(f.byte_size)})</div>)}
       </Modal>
     </Space>
   )

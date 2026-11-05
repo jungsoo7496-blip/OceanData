@@ -1,0 +1,8 @@
+{
+  "//": "접근성 검사 합성 응답(fixtures/api.mjs)을 계약 생성 타입으로 검사한다 (npm run typecheck). 실행 스크립트는 Node 타입이 없어 넣지 않는다",
+  "compilerOptions": {
+    "target": "ES2022", "lib": ["ES2022", "DOM"], "module": "ESNext", "moduleResolution": "bundler",
+    "allowJs": true, "checkJs": true, "noEmit": true, "strict": true, "skipLibCheck": true, "isolatedModules": true
+  },
+  "include": ["fixtures/*.mjs"]
+}

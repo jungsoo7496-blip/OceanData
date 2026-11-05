@@ -85,6 +85,12 @@ jobs:
       - run: npm run typecheck
       - run: npm run check:api  # 계약 → TS 타입 재생성 일치 (09번 작업 16)
       - run: npm run build
+      - name: 접근성 검사용 Chromium (package-lock에 고정된 playwright-core 판, 헤드리스 실행만 하므로 headless shell만)
+        run: node node_modules/playwright-core/cli.js install --with-deps --only-shell chromium
+      # 09번 작업 15 (요구사항 11.2): 빌드 결과를 계약 모양 합성 /v1 응답으로 띄워 역할별 화면·대화상자를 검사한다.
+      # axe WCAG 2.0·2.1 A·AA serious·critical 0건, 390px 폭 가로 넘침 없음, 링크 초점 표시 (web/e2e/README.md)
+      - name: 접근성 검사
+        run: npm run test:a11y
       - run: npm audit --omit=dev --audit-level=high
 
   agent:

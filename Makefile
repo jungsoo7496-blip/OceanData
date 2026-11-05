@@ -10,7 +10,7 @@ TEST_DATABASE_URL ?= postgresql+pg8000://marine_owner:change-me-owner@127.0.0.1:
         lint typecheck security license-check secrets-check web-check contracts-check traceability \
         traceability-write ci agent-build agent-test bench verify-integrity sample-observations \
         release-gate release-notes sbom vuln-scan loadtest backup restore-test test-web-e2e agent-generate agent-generate-check \
-        agent-lint
+        agent-lint web-a11y
 
 venv:
 	cd backend && uv venv -q .venv && uv pip install -q -p .venv -e ".[dev]" -r ../tools/requirements.txt
@@ -87,6 +87,11 @@ secrets-check:
 
 web-check:
 	cd web && npm run -s lint && npm run -s typecheck && npm run -s check:api
+
+# 09번 작업 15: 빌드한 웹을 계약 모양 합성 /v1 응답으로 띄워 역할별 화면을 axe(WCAG 2.0·2.1 A·AA, serious·critical 0)·
+# 휴대폰 폭(390px 가로 넘침 없음)·링크 초점 표시로 검사한다. 실제 스택 불필요. 브라우저 준비는 web/e2e/README.md
+web-a11y:
+	cd web && npm run -s build && npm run -s test:a11y
 
 # T02-g: 전용 DB·모의 S3·실제 브라우저를 만들고 탭 종료 후 multipart 재개를 확인한다.
 test-web-e2e:

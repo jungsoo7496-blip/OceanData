@@ -4,6 +4,9 @@
 React 18 + TS + Vite, Ant Design 5(ko_KR, 대비 강화 테마), TanStack Query, react-router, oidc-client-ts(PKCE), Uppy(@uppy/aws-s3), hash-wasm. 의존성 근거 ADR-0016.
 - 같은 출처: nginx(`web/nginx.conf`)와 Vite 개발 서버가 `/v1`을 API로 프록시한다. 저장소 직송은 사전 서명 URL(브라우저 → S3, 운영 스토리지 CORS 설정 필요).
 - `src/lib/api.ts`(Bearer, problem+json → ApiError), `src/lib/problems.ts`(오류 코드별 원인·다음 행동), `src/lib/format.ts`(KST·L0~L4 라벨).
+- 접근성(요구사항 11.2): `src/main.tsx` 테마 대비(파랑·마우스 올림·오류 빨강·보조 글자·안내 문구), `src/a11y.css`(대비, 링크 키보드 초점, 문장 속 링크 밑줄,
+  재배치: body 여백 0·머리글 줄바꿈·표는 표 안에서 가로 스크롤). 머리글 메뉴는 넘치면 줄바꿈(`Menu disabledOverflow`) — AntD '…' 접기는 숨긴 링크를 Tab에 남긴다.
+  `src/lib/scrollRegions.ts`: 실제로 넘치는 표 영역에만 tabindex=0·role=region·이름(카드·탭·대화상자 제목)을 붙여 키보드로 스크롤하게 한다.
 
 ## 화면
 | 경로 | 역할 | 내용 | 요구사항 |
@@ -29,3 +32,9 @@ project_id(자산 소속)는 바꾸지 않는다. 바뀐 항목의 전후 값은
 
 ## 시험
 `web/e2e/portal.mjs`: 실제 스택에서 Keycloak 로그인 → 대시보드 → 업로드 → 재선택(이미 등록) → 자산 목록, axe(WCAG 2 A·AA) critical 0건 확인. 2026-11-04 통과 (프록시 재생 포함 수동 확인).
+
+`web/e2e/a11y-mock.mjs` (`npm run test:a11y`, `make web-a11y`, CI web 작업 — ADR-0039): 실제 스택 없이 빌드한 웹을 띄우고 OIDC 사용자는 세션 저장소,
+`/v1`은 계약 모양 합성 응답(`web/e2e/fixtures/api.mjs`, 계약 생성 타입으로 typecheck)으로 흉내 낸다. 로그인 전·역할 6개의 메뉴 화면·상세 화면·열린 대화상자
+42개 상태를 데스크톱(1280px)·휴대폰(390px)에서 검사한다. 실패 기준: axe WCAG 2.0·2.1 A·AA 영향도 serious·critical 위반(moderate·minor는 출력만),
+휴대폰 폭 가로 넘침(scrollWidth > innerWidth + 1, 대화상자가 화면 밖), Tab 링크 초점 표시 없음, 화면 확인 문구 없음·페이지 예외·콘솔 오류·합성 응답 없는 호출·외부 요청.
+외부 라이브러리 예외는 노드 단위 2건만 (rc-select 바깥 div의 aria-required — 입력 쪽 aria-required는 따로 확인, Uppy inline 대시보드의 aria-modal="false"). 2026-11-05 84개 통과.

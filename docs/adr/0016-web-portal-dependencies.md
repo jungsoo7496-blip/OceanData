@@ -19,3 +19,4 @@ OSS-CANDIDATES의 채택 항목(Ant Design, TanStack Query, Uppy `@uppy/aws-s3`,
 
 ## 알려진 문제
 - Uppy 대시보드 내부 요소가 axe `aria-allowed-attr`(critical)에 걸린다. 외부 라이브러리 문제라 `web/e2e/portal.mjs`에서 `.uppy-Dashboard`를 검사에서 빼고 여기 기록한다. Uppy 판올림 때 다시 확인한다.
+  - 2026-11-05: Uppy Dashboard 4.1.3에서 남은 것은 inline 대시보드 안쪽 div의 `aria-modal="false"`뿐이다. CI 접근성 검사(`web/e2e/a11y-mock.mjs`)는 그 노드만 빼고, 안내 문구 대비는 CSS로 고쳤다 (ADR-0039).

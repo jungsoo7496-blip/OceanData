@@ -8,9 +8,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "typecheck": "tsc -b --noEmit",
+    "typecheck": "tsc -b --noEmit && tsc -p e2e",
     "gen:api": "node scripts/api-types.mjs",
-    "check:api": "node scripts/api-types.mjs --check"
+    "check:api": "node scripts/api-types.mjs --check",
+    "test:a11y": "node e2e/a11y-mock.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.2",
