@@ -48,6 +48,9 @@ def main(argv: list[str] | None = None) -> int:
     hw.add_argument("--status", default="WARNING", choices=["OK", "WARNING", "CRITICAL"])
     hw.add_argument("--value", type=float, default=None)
     hw.add_argument("--unit", default=None)
+    op_ = sub.add_parser("org-policy", help="기관 정책 변경 (운영자, 감사). 지금은 악성코드 검사 요구 여부 (04번 4.7)")
+    op_.add_argument("organization_id")
+    op_.add_argument("--malware-scan", choices=["on", "off"], required=True)
     sub.add_parser("backup", help="계층형 백업 한 회차 (08번 요구사항 6, ADR-0021)")
     rt = sub.add_parser("restore-test", help="최근 백업을 임시 DB·위치에 복원해 행 수·해시 대조 (T10-a)")
     rt.add_argument("--run", default=None, help="백업 회차 ID (기본: 최근 성공)")
@@ -100,6 +103,21 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "set-mapping":
         return _set_mapping(c, args.device_id, args.mapping_file)
+    if args.cmd == "org-policy":
+        from app.db.models import Organization
+
+        with c.sessionmaker.begin() as db:
+            org = db.get(Organization, args.organization_id)
+            if org is None:
+                print(f"기관이 없습니다: {args.organization_id}", file=sys.stderr)
+                return 1
+            before, org.malware_scan_required = org.malware_scan_required, args.malware_scan == "on"
+        c.audit.record("ORG_POLICY_CHANGED", actor_kind="SYSTEM", actor_id="cli", organization_id=args.organization_id,
+                       target_type="Organization", target_id=args.organization_id,
+                       details={"malware_scan_required": {"from": before, "to": args.malware_scan == "on"}})
+        print(f"{args.organization_id}: 악성코드 검사 {'요구' if args.malware_scan == 'on' else '안 함'}"
+              f" (검사기 MALWARE_SCANNER={settings.malware_scanner})")
+        return 0
     if args.cmd == "backup":
         import json
 

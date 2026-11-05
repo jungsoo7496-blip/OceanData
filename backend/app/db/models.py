@@ -34,6 +34,8 @@ class Organization(Base):
     name: Mapped[str] = mapped_column(String(200))
     org_type: Mapped[str] = mapped_column(String(20))
     status: Mapped[str] = mapped_column(String(20), server_default="ACTIVE")
+    # 기관 정책: 업로드 무결성 검증 때 악성코드 검사를 요구하는가 (04번 요구사항 4.7)
+    malware_scan_required: Mapped[bool] = mapped_column(Boolean, server_default="false")
     created_at: Mapped[datetime] = mapped_column(TS)
 
 

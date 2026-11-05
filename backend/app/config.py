@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     job_lease_reap_interval_s: int = 60
     integrity_sample_size: int = 20
 
+    # 악성코드 검사 (04번 요구사항 4.7, ADR-0031). 기관 정책(organizations.malware_scan_required)이 켜진 기관만 검사
+    malware_scanner: str = "none"  # none | mock-eicar (제품 결정 후 어댑터 추가)
+
     # 저장·보존 (08번)
     backup_retention_days: int = 90
     # 계층형 백업 (08번 요구사항 6·7, ADR-0021). 대상 S3를 비우면 같은 S3의 backup_bucket (개발용)

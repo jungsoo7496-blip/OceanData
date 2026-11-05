@@ -44,3 +44,8 @@ PATCH /v1/assets/{id} {session_id} → UNKNOWN_SESSION 격리 자산 재검증 (
   `deliver_due()`(SKIP LOCKED, HMAC-SHA256 `timestamp.body`, X-Event-Id, 리디렉션 안 따름), 지수 백오프, `WEBHOOK_MAX_ATTEMPTS`번 실패 시 구독 끔 +
   남은 전송 취소 + 기관 ORG_ADMIN 메일.
 
+## 악성코드 검사 (요구사항 4.7, ADR-0031)
+- `ports/malware.py` 스트리밍 포트, `adapters/malware_scanners.py`(`MALWARE_SCANNER=none | mock-eicar`). 기관 정책 `organizations.malware_scan_required`(0016),
+  운영자 명령 `org-policy`. 무결성 검증이 해시를 계산하며 같은 조각을 검사기에 넘기고, 의심이면 QUARANTINED(MALWARE_SUSPECTED).
+  정책은 켜졌는데 검사기가 없으면 상태 전이 전에 멈춰 재시도한다. 실제 검사기 제품은 결정 대기.
+

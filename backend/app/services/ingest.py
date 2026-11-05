@@ -23,6 +23,7 @@ from app.db.models import (
     AssetLineage,
     Device,
     IntegrityLogEntry,
+    Organization,
     OrgQuota,
     Project,
     SessionDevice,
@@ -513,6 +514,15 @@ class IntegrityVerifier:
                 return asset.ingest_status  # 이미 처리됨 (작업 재실행)
             # 규칙 오류로 RECEIVED 자산이 VALIDATING에 남지 않도록 전이 전에 한 버전을 고정한다.
             rules = load_rules(db)
+            # 기관 정책이 악성코드 검사를 요구하면 검사기가 있어야 한다. 없으면 전이 전에 멈춰 다시 시도한다 (4.7)
+            org = db.get(Organization, asset.organization_id)
+            scanner = None
+            if org is not None and org.malware_scan_required:
+                from app.adapters.malware_scanners import ScannerUnavailable, scanner_for
+
+                scanner = scanner_for(self.c.settings)
+                if scanner is None:
+                    raise ScannerUnavailable("기관 정책이 악성코드 검사를 요구하지만 MALWARE_SCANNER가 none입니다")
             if asset.ingest_status == "RECEIVED":
                 asset.ingest_status = states.transition("ingest_status", "RECEIVED", "VALIDATING", {"SERVICE"})
             bucket, key = self.c.settings.buckets[asset.storage_zone or "RAW"], asset.storage_key or ""
@@ -522,17 +532,27 @@ class IntegrityVerifier:
         h = hashlib.sha256()
         size = 0
         head = b""
+        scan = scanner.start() if scanner is not None else None
         for chunk in self.c.storage.iter_object(bucket, key):
             if len(head) < 4096:
                 head += chunk[:4096 - len(head)]
             h.update(chunk)
             size += len(chunk)
+            if scan is not None:
+                scan.feed(chunk)
         digest = h.hexdigest()
+        scanned = scan.finish() if scan is not None else None
         with self.c.sessionmaker.begin() as db:
             asset = db.execute(select(Asset).where(Asset.asset_id == asset_id).with_for_update()).scalar_one()
             reason = None
+            if scanned is not None:  # 검사 기록 (엔진·결과만, 내용은 남기지 않는다)
+                asset.ingest_context = {**(asset.ingest_context or {}), "malware_scan": {
+                    "engine": scanned.engine, "result": "CLEAN" if scanned.clean else "SUSPECTED",
+                    "signature": scanned.signature, "scanned_at": iso(self.c.clock.now())}}
             if digest != asset.checksum_sha256 or size != asset.byte_size:
                 reason = "CHECKSUM_MISMATCH"
+            elif scanned is not None and not scanned.clean:
+                reason = "MALWARE_SUSPECTED"
             else:
                 detected = sniff(head)
                 if detected is None:
