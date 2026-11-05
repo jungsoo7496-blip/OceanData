@@ -1685,6 +1685,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/assets/{asset_id}/clips": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                asset_id: components["parameters"]["AssetId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * 이 영상에서 요청한 구간 클립 작업과 결과 (자기 기관 ORG 역할, 최근 요청부터)
+         * @description 09번 요구사항 7.2. DONE이면 clip_asset_id가 결과 파생 자산이다(계보 relation=CLIP, provenance.clip_range_s).
+         *     결과 자산이 그 뒤 삭제됐으면 clip_asset_id가 없다. FAILED면 error_code에 원인 코드가 있다.
+         */
+        get: operations["listAssetClips"];
+        put?: never;
+        /**
+         * 영상의 구간을 잘라 파생 자산(CLIP)으로 만드는 작업 등록 (자기 기관 ORG 역할)
+         * @description 09번 요구사항 7.2. 원 영상(ORIGINAL·CLIP, 바이너리 있음, REGISTERED·PROXIED·READY_PRIVATE)에서 [start_s, end_s] 구간을
+         *     작업 큐에서 다시 인코딩해 프레임 단위로 정확히 자른다. 결과는 원 영상의 파생 자산(variant=CLIP, PRIVATE)으로 계보에 연결되고
+         *     촬영 시각은 원 영상 시작 + 구간으로 옮긴다(원 영상 촬영 시각이 미상이면 미상).
+         *     영상 길이(video_ext.duration_s)를 아직 모르면 409, 구간이 길이를 넘거나 설정 최대 길이를 넘으면 400.
+         *     같은 구간의 작업이 대기·실행 중이면 새로 만들지 않고 그 작업을 돌려준다. 바이너리는 자기 기관만 다룬다(운영자·관리기관 불가).
+         */
+        post: operations["createAssetClip"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/assets/{asset_id}/legal-hold": {
         parameters: {
             query?: never;
@@ -3312,6 +3343,31 @@ export interface components {
             ancestors: components["schemas"]["LineageEdge"][];
             descendants: components["schemas"]["LineageEdge"][];
         };
+        ClipRequest: {
+            /** @description 원 영상 시작부터의 초 */
+            start_s: number;
+            /** @description 원 영상 시작부터의 초. start_s보다 크고 영상 길이 이하 */
+            end_s: number;
+            /** @description 선택. 감사 로그(CLIP_EXPORT_REQUESTED)에 남는다 */
+            reason?: string;
+        };
+        ClipJob: {
+            job_id: components["schemas"]["job_id"];
+            /** @description 잘라낸 원 영상 */
+            asset_id: components["schemas"]["asset_id"];
+            start_s: number;
+            end_s: number;
+            /**
+             * @description 작업 큐 상태 (FAILED는 재시도를 다 썼거나 다시 해도 같은 실패)
+             * @enum {unknown}
+             */
+            status: "QUEUED" | "RUNNING" | "DONE" | "FAILED";
+            requested_at: components["schemas"]["utc_datetime"];
+            /** @description DONE일 때 결과 파생 자산 (삭제됐으면 없음) */
+            clip_asset_id?: components["schemas"]["asset_id"];
+            /** @description FAILED일 때 원인 코드 (예 SOURCE_UNAVAILABLE */
+            error_code?: string;
+        };
         ShareRequestCreate: {
             target_scope: components["schemas"]["sharing_scope"];
             reason: string;
@@ -4070,6 +4126,8 @@ export interface components {
             parent_asset_ids?: components["schemas"]["asset_id"][];
             /** @description PROXY, THUMBNAIL, CLIP, DEID, LABEL 등 */
             transform?: string;
+            /** @description 구간 클립(transform=CLIP, 09번 요구사항 7.2)이면 원 영상 기준 [시작, 끝] 초 */
+            clip_range_s?: number[];
             tool_version?: string;
             model_ref?: string;
             job_id?: components["schemas"]["job_id"];
@@ -7781,6 +7839,71 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listAssetClips: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                asset_id: components["parameters"]["AssetId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 클립 작업 목록 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["ClipJob"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createAssetClip: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                asset_id: components["parameters"]["AssetId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "start_s": 12.5,
+                 *       "end_s": 42,
+                 *       "reason": "접근 선박 구간 (합성 예시)"
+                 *     }
+                 */
+                "application/json": components["schemas"]["ClipRequest"];
+            };
+        };
+        responses: {
+            /** @description 작업 등록됨 (또는 같은 구간의 진행 중 작업) */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClipJob"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

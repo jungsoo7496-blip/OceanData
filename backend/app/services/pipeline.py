@@ -247,10 +247,13 @@ def _sha256_file(path: str) -> tuple[str, int]:
 
 
 def create_derived(c: Container, db: Session, parent: Asset, path: str, *, variant: str, mime: str,
-                   relation: str, tool: str, job_id: str | None) -> Asset:
+                   relation: str, tool: str, job_id: str | None, provenance_extra: dict[str, Any] | None = None,
+                   overrides: dict[str, Any] | None = None) -> Asset:
     """원 자산에서 만든 파생 자산을 저장하고 계보·무결성 로그를 남긴다 (요구사항 4.4, 5.1).
 
     파생본은 원 자산의 data_role·sensitivity_class를 물려받고 PRIVATE으로 시작한다 (domain.md 3·4장).
+    provenance_extra는 출처 정보에 더하고(예: 구간 클립의 clip_range_s), overrides는 물려받은 값을 바꾼다
+    (예: 구간 클립의 촬영 시각·video_ext). 같은 결과가 이미 있으면 둘 다 적용하지 않고 기존 자산을 돌려준다.
     """
     sha, size = _sha256_file(path)
     now = c.clock.now()
@@ -274,8 +277,10 @@ def create_derived(c: Container, db: Session, parent: Asset, path: str, *, varia
         # 확인 필요: domain.md 5장 표에 파이프라인이 파생 자산을 만드는 행((없음) → READY_PRIVATE, SERVICE)이 없다
         ingest_status="READY_PRIVATE",
         provenance={"ingest_channel": "PIPELINE", "parent_asset_ids": [parent.asset_id], "transform": relation,
-                    "tool_version": tool, **({"job_id": job_id} if job_id else {})},
+                    "tool_version": tool, **({"job_id": job_id} if job_id else {}), **(provenance_extra or {})},
         ext={}, created_at=now, updated_at=now)
+    for k, v in (overrides or {}).items():
+        setattr(child, k, v)
     child.storage_zone = zone_for(variant)
     child.storage_key = object_key(child)
     from app.services.retention import apply_retention

@@ -590,6 +590,16 @@
           "type": "string",
           "description": "PROXY, THUMBNAIL, CLIP, DEID, LABEL 등"
         },
+        "clip_range_s": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "구간 클립(transform=CLIP, 09번 요구사항 7.2)이면 원 영상 기준 [시작, 끝] 초"
+        },
         "tool_version": {
           "type": "string"
         },

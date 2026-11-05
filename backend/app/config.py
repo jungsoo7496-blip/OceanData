@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     proxy_hw_encoder: str = "h264_nvenc"
     thumbnail_interval_s: float = 10.0
     thumbnail_max_frames: int = 20
+    # 구간 클립 내보내기 (09번 요구사항 7.2): 프레임 단위로 정확히 자르려고 libx264로 다시 인코딩한다
+    clip_max_s: float = 3600.0
+    clip_crf: int = 18  # 낮을수록 고화질·큰 파일 (18 ≈ 눈으로 구별하기 어려운 수준)
     worker_resource_classes: CsvList = Field(default_factory=lambda: ["CPU"])
     job_lease_reap_interval_s: int = 60
     integrity_sample_size: int = 20

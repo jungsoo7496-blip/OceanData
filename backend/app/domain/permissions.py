@@ -61,6 +61,7 @@ PERMISSIONS: dict[str, Rule] = {
     "asset:write": Rule(PROVIDER),
     # 운영자는 유효한 긴급 열람 승인이 있을 때만 (판단은 download-url 처리기, 02번 요구사항 8). 관리기관 열람자는 불가
     "asset:download": Rule(PROVIDER | {"PLATFORM_OPERATOR"}),
+    "asset:clip": Rule(PROVIDER),  # 09번 요구사항 7.2: 자기 기관 영상의 구간 클립 (바이너리는 자기 기관만)
     "break_glass:read": Rule(frozenset({"ORG_ADMIN", "PLATFORM_OPERATOR"})),
     "break_glass:request": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),
     "break_glass:decide": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),

@@ -22,7 +22,7 @@ from app.config import get_settings
 from app.container import Container, build_container
 from app.logging_setup import configure_logging
 from app.metrics import JOB_DURATION, JOB_FAILURES, JOBS_DONE, JOBS_QUEUED, WORKER_REGISTRY
-from app.ports.queue import Job
+from app.ports.queue import Job, PermanentJobError
 
 log = logging.getLogger("worker")
 
@@ -171,6 +171,15 @@ def _dataset_build_failed(c: Container, job: Job, error: str) -> None:
 
 
 register("dataset_build", _dataset_build, _dataset_build_failed)  # 13번 작업 32
+
+
+def _clip_export(c: Container, job: Job) -> Any:
+    from app.services import clips
+
+    return clips.make_clip(c, job.job_id, job.payload)
+
+
+register("clip_export", _clip_export)  # 09번 구간 클립 내보내기 (요구사항 7.2)
 register("collect_source", _collect_source)  # 12번 (실패는 큐의 지수 백오프)
 register("env_join", _env_join)  # 12번  # 14번 (PROCESSING_STEPS에 TAG가 있을 때 영상 처리 뒤)
 
@@ -184,12 +193,15 @@ def run_once(c: Container, worker_id: str) -> bool:
     start = time.perf_counter()
     try:
         handler.fn(c, job)
-    except Exception as exc:  # noqa: BLE001 - 모든 실패는 재시도 대상, 최대 시도 후 FAILED
-        code = exc.code if isinstance(exc, RetryableError) else "INTERNAL"
-        delay = exc.retry_in_s if isinstance(exc, RetryableError) and exc.retry_in_s else backoff_s(job.attempts)
+    except Exception as exc:  # noqa: BLE001 - 재시도 대상, 최대 시도 후 FAILED (PermanentJobError는 바로 FAILED)
+        known = isinstance(exc, (RetryableError, PermanentJobError))
+        code = exc.code if isinstance(exc, (RetryableError, PermanentJobError)) else "INTERNAL"
+        delay: float | None = None
+        if not isinstance(exc, PermanentJobError):
+            delay = exc.retry_in_s if isinstance(exc, RetryableError) and exc.retry_in_s else backoff_s(job.attempts)
         JOB_FAILURES.labels(job.job_type, code).inc()
         retried = c.queue.fail(job.job_id, code, delay)
-        if isinstance(exc, RetryableError):
+        if known:
             log.warning("job_retry" if retried else "job_failed", extra={"job_id": job.job_id,
                                                                          "job_type": job.job_type, "error_code": code})
         else:

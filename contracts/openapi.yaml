@@ -2824,6 +2824,61 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
 
+  /v1/assets/{asset_id}/clips:
+    parameters:
+      - {$ref: '#/components/parameters/AssetId'}
+    get:
+      tags: [assets]
+      operationId: listAssetClips
+      summary: 이 영상에서 요청한 구간 클립 작업과 결과 (자기 기관 ORG 역할, 최근 요청부터)
+      description: |
+        09번 요구사항 7.2. DONE이면 clip_asset_id가 결과 파생 자산이다(계보 relation=CLIP, provenance.clip_range_s).
+        결과 자산이 그 뒤 삭제됐으면 clip_asset_id가 없다. FAILED면 error_code에 원인 코드가 있다.
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 클립 작업 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/ClipJob'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    post:
+      tags: [assets]
+      operationId: createAssetClip
+      summary: 영상의 구간을 잘라 파생 자산(CLIP)으로 만드는 작업 등록 (자기 기관 ORG 역할)
+      description: |
+        09번 요구사항 7.2. 원 영상(ORIGINAL·CLIP, 바이너리 있음, REGISTERED·PROXIED·READY_PRIVATE)에서 [start_s, end_s] 구간을
+        작업 큐에서 다시 인코딩해 프레임 단위로 정확히 자른다. 결과는 원 영상의 파생 자산(variant=CLIP, PRIVATE)으로 계보에 연결되고
+        촬영 시각은 원 영상 시작 + 구간으로 옮긴다(원 영상 촬영 시각이 미상이면 미상).
+        영상 길이(video_ext.duration_s)를 아직 모르면 409, 구간이 길이를 넘거나 설정 최대 길이를 넘으면 400.
+        같은 구간의 작업이 대기·실행 중이면 새로 만들지 않고 그 작업을 돌려준다. 바이너리는 자기 기관만 다룬다(운영자·관리기관 불가).
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ClipRequest'}
+            example: {start_s: 12.5, end_s: 42.0, reason: 접근 선박 구간 (합성 예시)}
+      responses:
+        '202':
+          description: 작업 등록됨 (또는 같은 구간의 진행 중 작업)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ClipJob'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+
   /v1/assets/{asset_id}/legal-hold:
     parameters:
       - {$ref: '#/components/parameters/AssetId'}
@@ -5245,6 +5300,28 @@ components:
         asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
         ancestors: {type: array, items: {$ref: '#/components/schemas/LineageEdge'}}
         descendants: {type: array, items: {$ref: '#/components/schemas/LineageEdge'}}
+
+    ClipRequest:
+      type: object
+      additionalProperties: false
+      required: [start_s, end_s]
+      properties:
+        start_s: {type: number, minimum: 0, description: 원 영상 시작부터의 초}
+        end_s: {type: number, exclusiveMinimum: 0, description: 원 영상 시작부터의 초. start_s보다 크고 영상 길이 이하}
+        reason: {type: string, minLength: 2, maxLength: 500, description: 선택. 감사 로그(CLIP_EXPORT_REQUESTED)에 남는다}
+
+    ClipJob:
+      type: object
+      required: [job_id, asset_id, start_s, end_s, status, requested_at]
+      properties:
+        job_id: {$ref: './schemas/common.schema.json#/$defs/job_id'}
+        asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id', description: 잘라낸 원 영상}
+        start_s: {type: number, minimum: 0}
+        end_s: {type: number, exclusiveMinimum: 0}
+        status: {enum: [QUEUED, RUNNING, DONE, FAILED], description: 작업 큐 상태 (FAILED는 재시도를 다 썼거나 다시 해도 같은 실패)}
+        requested_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        clip_asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id', description: DONE일 때 결과 파생 자산 (삭제됐으면 없음)}
+        error_code: {type: string, maxLength: 64, description: FAILED일 때 원인 코드 (예 SOURCE_UNAVAILABLE, CLIP_ENCODE_FAILED)}
 
     ShareRequestCreate:
       type: object

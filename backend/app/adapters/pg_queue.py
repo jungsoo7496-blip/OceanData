@@ -16,7 +16,7 @@ from sqlalchemy.engine import Engine
 
 from app.domain.ids import new_id
 from app.ports.clock import ClockPort
-from app.ports.queue import Job
+from app.ports.queue import Job, JobInfo
 
 DEFAULT_POLICY = {"priority": 0, "resource_class": "CPU", "gpu_fallback": "CPU", "max_attempts": 5, "lease_s": 600}
 
@@ -135,3 +135,16 @@ class PgQueue:
                 text("SELECT job_type, count(*) FROM jobs WHERE status='QUEUED' GROUP BY job_type")
             ).all()
         return {r[0]: int(r[1]) for r in rows}
+
+    def jobs_for_asset(self, job_type: str, asset_id: str, limit: int = 100) -> list[JobInfo]:
+        """한 자산에 걸린 작업을 최근 것부터 (예: 구간 클립 진행 상황, 09번 요구사항 7.2)."""
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text("""SELECT job_id, job_type, status, payload, attempts, last_error_code, created_at, updated_at
+                        FROM jobs WHERE job_type = :t AND asset_id = :a
+                        ORDER BY created_at DESC, job_id DESC LIMIT :n"""),
+                {"t": job_type, "a": asset_id, "n": limit},
+            ).mappings().all()
+        return [JobInfo(**{**dict(r), "attempts": int(r["attempts"]),
+                           "payload": r["payload"] if isinstance(r["payload"], dict) else json.loads(r["payload"])})
+                for r in rows]

@@ -216,6 +216,45 @@ def reprocess_asset(asset_id: str, body: ReprocessRequest, request: Request, db:
     return {"asset_id": a.asset_id, "job_ids": [job_id]}
 
 
+class ClipRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    start_s: float = Field(ge=0, allow_inf_nan=False)
+    end_s: float = Field(gt=0, allow_inf_nan=False)
+    reason: str | None = Field(default=None, min_length=2, max_length=500)
+
+
+def _own_binary(a: Asset, p: Principal) -> None:
+    if a.organization_id != p.organization_id:  # 바이너리는 자기 기관만 (domain.md 2장)
+        raise ProblemError("FORBIDDEN", detail="다른 기관 자산의 영상은 자를 수 없습니다")
+
+
+@router.get("/v1/assets/{asset_id}/clips")
+def list_asset_clips(asset_id: str, request: Request, db: Session = Depends(get_db), c: Container = Depends(container),
+                     p: Principal = Depends(require("asset:clip"))) -> dict:
+    """이 영상의 구간 클립 작업과 결과 (09번 요구사항 7.2)."""
+    from app.services import clips
+
+    a = load_scoped(db, c, request, Asset, asset_id, p)
+    _own_binary(a, p)
+    return {"items": clips.list_clips(c, db, a)}
+
+
+@router.post("/v1/assets/{asset_id}/clips", status_code=202)
+def create_asset_clip(asset_id: str, body: ClipRequest, request: Request, db: Session = Depends(get_db),
+                      c: Container = Depends(container), p: Principal = Depends(require("asset:clip"))) -> dict:
+    """구간 클립 작업 등록 (09번 요구사항 7.2). 결과는 작업 큐가 파생 자산(CLIP)으로 계보에 연결한다."""
+    from app.services import clips
+
+    a = load_scoped(db, c, request, Asset, asset_id, p)
+    _own_binary(a, p)
+    out, created = clips.request_clip(c, a, p.principal_id, body.start_s, body.end_s)
+    if created:
+        c.audit.record("CLIP_EXPORT_REQUESTED", principal=p, organization_id=a.organization_id, target_type="Asset",
+                       target_id=a.asset_id, reason=body.reason, source_ip=client_ip(request),
+                       details={"job_id": out["job_id"], "start_s": out["start_s"], "end_s": out["end_s"]})
+    return out
+
+
 @router.post("/v1/assets/{asset_id}/download-url")
 def create_download_url(asset_id: str, request: Request, db: Session = Depends(get_db),
                         c: Container = Depends(container), p: Principal = Depends(require("asset:download"))) -> dict:
