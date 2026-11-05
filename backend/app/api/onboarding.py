@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import client_ip, container, get_db, load_scoped, require
+from app.api.deps import DB, client_ip, container, load_scoped, require
 from app.container import Container
 from app.db.models import Agreement, Device, IntegrationCard, Organization
 from app.domain.principal import Principal
@@ -52,7 +52,7 @@ class AgreementEnd(BaseModel):
 
 
 @router.get("/v1/agreements")
-def list_agreements(db: Session = Depends(get_db), c: Container = Depends(container),
+def list_agreements(db: Session = DB, c: Container = Depends(container),
                     p: Principal = Depends(require("agreement:read"))) -> dict:
     rows = db.execute(scoped_select(Agreement, p).order_by(Agreement.organization_id, Agreement.valid_from)).scalars()
     now = c.clock.now()
@@ -60,7 +60,7 @@ def list_agreements(db: Session = Depends(get_db), c: Container = Depends(contai
 
 
 @router.post("/v1/agreements", status_code=201)
-def create_agreement(body: AgreementCreate, request: Request, db: Session = Depends(get_db),
+def create_agreement(body: AgreementCreate, request: Request, db: Session = DB,
                      c: Container = Depends(container), p: Principal = Depends(require("agreement:write"))) -> dict:
     _aware("valid_from", body.valid_from)
     _aware("valid_until", body.valid_until)
@@ -82,7 +82,7 @@ def create_agreement(body: AgreementCreate, request: Request, db: Session = Depe
 
 
 @router.post("/v1/agreements/{agreement_id}/end")
-def end_agreement(agreement_id: str, body: AgreementEnd, request: Request, db: Session = Depends(get_db),
+def end_agreement(agreement_id: str, body: AgreementEnd, request: Request, db: Session = DB,
                   c: Container = Depends(container), p: Principal = Depends(require("agreement:write"))) -> dict:
     _aware("effective_at", body.effective_at)
     a = db.execute(select(Agreement).where(Agreement.agreement_id == agreement_id).with_for_update()) \
@@ -146,19 +146,19 @@ def _write(db: Session, c: Container, request: Request, p: Principal, body: Card
 
 
 @router.get("/v1/integration-cards")
-def list_cards(db: Session = Depends(get_db), p: Principal = Depends(require("integration_card:read"))) -> dict:
+def list_cards(db: Session = DB, p: Principal = Depends(require("integration_card:read"))) -> dict:
     return {"items": [onboarding.card_view(db, x) for x in
                       onboarding.latest_versions(db, scope_filter(IntegrationCard, p))]}
 
 
 @router.post("/v1/integration-cards", status_code=201)
-def create_card(body: CardWrite, request: Request, db: Session = Depends(get_db), c: Container = Depends(container),
+def create_card(body: CardWrite, request: Request, db: Session = DB, c: Container = Depends(container),
                 p: Principal = Depends(require("integration_card:write"))) -> dict:
     return _write(db, c, request, p, body, None)
 
 
 @router.get("/v1/integration-cards/{integration_card_id}")
-def get_card(integration_card_id: str, request: Request, version: int | None = None, db: Session = Depends(get_db),
+def get_card(integration_card_id: str, request: Request, version: int | None = None, db: Session = DB,
              c: Container = Depends(container), p: Principal = Depends(require("integration_card:read"))) -> dict:
     if version is not None and version < 1:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/query/version", "code": "range",
@@ -167,7 +167,7 @@ def get_card(integration_card_id: str, request: Request, version: int | None = N
 
 
 @router.post("/v1/integration-cards/{integration_card_id}/versions", status_code=201)
-def add_card_version(integration_card_id: str, body: CardWrite, request: Request, db: Session = Depends(get_db),
+def add_card_version(integration_card_id: str, body: CardWrite, request: Request, db: Session = DB,
                      c: Container = Depends(container),
                      p: Principal = Depends(require("integration_card:write"))) -> dict:
     load_card(db, c, request, p, integration_card_id)

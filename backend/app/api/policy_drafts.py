@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.context import ID_PATTERN
-from app.api.deps import client_ip, container, get_db, load_scoped, page_params, require
+from app.api.deps import DB, client_ip, container, load_scoped, page_params, require
 from app.api.onboarding import load_card
 from app.api.pagination import paginate
 from app.container import Container
@@ -78,7 +78,7 @@ def _conflict(exc: policy_drafts.DraftConflict) -> ProblemError:
 
 @router.get("/v1/policy-drafts")
 def list_drafts(status: str | None = None, device_id: str | None = None, integration_card_id: str | None = None,
-                db: Session = Depends(get_db), p: Principal = Depends(require("policy_draft:read")),
+                db: Session = DB, p: Principal = Depends(require("policy_draft:read")),
                 page: dict = Depends(page_params)) -> dict:
     stmt = scoped_select(PolicyDraft, p)  # 조건 형식(열거값·ID)은 계약으로 이미 검사했다 (contract_query)
     if status:
@@ -92,7 +92,7 @@ def list_drafts(status: str | None = None, device_id: str | None = None, integra
 
 
 @router.post("/v1/policy-drafts", status_code=201)
-def create_draft(body: DraftCreate, request: Request, db: Session = Depends(get_db),
+def create_draft(body: DraftCreate, request: Request, db: Session = DB,
                  c: Container = Depends(container), p: Principal = Depends(require("policy_draft:write"))) -> dict:
     _inputs(body.values, list(body.needs_confirmation))
     if body.integration_card_version is not None and body.integration_card_id is None:
@@ -117,13 +117,13 @@ def create_draft(body: DraftCreate, request: Request, db: Session = Depends(get_
 
 
 @router.get("/v1/policy-drafts/{policy_draft_id}")
-def get_draft(policy_draft_id: str, request: Request, db: Session = Depends(get_db),
+def get_draft(policy_draft_id: str, request: Request, db: Session = DB,
               c: Container = Depends(container), p: Principal = Depends(require("policy_draft:read"))) -> dict:
     return policy_drafts.view(db, _load(db, c, request, p, policy_draft_id, lock=False), with_preview=True)
 
 
 @router.patch("/v1/policy-drafts/{policy_draft_id}")
-def update_draft(policy_draft_id: str, body: DraftPatch, request: Request, db: Session = Depends(get_db),
+def update_draft(policy_draft_id: str, body: DraftPatch, request: Request, db: Session = DB,
                  c: Container = Depends(container), p: Principal = Depends(require("policy_draft:write"))) -> dict:
     _inputs(body.values, list(body.needs_confirmation))
     d = _load(db, c, request, p, policy_draft_id, lock=True)
@@ -145,7 +145,7 @@ def update_draft(policy_draft_id: str, body: DraftPatch, request: Request, db: S
 
 
 @router.post("/v1/policy-drafts/{policy_draft_id}/apply")
-def apply_draft(policy_draft_id: str, body: DraftApply, request: Request, db: Session = Depends(get_db),
+def apply_draft(policy_draft_id: str, body: DraftApply, request: Request, db: Session = DB,
                 c: Container = Depends(container), p: Principal = Depends(require("device_policy:write"))) -> dict:
     d = _load(db, c, request, p, policy_draft_id, lock=True)
     try:  # 검사(계약·매핑·같은 기관 카드)에 걸리면 RuleViolation → 422, 아무것도 저장하지 않는다
@@ -178,7 +178,7 @@ def apply_draft(policy_draft_id: str, body: DraftApply, request: Request, db: Se
 
 
 @router.post("/v1/policy-drafts/{policy_draft_id}/reject")
-def reject_draft(policy_draft_id: str, body: DraftReject, request: Request, db: Session = Depends(get_db),
+def reject_draft(policy_draft_id: str, body: DraftReject, request: Request, db: Session = DB,
                  c: Container = Depends(container), p: Principal = Depends(require("device_policy:write"))) -> dict:
     d = _load(db, c, request, p, policy_draft_id, lock=True)
     try:

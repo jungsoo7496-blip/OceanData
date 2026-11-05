@@ -6,7 +6,7 @@ from fastapi import APIRouter, Body, Depends, Request, Response
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from app.api.deps import container, get_db, load_scoped, require
+from app.api.deps import DB, container, load_scoped, require
 from app.container import Container
 from app.db.models import AgentStatus, Device
 from app.domain.normalize import parse_rfc3339
@@ -18,7 +18,7 @@ router = APIRouter(tags=["agents"])
 
 
 @router.post("/v1/agents/heartbeat", status_code=204)
-def post_heartbeat(body: dict = Body(...), db: Session = Depends(get_db), c: Container = Depends(container),
+def post_heartbeat(body: dict = Body(...), db: Session = DB, c: Container = Depends(container),
                    p: Principal = Depends(require("agent:heartbeat"))) -> Response:
     problems, rejected = contracts.validate_document("agent-heartbeat", body)
     if rejected:
@@ -44,7 +44,7 @@ def post_heartbeat(body: dict = Body(...), db: Session = Depends(get_db), c: Con
 
 
 @router.get("/v1/agents/{device_id}/health")
-def get_agent_health(device_id: str, request: Request, db: Session = Depends(get_db),
+def get_agent_health(device_id: str, request: Request, db: Session = DB,
                      c: Container = Depends(container), p: Principal = Depends(require("agent_health:read"))) -> dict:
     if p.kind == "DEVICE" and device_id != p.device_id:
         raise ProblemError("NOT_FOUND")

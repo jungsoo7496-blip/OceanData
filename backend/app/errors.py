@@ -142,6 +142,8 @@ def install_error_handlers(app: FastAPI) -> None:
         if code in ("22003", "22007", "22008", "22015"):  # 숫자·시각·간격 범위 초과 (예: 32비트를 넘는 version)
             return problem_response("VALIDATION_ERROR", request, errors=[{
                 "pointer": "", "code": "out_of_range", "message": "숫자나 시각이 저장할 수 있는 범위를 벗어났습니다"}])
+        if code == "23505":  # 고유 제약 위반: 동시 요청이 먼저 확정했다. 응답 전 커밋에서 나도 여기로 온다 (검토 2)
+            return problem_response("CONFLICT", request)
         raise exc
 
     @app.exception_handler(Exception)

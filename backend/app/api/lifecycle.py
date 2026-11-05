@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import client_ip, container, get_db, load_scoped, require
+from app.api.deps import DB, client_ip, container, load_scoped, require
 from app.container import Container
 from app.db.models import Asset, BackupRun, DeletionCertificate, Device, OrgQuota, TrialSession
 from app.domain.principal import Principal
@@ -20,7 +20,7 @@ router = APIRouter()
 
 
 @router.get("/v1/usage", tags=["status"])
-def get_usage(db: Session = Depends(get_db), c: Container = Depends(container),
+def get_usage(db: Session = DB, c: Container = Depends(container),
               p: Principal = Depends(require("usage:read"))) -> dict:
     stmt = select(OrgQuota).order_by(OrgQuota.organization_id)
     if not p.has_role("PLATFORM_OPERATOR"):
@@ -33,14 +33,14 @@ def get_usage(db: Session = Depends(get_db), c: Container = Depends(container),
 
 
 @router.get("/v1/backup-runs", tags=["status"])
-def list_backup_runs(limit: int = Query(20, ge=1, le=100), db: Session = Depends(get_db),
+def list_backup_runs(limit: int = Query(20, ge=1, le=100), db: Session = DB,
                      _: Principal = Depends(require("backup:read"))) -> dict:
     rows = db.execute(select(BackupRun).order_by(BackupRun.started_at.desc()).limit(limit)).scalars()
     return {"items": [backup.run_view(r) for r in rows]}
 
 
 @router.post("/v1/backup-runs", tags=["status"], status_code=202)
-def start_backup_run(request: Request, db: Session = Depends(get_db), c: Container = Depends(container),
+def start_backup_run(request: Request, db: Session = DB, c: Container = Depends(container),
                      p: Principal = Depends(require("backup:run"))) -> dict:
     """지금 백업 (요구사항 6.1). 실행 중이면 409. 작업은 워커가 한다."""
     if db.execute(select(BackupRun.backup_run_id).where(BackupRun.status == "RUNNING")).first():
@@ -60,7 +60,7 @@ class BackupRequest(BaseModel):
 
 
 @router.post("/v1/backup-requests", tags=["status"])
-def request_backup(body: BackupRequest, request: Request, db: Session = Depends(get_db),
+def request_backup(body: BackupRequest, request: Request, db: Session = DB,
                    c: Container = Depends(container), p: Principal = Depends(require("backup:request"))) -> dict:
     """현장 사본이 없을 수 있는 장비의 자산 백업 신청 (08번 요구사항 6.4). 먼저 dry_run으로 예상 용량을 본다."""
     for field, value in (("captured_from", body.captured_from), ("captured_to", body.captured_to)):
@@ -84,7 +84,7 @@ def request_backup(body: BackupRequest, request: Request, db: Session = Depends(
 
 
 @router.get("/v1/capacity-forecast", tags=["status"])
-def capacity_forecast(db: Session = Depends(get_db), c: Container = Depends(container),
+def capacity_forecast(db: Session = DB, c: Container = Depends(container),
                       _: Principal = Depends(require("capacity:read"))) -> dict:
     from app.services import capacity
 
@@ -92,7 +92,7 @@ def capacity_forecast(db: Session = Depends(get_db), c: Container = Depends(cont
 
 
 @router.get("/v1/usage-reports", tags=["status"])
-def usage_report(month: str = Query(pattern=r"^(19|20)[0-9]{2}-(0[1-9]|1[0-2])$"), db: Session = Depends(get_db),
+def usage_report(month: str = Query(pattern=r"^(19|20)[0-9]{2}-(0[1-9]|1[0-2])$"), db: Session = DB,
                  p: Principal = Depends(require("usage_report:read"))) -> dict:
     """기관별 월간 자원 사용량 (08번 요구사항 10). 기관 범위는 인증 정보로만: 운영자는 전체, ORG_ADMIN은 자기 기관."""
     from app.services import capacity
@@ -102,7 +102,7 @@ def usage_report(month: str = Query(pattern=r"^(19|20)[0-9]{2}-(0[1-9]|1[0-2])$"
 
 
 @router.post("/v1/retention/dry-run", tags=["status"])
-def retention_dry_run(db: Session = Depends(get_db), c: Container = Depends(container),
+def retention_dry_run(db: Session = DB, c: Container = Depends(container),
                       _: Principal = Depends(require("retention:run"))) -> dict:
     return retention.dry_run(db, c.clock.now())
 
@@ -114,7 +114,7 @@ class LegalHold(BaseModel):
 
 
 @router.post("/v1/assets/{asset_id}/legal-hold", tags=["assets"])
-def set_legal_hold(asset_id: str, body: LegalHold, request: Request, db: Session = Depends(get_db),
+def set_legal_hold(asset_id: str, body: LegalHold, request: Request, db: Session = DB,
                    c: Container = Depends(container), p: Principal = Depends(require("legal_hold:set"))) -> dict:
     a = load_scoped(db, c, request, Asset, asset_id, p)
     a.legal_hold, a.legal_hold_reason, a.updated_at = body.hold, body.reason if body.hold else None, c.clock.now()
@@ -146,14 +146,14 @@ def _delete(c: Container, db: Session, request: Request, p: Principal, assets: l
 
 
 @router.post("/v1/assets/{asset_id}/deletion", tags=["assets"])
-def delete_asset(asset_id: str, body: DeletionRequest, request: Request, db: Session = Depends(get_db),
+def delete_asset(asset_id: str, body: DeletionRequest, request: Request, db: Session = DB,
                  c: Container = Depends(container), p: Principal = Depends(require("asset:delete"))) -> dict:
     a = load_scoped(db, c, request, Asset, asset_id, p)
     return _delete(c, db, request, p, [a], "ASSET", a.asset_id, body)
 
 
 @router.post("/v1/sessions/{session_id}/deletion", tags=["context"])
-def delete_session_assets(session_id: str, body: DeletionRequest, request: Request, db: Session = Depends(get_db),
+def delete_session_assets(session_id: str, body: DeletionRequest, request: Request, db: Session = DB,
                           c: Container = Depends(container), p: Principal = Depends(require("asset:delete"))) -> dict:
     s = load_scoped(db, c, request, TrialSession, session_id, p)
     assets = list(db.execute(select(Asset).where(Asset.session_id == s.session_id,
@@ -163,7 +163,7 @@ def delete_session_assets(session_id: str, body: DeletionRequest, request: Reque
 
 
 @router.get("/v1/deletion-certificates/{certificate_id}", tags=["assets"])
-def get_certificate(certificate_id: str, db: Session = Depends(get_db),
+def get_certificate(certificate_id: str, db: Session = DB,
                     p: Principal = Depends(require("deletion_certificate:read"))) -> dict:
     cert = db.get(DeletionCertificate, certificate_id)
     if cert is None or (cert.organization_id != p.organization_id and not p.has_role("PLATFORM_OPERATOR")):

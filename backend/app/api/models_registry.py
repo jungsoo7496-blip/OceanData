@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.adapters.onnx_inference import ALLOWED_MODEL_LICENSES
-from app.api.deps import client_ip, container, get_db, require
+from app.api.deps import DB, client_ip, container, require
 from app.container import Container
 from app.db.models import ModelRegistryEntry
 from app.domain.principal import Principal
@@ -35,13 +35,13 @@ def view(m: ModelRegistryEntry) -> dict:
 
 
 @router.get("/v1/models")
-def list_models(db: Session = Depends(get_db), _: Principal = Depends(require("model:read"))) -> dict:
+def list_models(db: Session = DB, _: Principal = Depends(require("model:read"))) -> dict:
     rows = db.execute(select(ModelRegistryEntry).order_by(ModelRegistryEntry.name, ModelRegistryEntry.version))
     return {"items": [view(m) for m in rows.scalars()], "allowed_licenses": sorted(ALLOWED_MODEL_LICENSES)}
 
 
 @router.post("/v1/models", status_code=201)
-def register_model(body: ModelCreate, request: Request, db: Session = Depends(get_db),
+def register_model(body: ModelCreate, request: Request, db: Session = DB,
                    c: Container = Depends(container), p: Principal = Depends(require("model:write"))) -> dict:
     if body.license not in ALLOWED_MODEL_LICENSES:  # 로드할 수 없는 모델은 등록하지 않는다 (요구사항 8.4)
         raise ProblemError("RULE_VIOLATION",

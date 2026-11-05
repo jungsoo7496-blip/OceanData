@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from app.api.deps import client_ip, container, get_db, page_params, require
+from app.api.deps import DB, client_ip, container, page_params, require
 from app.api.pagination import paginate
 from app.container import Container
 from app.db.models import Device, HardwareSignalState, Incident, Inspection, WatchRule
@@ -49,7 +49,7 @@ def _time(value: str | None, pointer: str) -> datetime | None:
 
 
 @router.get("/v1/ingest-status")
-def get_ingest_status(db: Session = Depends(get_db), c: Container = Depends(container),
+def get_ingest_status(db: Session = DB, c: Container = Depends(container),
                       p: Principal = Depends(require("ingest_status:read"))) -> dict:
     """기관 범위는 인증 정보로만 정한다 (security.md). 운영자는 전체를 보고 화면에서 기관별로 거른다."""
     now = c.clock.now()
@@ -71,7 +71,7 @@ def get_ingest_status(db: Session = Depends(get_db), c: Container = Depends(cont
 @router.get("/v1/incidents")
 def list_incidents(status: Literal["OPEN", "ACKNOWLEDGED", "RESOLVED"] | None = None, device_id: str | None = None,
                    from_: str | None = Query(None, alias="from"),
-                   to: str | None = None, page: dict = Depends(page_params), db: Session = Depends(get_db),
+                   to: str | None = None, page: dict = Depends(page_params), db: Session = DB,
                    p: Principal = Depends(require("incident:read"))) -> dict:
     stmt = select(Incident)
     if not _operator(p):
@@ -97,7 +97,7 @@ class IncidentPatch(BaseModel):
 
 
 @router.patch("/v1/incidents/{incident_id}")
-def update_incident(incident_id: str, body: IncidentPatch, request: Request, db: Session = Depends(get_db),
+def update_incident(incident_id: str, body: IncidentPatch, request: Request, db: Session = DB,
                     c: Container = Depends(container), p: Principal = Depends(require("incident:update"))) -> dict:
     fields = body.model_dump(exclude_unset=True)
     if not fields:
@@ -132,7 +132,7 @@ def update_incident(incident_id: str, body: IncidentPatch, request: Request, db:
 
 
 @router.get("/v1/watch-rules")
-def list_watch_rules(db: Session = Depends(get_db), _: Principal = Depends(require("watch_rule:read"))) -> dict:
+def list_watch_rules(db: Session = DB, _: Principal = Depends(require("watch_rule:read"))) -> dict:
     rows = db.execute(select(WatchRule).order_by(WatchRule.rule_code)).scalars()
     return {"items": [monitoring.rule_dict(r) for r in rows]}
 
@@ -149,7 +149,7 @@ class RulePatch(BaseModel):
 
 
 @router.patch("/v1/watch-rules/{rule_code}")
-def update_watch_rule(rule_code: str, body: RulePatch, request: Request, db: Session = Depends(get_db),
+def update_watch_rule(rule_code: str, body: RulePatch, request: Request, db: Session = DB,
                       c: Container = Depends(container), p: Principal = Depends(require("watch_rule:update"))) -> dict:
     rule = db.get(WatchRule, rule_code, with_for_update=True)
     if rule is None:
@@ -210,7 +210,7 @@ def store_signals(db: Session, signals: list[Signal], now: datetime) -> int:
 
 
 @router.post("/v1/hardware-signals", status_code=202)
-def post_hardware_signals(body: SignalBatch, db: Session = Depends(get_db), c: Container = Depends(container),
+def post_hardware_signals(body: SignalBatch, db: Session = DB, c: Container = Depends(container),
                           _: Principal = Depends(require("hardware_signal:write"))) -> dict:
     return {"accepted": store_signals(db, body.signals, c.clock.now())}
 
@@ -228,7 +228,7 @@ Cycle = Literal["DAILY", "WEEKLY", "MONTHLY", "QUARTERLY", "YEARLY"]
 
 
 @router.get("/v1/inspections")
-def list_inspections(cycle: Cycle | None = None, page: dict = Depends(page_params), db: Session = Depends(get_db),
+def list_inspections(cycle: Cycle | None = None, page: dict = Depends(page_params), db: Session = DB,
                      _: Principal = Depends(require("inspection:read"))) -> dict:
     stmt = select(Inspection)
     if cycle:
@@ -245,7 +245,7 @@ class InspectionCreate(BaseModel):
 
 
 @router.post("/v1/inspections", status_code=201)
-def create_inspection(body: InspectionCreate, request: Request, db: Session = Depends(get_db),
+def create_inspection(body: InspectionCreate, request: Request, db: Session = DB,
                       c: Container = Depends(container), p: Principal = Depends(require("inspection:write"))) -> dict:
     try:
         tpl.period_last_day(body.cycle, body.period_key)
@@ -270,7 +270,7 @@ def _inspection(db: Session, inspection_id: str, lock: bool = False) -> Inspecti
 
 
 @router.get("/v1/inspections/{inspection_id}")
-def get_inspection(inspection_id: str, db: Session = Depends(get_db),
+def get_inspection(inspection_id: str, db: Session = DB,
                    _: Principal = Depends(require("inspection:read"))) -> dict:
     return inspections.view(_inspection(db, inspection_id))
 
@@ -290,7 +290,7 @@ class InspectionPatch(BaseModel):
 
 
 @router.patch("/v1/inspections/{inspection_id}")
-def update_inspection(inspection_id: str, body: InspectionPatch, request: Request, db: Session = Depends(get_db),
+def update_inspection(inspection_id: str, body: InspectionPatch, request: Request, db: Session = DB,
                       c: Container = Depends(container), p: Principal = Depends(require("inspection:write"))) -> dict:
     row = _inspection(db, inspection_id, lock=True)
     if row.status == "COMPLETED":
@@ -330,7 +330,7 @@ class EvidenceCreate(BaseModel):
 
 
 @router.post("/v1/inspections/{inspection_id}/evidence", status_code=201)
-def add_evidence(inspection_id: str, body: EvidenceCreate, request: Request, db: Session = Depends(get_db),
+def add_evidence(inspection_id: str, body: EvidenceCreate, request: Request, db: Session = DB,
                  c: Container = Depends(container), p: Principal = Depends(require("inspection:write"))) -> dict:
     row = _inspection(db, inspection_id, lock=True)
     if row.status == "COMPLETED":

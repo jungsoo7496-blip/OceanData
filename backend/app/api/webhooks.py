@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import client_ip, container, get_db, require
+from app.api.deps import DB, client_ip, container, require
 from app.container import Container
 from app.db.models import WebhookSubscription
 from app.domain.principal import Principal
@@ -34,12 +34,12 @@ def _own(db: Session, p: Principal) -> list[WebhookSubscription]:
 
 
 @router.get("/v1/webhooks/subscriptions")
-def list_subscriptions(db: Session = Depends(get_db), p: Principal = Depends(require("webhook:manage"))) -> dict:
+def list_subscriptions(db: Session = DB, p: Principal = Depends(require("webhook:manage"))) -> dict:
     return {"items": [webhooks.subscription_view(s) for s in _own(db, p)]}
 
 
 @router.post("/v1/webhooks/subscriptions", status_code=201)
-def create_subscription(body: SubscriptionCreate, request: Request, db: Session = Depends(get_db),
+def create_subscription(body: SubscriptionCreate, request: Request, db: Session = DB,
                         c: Container = Depends(container), p: Principal = Depends(require("webhook:manage"))) -> dict:
     if len(set(body.event_types)) != len(body.event_types):
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/event_types", "code": "unique",
@@ -57,7 +57,7 @@ def create_subscription(body: SubscriptionCreate, request: Request, db: Session 
 
 
 @router.delete("/v1/webhooks/subscriptions/{webhook_id}", status_code=204)
-def delete_subscription(webhook_id: str, request: Request, db: Session = Depends(get_db),
+def delete_subscription(webhook_id: str, request: Request, db: Session = DB,
                         c: Container = Depends(container),
                         p: Principal = Depends(require("webhook:manage"))) -> Response:
     s = db.execute(select(WebhookSubscription).where(
