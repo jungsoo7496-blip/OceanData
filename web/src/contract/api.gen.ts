@@ -166,7 +166,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 수집기 자격증명 폐기 (ORG_ADMIN, 다중 인증 필요). 장비는 재등록 대기 상태가 된다 */
+        /**
+         * 수집기 자격증명 폐기 (ORG_ADMIN, 다중 인증 필요). 장비는 재등록 대기 상태가 된다
+         * @description 폐기 전에 발급했지만 아직 쓰지 않은 등록 코드도 함께 무효가 된다 — 그 코드로 `POST /v1/agents/enroll`을 하면
+         *     410 GONE(reason EXPIRED)이다. 재등록은 폐기 뒤 새로 발급한 등록 코드로만 한다 (02번 요구사항 5.4).
+         */
         post: operations["revokeDeviceCredentials"];
         delete?: never;
         options?: never;

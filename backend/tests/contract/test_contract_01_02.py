@@ -44,8 +44,14 @@ def test_identity_responses_match_contract(ctx) -> None:
                                         "client_secret": e.json()["client_secret"]})
     check(t, "POST", "/v1/auth/token")
     check(cl.get("/v1/me", headers={"Authorization": "Bearer " + t.json()["access_token"]}), "GET", "/v1/me")
+    spare = cl.post(f"/v1/devices/{DEV_A_COLLECTOR}/enrollment-codes", headers=h)
+    assert spare.status_code == 201
     check(cl.post(f"/v1/devices/{DEV_A_COLLECTOR}/credentials/revoke", headers=h),
           "POST", "/v1/devices/{device_id}/credentials/revoke")
+    expired = cl.post("/v1/agents/enroll", json={"enrollment_code": spare.json()["code"], "agent_version": "0.1.0",
+                                                 "os": "windows"})
+    assert expired.status_code == 410 and expired.json()["reason"] == "EXPIRED"
+    check(expired, "POST", "/v1/agents/enroll")
     k = cl.post("/v1/api-keys", headers=h, json={"name": "erp", "scopes": ["upload:write", "status:read"],
                                                  "expires_at": in_future(days=7)})
     check(k, "POST", "/v1/api-keys")

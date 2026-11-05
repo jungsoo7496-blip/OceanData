@@ -148,12 +148,13 @@ def test_revocation_blocks_concurrent_enrollment_with_old_code(ctx, monkeypatch:
             assert revoking.wait(5), "폐기 요청이 감사 기록 단계에 도달하지 못했습니다"
             enroll = pool.submit(ctx.client.post, "/v1/agents/enroll", json=payload)
             # 등록이 완료되거나 실제로 DB 잠금을 기다릴 때까지 폐기 요청을 멈춰 둔다.
-            with ctx.c.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            with ctx.c.engine.connect() as conn:
                 deadline = monotonic() + 5
                 while not enroll.done() and not conn.scalar(text("""
                     SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
                                    AND pid <> pg_backend_pid() AND cardinality(pg_blocking_pids(pid)) > 0)
                 """)):
+                    conn.rollback()  # 다음 조회에서 최신 pg_stat_activity를 본다.
                     assert monotonic() < deadline, "등록 요청이 처리 단계에 도달하지 못했습니다"
                     sleep(0.02)
         finally:
