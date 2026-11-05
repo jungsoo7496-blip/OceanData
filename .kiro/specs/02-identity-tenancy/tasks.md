@@ -13,3 +13,4 @@
 - [x] 11. 긴급 열람(Break_Glass): 요청·다른 운영자 승인(설정으로 본인 승인)·ORG_ADMIN 통지·원본 접근 감사·만료 즉시 회수·조기 종료 — 요구사항 8.1~8.4 · `/v1/break-glass-grants`(+`/decision`, `/revoke`), download-url 운영자 경로 · 시험 `tests/integration/test_break_glass.py` · ADR-0029, Runbook 05
 - [ ] 12. 구성원 관리: 초대·역할 변경(감사)·비활성화 — 요구사항 9.1, 9.2, 3.3 (Keycloak 관리 API 연동 방식 결정 필요)
 - [x] 13. T01 수용시험 — T01-a, b, c, d, f, g
+- [x] 16. 기기 토큰 범위를 요구사항 5.5로 좁힘 — 요구사항 5.5, 2.2 · Permission_Table `device` 표시(허용 목록: 자기 확인·정책·원격 상태·하트비트·매핑·업로드·관측값·이벤트)와 Tenant_Guard 기기 범위(자기 수집기·매핑된 원천 장비). 보고서 초안·회차 기록 작성·매핑 밖 관측값 열람이 막힘. 시험 `test_device_reach.py`. API 키는 요구사항 6.3·6.4 그대로(scope별 허용이 요구사항에 명시되지 않은 부분은 결정 대기). **남음:** 기기가 다른 기관 장비를 찾을 때 교차 접근 감사 미기록(계약 점검 발견)

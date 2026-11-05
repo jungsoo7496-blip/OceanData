@@ -15,3 +15,4 @@
 - [x] 13. 계약 예시 통과·거부 — 요구사항 9.3 (`make contracts-check`, 03번 검증기)
 - [x] 14. MQTT 계정 비밀번호를 OS 보안 저장소로 — 에이전트 `config/secrets.go`(Windows 현재 사용자 DPAPI, Unix 0600), 시작할 때 config.json의 평문 암호를 옮기고 `password_secret`만 남김, 값은 메모리 전용 필드 · 시험 `agent/internal/config/secrets_test.go`(Unix). **Windows 실기 DPAPI 시험은 확인 필요**(빌드·vet만 통과)
 - [x] 15. 기관 하위 이벤트 코드 등록 API — 03번 tasks 12로 구현 (`POST /v1/codes/event-categories/subcodes`, ADR-0026) · 시험 `tests/integration/test_org_event_subcodes.py`
+- [x] 16. 이벤트 등록의 `human_verified=true`는 사람만 — 요구사항 7.3(사람 확인) · 기기·API 키는 403(조용히 무시하지 않음), 사람이 true로 등록하면 확인자·시각을 남김. 시험 `test_device_reach.py`. 계약 검증기가 단위 경고·다른 항목 문제로 스키마 오류를 가리지 않게(03 요구사항 4·13, 07 요구사항 1.2): `test_contract_problem_pointers.py`

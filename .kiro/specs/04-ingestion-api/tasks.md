@@ -31,3 +31,4 @@
 ## 확인 필요 (사람 결정)
 - 취소·만료된 C0 시작 세션의 UPLOADING → READY_PRIVATE 역전이를 domain.md 5장 표에 추가할지
 - LineageEdge.relation에 SAMPLE_FRAME이 없다. 현장 샘플 프레임은 THUMBNAIL로 기록 중 — 계약에 값을 추가할지
+- [x] 23. 업로드 취소·만료 정리가 계보 행 때문에 멈추던 것 수정 — 요구사항 3.3, 3.4(정리·예약 해제), 1.5(예약) · `parent_ref` 업로드의 asset_lineage 행을 먼저 지우고, 만료 정리는 세션마다 SAVEPOINT(한 줄 실패가 모든 기관의 정리를 막지 않음). 시험 `test_upload_release.py`. **남음(검토 2, `docs/review-2026-11-05/`):** 선언 크기 강제(#2 높음)·`ALREADY_REGISTERED` 오판(#5)·업로드 중 삭제(#6)·완료·취소 경합(#8)
