@@ -49,7 +49,7 @@
 - **검토 2 #5·#6·#7·#8** (`docs/review-2026-11-05/README.md`): 바이트 없는 파일에 `ALREADY_REGISTERED`(순환 녹화 원천 조용한 유실 가능 — **우선**),
   업로드 중 삭제의 거짓 삭제 증명, 인증 실패 감사·한도·JWKS 재조회 남용, 완료·취소 경합. 재현 시험이 `repro/older-code-review/`에 있다.
 - **계약 대비 구현 점검 발견 27건**(발견자가 재현, 검증자 검토 전): `docs/review-2026-11-05/contract-sweep-findings.md`.
-  특히 `POST /v1/external-sources/{id}/backfill`의 같은 잡 키 문제(이번에 백업은 고쳤고 백필은 `dedupe_active_only`로 같이 고침),
+  이 중 **백업(수동·정기)과 보충 수집 두 건은 고쳤다**(`dedupe_active_only`, 0장 -1ab). 남은 것 중 특히:
   `PATCH /v1/events/{id}`·`POST /v1/observations/corrections`의 형식 오류가 500, 기기의 다른 기관 장비 접근 시 감사 미기록(보안 규칙 위반), 긴급 열람 본인 승인 거부 미감사.
   점검하지 못한 두 묶음(`datasets·sharing·deid·assets`, `reports·records·contracts·uploads`)이 있다.
 - 06 에이전트: 서버 응답 `Retry-After`·토큰 `expires_in`·mvhd 상자 크기 방어(위 `wip/agent-policy-overflow`에서 다룬 범위 밖이면 따로).
