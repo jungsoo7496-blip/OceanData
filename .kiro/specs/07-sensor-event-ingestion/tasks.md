@@ -13,5 +13,5 @@
 - [x] 11. 합성 관측값 생성기 — 요구사항 9.1 · `make sample-observations`
 - [x] 12. 세 경로 같은 저장 결과 — 요구사항 9.2 · CSV↔REST 시험 + MQTT는 REST로만 전송
 - [x] 13. 계약 예시 통과·거부 — 요구사항 9.3 (`make contracts-check`, 03번 검증기)
-- [ ] 14. MQTT 계정 비밀번호를 OS 보안 저장소로 (지금은 config.json) — 06번 DPAPI와 함께
+- [x] 14. MQTT 계정 비밀번호를 OS 보안 저장소로 — 에이전트 `config/secrets.go`(Windows 현재 사용자 DPAPI, Unix 0600), 시작할 때 config.json의 평문 암호를 옮기고 `password_secret`만 남김, 값은 메모리 전용 필드 · 시험 `agent/internal/config/secrets_test.go`(Unix). **Windows 실기 DPAPI 시험은 확인 필요**(빌드·vet만 통과)
 - [x] 15. 기관 하위 이벤트 코드 등록 API — 03번 tasks 12로 구현 (`POST /v1/codes/event-categories/subcodes`, ADR-0026) · 시험 `tests/integration/test_org_event_subcodes.py`

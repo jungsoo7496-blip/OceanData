@@ -167,6 +167,13 @@ func open(dir string, toStderr bool) (*runtimeDeps, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 07번 tasks 14: 평문 MQTT 암호는 보안 저장소로 옮기고, 값은 메모리에만 채운다
+	if _, err := config.MigrateSensorSecrets(dir, cfg); err != nil {
+		return nil, err
+	}
+	if err := config.ResolveSensorSecrets(dir, cfg); err != nil {
+		return nil, err
+	}
 	hc, err := api.NewHTTPClient(cfg.CAFile, 10*time.Minute)
 	if err != nil {
 		return nil, err

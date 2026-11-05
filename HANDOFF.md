@@ -10,6 +10,7 @@
 -1c. **02번 긴급 열람 완료 (2026-11-05, 클라우드, ADR-0029):** `/v1/break-glass-grants`(요청·`/decision`·`/revoke`·조회), 다른 운영자 승인(설정으로 본인), 대상 기관 ORG_ADMIN 메일, 요청 운영자만 download-url 허용 + `BREAK_GLASS_ACCESS` 감사, 만료 즉시 차단·워커 EXPIRED. Runbook 05 갱신. 새 마이그레이션 없음.
 -1d. **04번 웹훅 완료 (2026-11-05, 클라우드, ADR-0030):** 구독 API(https·사설 주소 거부·비밀 한 번), 상태 변경 같은 트랜잭션의 outbox(0015, down 포함), 워커 서명 전송·지수 백오프·N회 실패 시 구독 끔+기관 메일, 전송 직전 DNS 사설 주소 차단. 남은 위험: DNS 재바인딩은 나가는 방화벽으로(확인 필요).
 -1e. **04번 악성코드 검사 포트 완료 (2026-11-05, 클라우드, ADR-0031):** 무결성 검증 스트리밍 중 검사, 의심 시 QUARANTINED(MALWARE_SUSPECTED), 기관 정책 `org-policy --malware-scan on`(0016, down 포함), 검사기 없으면 상태 전이 전에 멈춰 재시도. `MALWARE_SCANNER=mock-eicar`는 시험용 — **실제 검사기 제품은 결정 대기**.
+-1f. **07번 MQTT 암호 보안 저장 (2026-11-05, 클라우드):** 에이전트가 시작할 때 config.json의 평문 `password`를 보안 저장소(`secrets/mqtt-<장비>.json`, Windows DPAPI·Unix 0600)로 옮기고 `password_secret`만 남긴다. Linux Go 전체 시험 통과, Windows는 교차 빌드·vet만 — **Windows 실기 시험 필요**.
 0. **03번 작업 7·12·14 완료. 다음은 같은 스펙의 작업 17 약정·연계 카드 등록 API다. 기존 CLI·테이블·권한을 읽고 계약부터 진행한다.** 업로드 원래 좌표의 EPSG:4326 변환 결과에 공통 GeoJSON·좌표 검사를 추가했다. 계약 선행 검사, PostGIS 관련 통합·응답 계약 6개, 생성 Go SDK 일치, Ruff·Mypy 통과. 원본·변환 이력 보존과 무효 변환의 400/미생성을 확인했다. 새 DB 마이그레이션/down은 해당 없음. `var/contracts-03-task7.log`, `var/meta03-location-integration.log`, `var/agent-codegen-03-coordinates.log`.
 
    **품질 재평가:** `python -m app.cli reevaluate-quality <기관ID> [--asset-id <자산ID>]`는 활성 DB 규칙을 사용하고 격리·삭제·미완료 자산과 관측 근거가 없는 과거 범위 경고를 보호한다. 신규 PostgreSQL 시험 6개, 수집·미디어 회귀 5개, Ruff·Mypy 통과. 잘못된 규칙으로 RECEIVED를 막지 않고 정상화 뒤 재시도했다. 공개 계약 및 DB 구조 변경 없음. `var/meta03-quality-integration-final.log`, `var/meta03-quality-regression.log`(ADR-0027).
@@ -58,7 +59,7 @@
 | 04 수집 API | 핵심 완료 | 웹훅·쿼터 동시성 시험·악성코드 검사 포트(모의) 완료. 검사기 제품 결정, 예제 클라이언트·Schemathesis, 10GB 시험 남음 |
 | 06 동기화 에이전트 | 로컬 핵심 완료 | DPAPI·재개/영수증·계약 SDK·수동/자동 서명 업데이트 완료. 순환 삭제(15번과), 실제 서비스 설치·부팅 확인 남음 |
 | 05 처리 파이프라인 | 핵심 완료 | 대용량 임시 디스크 정책, Model_Registry 등록 API(14번과), GPU 인코더 실측 |
-| 07 센서·이벤트 | 핵심 완료 | 겹침 자산 조회 API·하위코드 등록 API 완료. MQTT 계정 보안 저장 남음 |
+| 07 센서·이벤트 | 완료 | 겹침 자산 조회 API·하위코드 등록 API·MQTT 암호 보안 저장(Windows 실기 확인 필요) |
 | 08 저장·보존 | 핵심 완료 | 보존·법적 보류·삭제 증명·쿼터 알림·사용량·일일 대조·계층형 백업·복원 시험(T10, ADR-0021 기준선) 완료. ROTATING 장비 백업 신청(0017)·용량 예측·월간 리포트(0018) 완료. 백업 도구 PoC(pgBackRest·rclone·restic)·PITR·백업 암호화·Hot/Warm 남음, 전체 용량 값·스토리지 SSE 지원 확인은 하드웨어 후 | 
 | 09 포털 | 핵심 화면 완료 | 기관 설정(연계 카드·웹훅·약정·긴급 열람)·백업 신청·운영 콘솔(약정·긴급 열람·백업)·계약 TS 타입 생성 추가. 온보딩 마법사(정책 초안·운영자 확인), 회차 타임라인, 클립 내보내기, 운영 콘솔 기관·사용자 편집, 접근성 CI 남음 |
 | 11 수집 모니터링 | 핵심 완료 | 감시 규칙 13종·장애 기록·메일/웹훅 알림·정기 점검·하드웨어 모의 신호·T07 완료. Open API 실패 신호원(12번), 운영 메신저, 실제 하드웨어 어댑터 남음 |
