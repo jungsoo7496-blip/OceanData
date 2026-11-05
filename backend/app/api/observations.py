@@ -338,6 +338,8 @@ def create_event(request: Request, body: Any = Body(...), db: Session = Depends(
                  idempotency_key: str | None = Header(default=None)) -> JSONResponse:
     problems, rejected = contracts.validate_document("event", body)
     _problems_to_400(problems, rejected)
+    if body.get("human_verified") is True and not p.user_id:  # 사람만 확인할 수 있다 (07번 요구사항 7.3, PATCH와 같게)
+        raise ProblemError("FORBIDDEN", detail="사람 사용자만 확인 표시를 할 수 있습니다")
     session = load_scoped(db, c, request, TrialSession, body["session_id"], p)
     if body.get("source_system_id"):
         _source_device(db, c, request, p, body["source_system_id"])
