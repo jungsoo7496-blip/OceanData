@@ -224,6 +224,14 @@ def test_t11_report_flow_and_t06a_trace(ictx) -> None:
     assert r.status_code == 409
     assert {(x["cited_by"], x["id"]) for x in r.json()["affected"]} >= {("RECORD", rec["record_id"]),
                                                                          ("REPORT", rep["report_id"])}
+    # 영향 목록을 본 ORG_ADMIN이 재확인하면 삭제되고, 인용한 승인본에 근거 손상(DELETED)이 남는다 (08번 요구사항 5.4)
+    r = ctx.client.post(f"/v1/assets/{ids['orig']}/deletion", json={"reason": "시험", "confirm_affected": True},
+                        headers=ctx.as_user(ADMIN, mfa=True))
+    assert r.status_code == 200 and r.json()["certificate_id"].startswith("dlc_"), r.text
+    with ctx.c.sessionmaker.begin() as db:
+        flagged = evidence.check_damage(ctx.c, db)
+    deleted = {(f["kind"], f["id"]) for f in flagged if any(d["reason"] == "DELETED" for d in f["damage"])}
+    assert {("RECORD", rec["record_id"]), ("REPORT", rep["report_id"])} <= deleted, flagged
 
 
 def test_t11_reprocess_marks_damage(ictx) -> None:

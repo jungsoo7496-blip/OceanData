@@ -196,6 +196,16 @@ def test_t08_t15_dataset_distribution(ictx) -> None:
     assert r.status_code == 409
     ds_hit = next(x for x in r.json()["affected"] if x["cited_by"] == "DATASET")
     assert ds_hit["grant_id"] == grant and "철회" in ds_hit["action"]
+    # 재확인(confirm_affected=true)으로도 우회할 수 없다 (08번 요구사항 5.3). 원본을 지워 파생본까지 가는 길도 같다
+    for target in (a["deid"], a["orig"]):
+        r = ctx.client.post(f"/v1/assets/{target}/deletion", json={"reason": "시험", "confirm_affected": True},
+                            headers=ctx.as_user(ADMIN_A, mfa=True))
+        assert r.status_code == 409 and "철회" in r.json()["detail"], r.text
+        assert {x["cited_by"] for x in r.json()["affected"]} == {"DATASET"}
+    with ctx.c.sessionmaker() as db:
+        kept = db.get(Asset, a["deid"])
+        assert kept is not None and kept.deleted_at is None and kept.storage_key is not None
+    assert ctx.c.storage.head_object(ctx.c.settings.bucket_proc, kept.storage_key) is not None
 
     # 하향 + 즉시 철회 (요구사항 10.3): 새 URL 발급 중단, 회수 불가 안내, 파기 확인
     r = share(ctx, ADMIN_A, a["deid"], "PROGRAM_REVIEW", existing_grant_handling="REVOKE_NOW")
@@ -216,6 +226,10 @@ def test_t08_t15_dataset_distribution(ictx) -> None:
     assert ctx.client.post(path, headers=ctx.as_user(OP), json={"version": "1.1.0", "item_asset_ids": [a["deid"]],
                                                                 "data_card": CARD}).status_code == 422
     assert ctx.client.get("/v1/datasets", headers=ctx.as_user(CONSUMER)).json()["items"] == []
+    # 이용 권한을 철회한 뒤에는 삭제할 수 있다 (안내한 절차대로)
+    r = ctx.client.post(f"/v1/assets/{a['deid']}/deletion", json={"reason": "철회 후 삭제", "confirm_affected": False},
+                        headers=ctx.as_user(ADMIN_A, mfa=True))
+    assert r.status_code == 200 and r.json()["certificate_id"].startswith("dlc_"), r.text
 
     # DCAT: 모든 항목이 L4인 게시 데이터셋만 (요구사항 12)
     assert ctx.client.get("/v1/catalog/dcat").json()["dcat:dataset"] == []

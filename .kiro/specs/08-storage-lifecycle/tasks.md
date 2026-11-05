@@ -11,7 +11,7 @@
 - [ ] 9. DATASET 존 사본을 원 자산 만료와 별도로 — 요구사항 3.5 (13번에서 데이터셋 생기면, 정책 표에는 DATASET KEEP 있음)
 - [x] 10. 법적 보류 설정·해제(운영자·사유·감사)·삭제 제외 — 요구사항 4.1, 4.2
 - [x] 11. 자산·회차 삭제·파생본 포함·삭제 증명·백업 소멸일 — 요구사항 5.1, 5.2 · 시험 `test_asset_deletion_*`, `test_session_deletion_and_cross_org`
-- [ ] 12. GRANTED 데이터셋 포함 시 409·증빙 인용 영향 목록과 근거 손상 표시 — 요구사항 5.3, 5.4 (증빙·보고서 인용은 10번에서 완료: `retention.affected_by()` → 409·영향 목록, 근거 손상 표시. 데이터셋은 13번)
+- [x] 12. GRANTED 데이터셋 포함 시 재확인(`confirm_affected=true`)과 무관하게 409·철회 안내(원본 삭제로 파생본에 닿는 경로 포함, 철회 후에는 삭제 가능), 증빙·보고서 인용은 영향 목록 → 재확인 후 삭제 → 근거 손상(DELETED) 표시 — 요구사항 5.3, 5.4 · 시험 `test_t08_t15_dataset_distribution`, `test_t11_*`(삭제 재확인 단계)
 - [x] 13. 계층형 백업 작업(DB 스냅샷 pg_dump·EVIDENCE·DEID·DATASET·PROTECTED → 별도 S3 증분·해시 확인, 결과 기록·실패 알림·D_BACKUP) — 요구사항 6.1~6.3, 6.5 · ADR-0021 · 시험 `test_t10_tiered_backup_and_restore`. 운영 도구(pgBackRest·rclone·restic)는 PoC 후 교체, PITR·암호화·오래된 회차 정리 없음
 - [x] 13b. `make restore-test`: 임시 DB·임시 위치 복원 → 행 수·감사 체인·sha256 대조 — 요구사항 7.1 (T10-a)
 - [x] 13c. 공용 이미지 PG16 도구·Compose 백업 설정·소유자 연결 전달·주버전 불일치 거부 — 요구사항 6.1, 6.3, 7.1 · ADR-0022 · 단위 `test_backup_tools.py`·T10·비루트 이미지 CLI 백업/복원 확인. API·DB 구조 변경 없음(새 마이그레이션·down 해당 없음)

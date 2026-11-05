@@ -141,8 +141,12 @@ def delete_assets(c: Container, db: Session, *, organization_id: str, assets: li
         raise DeletionRefused("CONFLICT", f"법적 보류 중인 자산이 있어 삭제할 수 없습니다 ({len(held)}건)",
                               [{"asset_id": x, "reason": "LEGAL_HOLD"} for x in held])
     affected = affected_by(db, assets)
+    granted = [x for x in affected if x["cited_by"] == "DATASET"]
+    if granted:  # 유효한 이용 권한이 있는 데이터셋 버전은 재확인으로도 지울 수 없다 — 철회가 먼저 (요구사항 5.3, T15-c)
+        raise DeletionRefused("CONFLICT", "유효한 이용 권한이 있는 데이터셋에 포함된 자산은 삭제할 수 없습니다. "
+                              "이용 권한을 먼저 철회하세요", granted)
     if affected and not confirm_affected:  # 영향 목록 확인 후 재확인 (요구사항 5.4)
-        raise DeletionRefused("CONFLICT", "인용 중인 증빙·데이터셋이 있습니다. confirm_affected=true로 다시 요청하세요",
+        raise DeletionRefused("CONFLICT", "인용 중인 증빙·보고서가 있습니다. confirm_affected=true로 다시 요청하세요",
                               affected)
     now = c.clock.now()
     objects: list[dict[str, Any]] = []

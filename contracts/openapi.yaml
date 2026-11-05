@@ -2391,7 +2391,7 @@ paths:
       tags: [assets]
       operationId: deleteAsset
       summary: 자산 삭제 요청 (ORG_ADMIN, 다중 인증). 원본과 파생본의 활성 객체를 지우고 삭제 증명을 만든다
-      description: 법적 보류 중이면 409. 승인된 증빙·데이터셋이 인용하면 영향 목록과 함께 409를 주고, confirm_affected=true로 다시 요청해야 한다.
+      description: 법적 보류 중이면 409. 유효한 이용 권한(GRANTED)이 있는 데이터셋 버전에 포함되면 confirm_affected와 관계없이 409(이용 권한을 먼저 철회). 승인된 증빙·보고서가 인용하면 영향 목록과 함께 409를 주고, confirm_affected=true로 다시 요청하면 삭제하며 인용한 승인본에 근거 손상이 표시된다 (08번 요구사항 5.3·5.4).
       x-freeze: G1
       x-status: draft
       requestBody:
@@ -3759,7 +3759,7 @@ components:
       required: [reason]
       properties:
         reason: {type: string, minLength: 2, maxLength: 500}
-        confirm_affected: {type: boolean, default: false, description: 영향 목록을 확인했다는 재확인}
+        confirm_affected: {type: boolean, default: false, description: 증빙·보고서 영향 목록을 확인했다는 재확인. 이용 권한이 있는 데이터셋 포함은 우회하지 않는다}
 
     DeletionCertificate:
       type: object
