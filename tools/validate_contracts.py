@@ -181,7 +181,28 @@ for p in sorted(EX.glob("observation-batch.*.json")):
 
 # ---------------------------------------------------------------- 5. OpenAPI
 api_path = C / "openapi.yaml"
-api = yaml.safe_load(api_path.read_text(encoding="utf-8"))
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """중복 키를 오류로 본다. PyYAML은 뒤 값으로 덮어쓰지만 다른 도구(웹 타입 생성 등)는 거부한다."""
+
+
+def _mapping_without_duplicates(loader, node, deep=False):
+    seen = set()
+    for key_node, _ in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in seen:
+            raise yaml.constructor.ConstructorError(None, None, f"중복 키 {key!r}", key_node.start_mark)
+        seen.add(key)
+    return loader.construct_mapping(node, deep=deep)
+
+
+_UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping_without_duplicates)
+try:
+    api = yaml.load(api_path.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)  # nosec B506 - SafeLoader 하위
+except yaml.YAMLError as e:
+    err(f"[openapi] YAML 오류: {e}")
+    api = yaml.safe_load(api_path.read_text(encoding="utf-8"))
 if not str(api.get("openapi", "")).startswith("3.1"):
     err("[openapi] openapi 버전은 3.1.x 여야 함")
 

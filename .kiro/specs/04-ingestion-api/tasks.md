@@ -19,7 +19,7 @@
 - [x] 17. 웹훅 구독·서명 전송·재시도·비활성화 — 요구사항 8.1~8.3 · `/v1/webhooks/subscriptions`, outbox(0015)·워커 전송·SSRF 차단 · 시험 `tests/integration/test_webhooks.py` · ADR-0030
 - [x] 18. 호출 제한 429 + Retry-After — 요구사항 9.1, 9.2 (주체별 분당, 자동 시험 없음)
 - [x] 19. 응답 계약 시험 (UploadCreated·UploadStatus·PartList·Receipt·asset-metadata) — 요구사항 10.1
-- [x] 20. Python 예제 클라이언트(`examples/python`) + Schemathesis 계약 시험(CI backend 작업의 `pytest`) — 요구사항 10.2 · 시험 `test_example_client_interrupted_upload_resumes_remaining_parts`, `test_schemathesis_positive`, `test_schemathesis_negative` (찾은 계약 불일치 M1~M8은 `test_known_contract_mismatch` strict xfail로 재현만 함 — 계약·앱 수정은 별도 작업)
+- [x] 20. Python 예제 클라이언트(`examples/python`) + Schemathesis 계약 시험(CI backend 작업의 `pytest`) — 요구사항 10.2 · 시험 `test_example_client_interrupted_upload_resumes_remaining_parts`, `test_schemathesis_positive`, `test_schemathesis_negative` (처음 찾은 불일치 M1~M8은 계약·앱을 고치고 봐주는 표 없이 돌린다 — 회귀 시험 `test_fixed_mismatch_*`, ADR-0035)
 - [ ] 21. 10GB 끊고 재개 시험 (SeaweedFS) — 요구사항 10.3 (현재는 11MB 축소판)
 - [x] 22. 손상 파일 격리 시험 — 요구사항 10.4
 - [x] 23. 장비 정책 조회 — 요구사항 11.1 (03번에서 구현)

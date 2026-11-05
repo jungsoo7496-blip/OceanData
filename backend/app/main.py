@@ -45,6 +45,9 @@ def create_app(c: Container | None = None) -> FastAPI:
 
     warn_on_startup(c)  # 서버 측 암호화를 요청했는데 지원하지 않으면 기동 경고 (08번 요구사항 1.4)
     install_error_handlers(app)
+    from app.api.contract_query import _validators
+
+    _validators()  # 조회 조건 검사기를 시작할 때 만든다 (계약 파일이 깨졌으면 요청마다가 아니라 기동 때 실패)
     app.add_middleware(RequestContextMiddleware)
     app.include_router(system.router)
     app.include_router(auth.router)

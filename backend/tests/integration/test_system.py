@@ -44,6 +44,9 @@ def test_problem_format_for_404_and_unhandled(ctx) -> None:
     r = ctx.client.get("/__boom")
     assert r.status_code == 500 and r.json()["code"] == "INTERNAL"
     assert "internal/path" not in r.text and "SELECT" not in r.text
+    # 처리 못 한 예외도 요청 ID를 본문·헤더에 같게 단다 (Schemathesis M8에서 빈 request_id였음)
+    assert r.json()["request_id"] == r.headers["x-request-id"] and len(r.json()["request_id"]) == 26
+    assert r.json()["instance"] == "/__boom"
 
 
 def test_validation_error_has_json_pointers(ctx) -> None:

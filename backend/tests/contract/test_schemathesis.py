@@ -9,16 +9,14 @@ API 전체(125개 작업)를 돌리면 시간이 길고, 다른 스펙의 작업
 쓰기 작업은 업로드 계열만, 없는 ID·계약 위반 입력으로만 보낸다 (정상 업로드는 examples/python 예제 클라이언트 시험).
 결정적으로 돌린다: Hypothesis derandomize, 작업마다 예제 MAX_EXAMPLES개, 축소(shrink) 단계 없음.
 
-알려진 계약 불일치 (M1~M8)는 아래 KNOWN_* 표에서 그 검사만 봐주고, test_known_contract_mismatch가 strict xfail로
-재현한다. 앱이나 계약이 고쳐지면 xfail이 XPASS로 실패하므로 표의 해당 줄과 xfail 항목을 함께 지운다.
+처음 돌렸을 때 찾은 불일치 M1~M8(계약에 없는 400·404·409·429, 상한 없는 완료 요청, instance 인코딩, 계약을 어긴 조회 조건,
+NUL 문자 500)은 계약·앱을 고쳤고, 봐주는 표 없이 모든 검사를 돌린다. test_fixed_mismatch_*가 각 항목의 회귀를 막는다.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from functools import wraps
 from typing import Any
 
 import pytest
@@ -29,7 +27,7 @@ from schemathesis import GenerationMode
 from schemathesis.checks import CHECKS, load_all_checks
 
 from app.ratelimit import Limiter
-from app.seed import DEV_A_CAMERA, DEV_A_COLLECTOR, SES_A
+from app.seed import DEV_A_CAMERA, DEV_A_COLLECTOR, PRJ_A, SES_A
 from app.services.contracts import contracts_dir
 from tests.integration.test_ingest import drain, manifest, mp4_bytes, upload_all
 
@@ -60,73 +58,15 @@ POSITIVE_CHECKS = ("not_a_server_error", "status_code_conformance", "content_typ
 NEGATIVE_CHECKS = ("not_a_server_error", "status_code_conformance", "content_type_conformance",
                    "response_schema_conformance", "negative_data_rejection")
 
-# ---- 알려진 계약 불일치 (보고 항목 번호). 앱 코드·계약은 이 작업 범위 밖이라 고치지 않고 보고만 한다.
-# (작업, 상태 코드) → 계약에 없는 상태 코드지만 status_code_conformance에서 봐준다
-KNOWN_UNDOCUMENTED_STATUS: dict[tuple[str, int], str] = {
-    ("GET /v1/projects", 400): "M1", ("GET /v1/sessions", 400): "M1", ("GET /v1/devices", 400): "M1",
-    ("GET /v1/uploads/{upload_id}/parts", 409): "M2",
-    ("POST /v1/uploads", 404): "M5",
-}
-# 계약을 어긴 조회 조건을 2xx로 받아 주는 작업 → negative_data_rejection에서 봐준다
-KNOWN_ACCEPTS_INVALID_QUERY: dict[str, str] = {"GET /v1/assets": "M4", "GET /v1/sessions": "M4"}
-# 계약에 상한이 없는 값을 서버가 상한으로 400 거절하는 본문 위치 → positive_data_acceptance에서 봐준다
-KNOWN_UNDECLARED_LIMITS: dict[str, tuple[str, str]] = {
-    "POST /v1/uploads/{upload_id}/complete": (r"/parts(/\d+/(part_number|etag))?", "M7"),
-}
-# M3: 문제 응답의 instance에 디코딩한 경로를 그대로 넣어 비ASCII·제어 문자 경로면 uri-reference가 아니다
-#     → 경로 값은 URI 경로 조각에 쓸 수 있는 문자만 생성한다 (_uri_safe_path)
-# M6: 모든 인증 작업이 429를 낼 수 있지만 대부분 계약에 없다 → 호출 제한을 넉넉히 올려 이 시험에서는 429가 나지 않게 한다
-# M8: 문자열 경로·조회 값에 NUL이 있으면 500 → 생성하지 않는다 (_generatable)
-
-
-def _tolerating(check: Callable[..., Any], skip: Callable[[Any, Any], bool]) -> Callable[..., Any]:
-    @wraps(check)
-    def wrapper(ctx: Any, response: Any, case: Any) -> Any:
-        if skip(response, case):
-            return None
-        return check(ctx, response, case)
-
-    return wrapper
-
-
 def _checks(names: tuple[str, ...]) -> list[Callable[..., Any]]:
     load_all_checks()
-    out = []
-    for name, fn in zip(names, CHECKS.get_by_names(list(names)), strict=True):
-        if name == "status_code_conformance":
-            fn = _tolerating(fn, lambda r, c: (c.operation.label, r.status_code) in KNOWN_UNDOCUMENTED_STATUS)
-        elif name == "negative_data_rejection":
-            fn = _tolerating(fn, lambda r, c: c.operation.label in KNOWN_ACCEPTS_INVALID_QUERY
-                             and 200 <= r.status_code < 300)
-        elif name == "positive_data_acceptance":
-            fn = _tolerating(fn, _undeclared_limit_rejection)
-        out.append(fn)
-    return out
-
-
-def _undeclared_limit_rejection(response: Any, case: Any) -> bool:
-    known = KNOWN_UNDECLARED_LIMITS.get(case.operation.label)
-    if known is None or response.status_code != 400:
-        return False
-    errors = response.json().get("errors") or []
-    return bool(errors) and all(re.fullmatch(known[0], e.get("pointer", "")) for e in errors)
-
-
-_URI_SEGMENT = re.compile(r"[A-Za-z0-9\-._~!$&'()*+,;=:@]*")
-
-
-def _uri_safe_path(case: Any) -> bool:
-    # M3: 서버가 디코딩한 경로를 instance에 그대로 넣으므로 URI 경로 조각에 그대로 쓸 수 있는 문자만 생성한다
-    return all(isinstance(v, str) and _URI_SEGMENT.fullmatch(v) for v in (case.path_parameters or {}).values())
+    return list(CHECKS.get_by_names(list(names)))
 
 
 def _generatable(case: Any) -> bool:
     query = case.query or {}
     # cursor는 서버가 발급한 불투명 토큰이다. 임의 문자열은 계약 형식(문자열 ≤512)에 맞아도 의미가 없다
-    if "cursor" in query:
-        return False
-    # M8: NUL(\x00)이 든 문자열 조건은 DB까지 가서 500이 난다 → 생성하지 않는다 (xfail로 따로 재현)
-    return not any("\x00" in str(v) for v in query.values()) and _uri_safe_path(case)
+    return "cursor" not in query
 
 
 def _set_rate_limit(app: Any, per_minute: int) -> None:
@@ -151,7 +91,7 @@ class ContractEnv:
 def contract_env(ictx) -> Iterator[ContractEnv]:
     """시드 DB(ictx: 기관 A·B, 장비, 회차) + 등록 완료 업로드 1건 + 진행 중 업로드 1건."""
     app = ictx.client.app
-    _set_rate_limit(app, 100_000)  # M6 참고. 호출 제한 자체는 별도 시험(04번 요구사항 9)
+    _set_rate_limit(app, 100_000)  # 429는 계약에 있지만(M6) 이 시험은 실제 응답을 보려고 제한을 넉넉히 둔다
     h = ictx.as_user(102)  # 제공기관 A 구성원 (업로드·자산 권한)
     data = mp4_bytes(5 * MB, seed=501)
     done = upload_all(ictx, manifest(data), data, h)
@@ -217,100 +157,75 @@ def test_schemathesis_negative(contract_env: ContractEnv) -> None:
     _run(contract_env, NEGATIVE_OPERATIONS, GenerationMode.NEGATIVE, _checks(NEGATIVE_CHECKS), use_seeded=False)
 
 
-# ---- 알려진 불일치 재현 (strict xfail). 고쳐지면 XPASS → 위 KNOWN_* 표와 이 항목을 지운다.
-# 전제(현재 동작)가 바뀌면 AssertionError로 그냥 실패한다. xfail로 넘기는 것은 ContractMismatch뿐이다.
-class ContractMismatch(Exception):
-    pass
+# ---- 고친 불일치의 회귀 시험 (처음 Schemathesis로 찾은 M1~M8)
+def _documented(env: ContractEnv, label: str) -> set[str]:
+    return set(env.operation(label).responses.status_codes)
 
 
-def _require_documented(env: ContractEnv, label: str, status: int) -> None:
-    documented = set(env.operation(label).responses.status_codes)
-    if str(status) not in documented:
-        raise ContractMismatch(f"{label}: {status} 응답이 계약에 없다 (계약: {sorted(documented)})")
-
-
-def _m1(env: ContractEnv) -> None:
-    for path in ("/v1/projects", "/v1/sessions", "/v1/devices"):
+def test_fixed_mismatch_status_codes_are_documented(contract_env: ContractEnv) -> None:
+    env = contract_env
+    for path in ("/v1/projects", "/v1/sessions", "/v1/devices"):  # M1: 잘못된 limit·cursor → 400
         assert env.client.get(f"{path}?limit=0", headers=env.headers).status_code == 400
         assert env.client.get(f"{path}?cursor=not-a-cursor", headers=env.headers).status_code == 400
-        _require_documented(env, f"GET {path}", 400)
-
-
-def _m2(env: ContractEnv) -> None:
-    done = env.seeded["upload_id"][0]
+        assert "400" in _documented(env, f"GET {path}")
+    done = env.seeded["upload_id"][0]  # M2: 완료된 업로드의 파트 조회 → 409
     r = env.client.get(f"/v1/uploads/{done}/parts", headers=env.headers)
-    assert r.status_code == 409 and r.json()["code"] == "CONFLICT"
-    _require_documented(env, "GET /v1/uploads/{upload_id}/parts", 409)
-
-
-def _m3(env: ContractEnv) -> None:
-    r = env.client.get("/v1/uploads/%C3%BE", headers=env.headers)
-    assert r.status_code == 404 and r.json()["instance"] == "/v1/uploads/\u00fe"
+    assert r.status_code == 409 and "409" in _documented(env, "GET /v1/uploads/{upload_id}/parts")
+    env.operation("GET /v1/uploads/{upload_id}/parts").validate_response(r)
+    # M5: 없는·범위 밖 장비 → 404 (테넌트 격리)
+    r = env.client.post("/v1/uploads", json=manifest(b"synthetic", source="dev_" + "Z" * 26), headers=env.headers)
+    assert r.status_code == 404 and "404" in _documented(env, "POST /v1/uploads")
+    # M6: 인증 작업은 모두 호출 제한(429)을 문서화한다
+    spec = env.schema.raw_schema
+    missing = [f"{m.upper()} {p}" for p, item in spec["paths"].items() for m, op in item.items()
+               if isinstance(op, dict) and "responses" in op and "401" in op["responses"]
+               and "429" not in op["responses"]]
+    assert not missing, missing
+    _set_rate_limit(env.app, 1)
     try:
-        env.operation("GET /v1/uploads/{upload_id}").validate_response(r)  # instance: format uri-reference
-    except Exception as exc:  # noqa: BLE001 - Schemathesis FailureGroup
-        raise ContractMismatch(str(exc)) from None
+        env.client.get("/v1/me", headers=env.headers)
+        r = env.client.get("/v1/me", headers=env.headers)
+        assert r.status_code == 429 and r.headers.get("retry-after")
+        env.operation("GET /v1/me").validate_response(r)
+    finally:
+        _set_rate_limit(env.app, 100_000)
 
 
-def _m4(env: ContractEnv) -> None:
+def test_fixed_mismatch_complete_limits_match_server(contract_env: ContractEnv) -> None:
+    env = contract_env  # M7: 계약 상한 = 서버 상한 (part_number ≤ 10000, etag ≤ 200자, parts ≤ 10000개)
+    item = env.schema.raw_schema["components"]["schemas"]["CompleteRequest"]["properties"]["parts"]
+    assert item["maxItems"] == 10000
+    assert item["items"]["properties"]["part_number"]["maximum"] == 10000
+    assert item["items"]["properties"]["etag"]["maxLength"] == 200
+    pending = env.seeded["upload_id"][1]
+    r = env.client.post(f"/v1/uploads/{pending}/complete", json={"parts": [{"part_number": 10001, "etag": "x"}]},
+                        headers=env.headers)
+    assert r.status_code == 400 and r.json()["errors"][0]["pointer"] == "/parts/0/part_number"
+
+
+def test_fixed_mismatch_instance_query_and_nul(contract_env: ContractEnv) -> None:
+    env = contract_env
+    # M3: instance는 퍼센트 인코딩한 URI 참조
+    r = env.client.get("/v1/uploads/%C3%BE", headers=env.headers)
+    assert r.status_code == 404 and r.json()["instance"] == "/v1/uploads/%C3%BE"
+    env.operation("GET /v1/uploads/{upload_id}").validate_response(r)
+    # M4: 계약을 어긴 조회 조건 → 400 (열거값·ID 형식·UTC Z·길이), 맞는 조건은 그대로 200
     for path in ("/v1/assets?data_type=NOT_A_DATA_TYPE", "/v1/assets?source_system_id=x",
                  "/v1/assets?captured_from=2026-11-01T09:00:00%2B09:00", "/v1/sessions?project_id=x",
                  "/v1/sessions?label=" + "x" * 121):
         r = env.client.get(path, headers=env.headers)
-        assert r.status_code in (200, 400), r.text
-        if r.status_code != 400:
-            raise ContractMismatch(f"GET {path}: 계약을 어긴 조회 조건을 {r.status_code}로 받았다 (400이어야 함)")
-
-
-def _m5(env: ContractEnv) -> None:
-    r = env.client.post("/v1/uploads", json=manifest(b"synthetic", source="dev_" + "Z" * 26), headers=env.headers)
-    assert r.status_code == 404 and r.json()["code"] == "NOT_FOUND"
-    _require_documented(env, "POST /v1/uploads", 404)
-
-
-def _m6(env: ContractEnv) -> None:
-    _set_rate_limit(env.app, 1)
-    env.client.get("/v1/me", headers=env.headers)
-    r = env.client.get("/v1/me", headers=env.headers)
-    assert r.status_code == 429 and r.headers.get("retry-after")
-    _require_documented(env, "GET /v1/me", 429)
-
-
-def _m7(env: ContractEnv) -> None:
-    pending = env.seeded["upload_id"][1]
-    r = env.client.post(f"/v1/uploads/{pending}/complete", json={"parts": [{"part_number": 10001, "etag": "x"}]},
-                        headers=env.headers)
-    assert r.status_code == 400 and r.json()["errors"][0]["pointer"] == "/parts/0/part_number", r.text
-    item = env.schema.raw_schema["components"]["schemas"]["CompleteRequest"]["properties"]["parts"]["items"]
-    maximum = item["properties"]["part_number"].get("maximum")
-    if maximum is None or maximum >= 10001:
-        raise ContractMismatch(f"계약 CompleteRequest.part_number 최댓값 {maximum} — 서버는 10000을 넘으면 400")
-
-
-def _m8(env: ContractEnv) -> None:
-    for path in ("/v1/sessions?label=%00", "/v1/assets?data_type=%00", "/v1/uploads/%00", "/v1/assets/ast_%00"):
+        assert r.status_code == 400 and r.json()["errors"][0]["pointer"].startswith("/query/"), (path, r.text)
+        env.operation("GET " + path.split("?")[0]).validate_response(r)
+    assert env.client.get("/v1/assets?data_type=VIDEO&captured_from=2026-11-01T00:00:00Z",
+                          headers=env.headers).status_code == 200
+    # M8: NUL은 조회 조건이면 400, 경로 ID면 404, JSON 본문 문자열이면 400 — 500이 아니고 요청 ID가 있다
+    for path, status in (("/v1/sessions?label=%00", 400), ("/v1/assets?data_type=%00", 400),
+                         ("/v1/assets?env_metric=a%00", 400), ("/v1/uploads/%00", 404), ("/v1/assets/ast_%00", 404),
+                         ("/v1/sessions/%00", 404), ("/v1/devices/%00/policy", 404)):
         r = env.client.get(path, headers=env.headers)
-        assert r.status_code in (400, 404, 500), r.text
-        if r.status_code >= 500:
-            body = r.json()
-            raise ContractMismatch(f"GET {path}: {r.status_code} {body.get('code')} "
-                                   f"(request_id={body.get('request_id')!r})")
-
-
-KNOWN_MISMATCHES: dict[str, tuple[Callable[[ContractEnv], None], str]] = {
-    "M1": (_m1, "목록 조회(listProjects·listSessions·listDevices)가 잘못된 limit·cursor에 400을 내지만 계약에 400이 없다"),
-    "M2": (_m2, "완료된 업로드의 GET /v1/uploads/{id}/parts가 409 CONFLICT를 내지만 계약에 409가 없다"),
-    "M3": (_m3, "problem+json instance에 디코딩한 경로를 넣어 비ASCII·제어 문자 경로면 uri-reference 형식이 아니다"),
-    "M4": (_m4, "GET /v1/assets·/v1/sessions가 계약 밖 조회 조건(enum·pattern·maxLength·UTC)을 400 없이 200으로 받는다"),
-    "M5": (_m5, "POST /v1/uploads가 없는·범위 밖 장비/회차에 404를 내지만 계약 createUpload에 404가 없다"),
-    "M6": (_m6, "호출 제한 429가 모든 인증 작업에서 나오지만 대부분 작업의 계약 응답에 429가 없다"),
-    "M7": (_m7, "계약 CompleteRequest에 part_number·etag·parts 상한이 없는데 서버는 상한(10000·200자·10000개)으로 400을 낸다"),
-    "M8": (_m8, "문자열 경로·조회 값에 NUL(%00)이 있으면 DB 오류가 그대로 500 INTERNAL이 된다 (request_id도 빈 문자열)"),
-}
-
-
-@pytest.mark.parametrize("mid", [
-    pytest.param(k, marks=pytest.mark.xfail(strict=True, raises=ContractMismatch, reason=f"{k}: {v[1]}"))
-    for k, v in KNOWN_MISMATCHES.items()])
-def test_known_contract_mismatch(contract_env: ContractEnv, mid: str) -> None:
-    KNOWN_MISMATCHES[mid][0](contract_env)
+        assert r.status_code == status, (path, r.status_code, r.text)
+        assert r.json()["request_id"] == r.headers["x-request-id"]
+    r = env.client.post("/v1/sessions", headers=env.headers, json={
+        "project_id": PRJ_A, "label": "nul-check", "title": "제목\u0000",
+        "starts_at": "2026-11-01T00:00:00Z"})
+    assert r.status_code == 400 and r.json()["errors"][0]["code"] == "invalid_character", r.text

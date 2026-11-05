@@ -67,6 +67,9 @@ def get_principal(request: Request, db: Session = Depends(get_db), c: Container 
     request.state.principal = principal
     limiter = request.app.state.__dict__.setdefault("limiter", Limiter(c.settings.rate_limit_per_minute))
     limiter.check(f"{principal.kind}:{principal.principal_id}")  # 클라이언트별 분당 요청 수 (04번 요구사항 9)
+    from app.api.contract_query import check_request_against_contract
+
+    check_request_against_contract(request)  # 조회 조건은 계약 스키마로 (인증 뒤, 04번 요구사항 10.2)
     return principal
 
 

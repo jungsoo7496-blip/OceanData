@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import DBAPIError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.context import request_id_var
@@ -83,9 +85,14 @@ def problem_body(code: str, *, instance: str | None, title: str | None = None, d
     return body
 
 
+def instance_of(path: str) -> str:
+    """problem+json instance는 URI 참조여야 한다 — 디코딩된 경로를 다시 퍼센트 인코딩한다 (Schemathesis M3)."""
+    return quote(path, safe="/:@!$&'()*+,;=")
+
+
 def problem_response(code: str, request: Request | None = None, **kw: Any) -> JSONResponse:
     headers = kw.pop("headers", None) or {}
-    body = problem_body(code, instance=request.url.path if request else None, **kw)
+    body = problem_body(code, instance=instance_of(request.url.path) if request else None, **kw)
     return JSONResponse(body, status_code=STATUS[code], media_type=PROBLEM_JSON, headers=headers)
 
 
@@ -125,8 +132,22 @@ def install_error_handlers(app: FastAPI) -> None:
             code = "VALIDATION_ERROR"
         return problem_response(code, request)
 
+    @app.exception_handler(DBAPIError)
+    async def _db(request: Request, exc: DBAPIError) -> JSONResponse:
+        # 문자열에 PostgreSQL이 저장할 수 없는 문자(NUL 등)가 있으면 입력 오류다 (Schemathesis M8, 그 밖은 500)
+        if _pg_code(exc) in ("22021", "22P05"):
+            return problem_response("VALIDATION_ERROR", request, errors=[{
+                "pointer": "", "code": "invalid_character", "message": "문자열에 쓸 수 없는 문자(NUL 등)가 있습니다"}])
+        raise exc
+
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
         # 스택·SQL·내부 경로는 로그에만 (01번 요구사항 10.2)
         log.error("unhandled_exception", exc_info=exc, extra={"path": request.url.path})
         return problem_response("INTERNAL", request)
+
+
+def _pg_code(exc: DBAPIError) -> str | None:
+    """pg8000 오류의 SQLSTATE (args[0]['C'])."""
+    args = getattr(exc.orig, "args", ())
+    return args[0].get("C") if args and isinstance(args[0], dict) else None

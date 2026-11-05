@@ -34,8 +34,11 @@ class RequestContextMiddleware:
         start = time.perf_counter()
         status_holder = {"status": 500}
 
+        started = {"v": False}
+
         async def send_wrapper(message: Message) -> None:
             if message["type"] == "http.response.start":
+                started["v"] = True
                 status_holder["status"] = message["status"]
                 headers = list(message.get("headers", []))
                 headers.append((b"x-request-id", rid.encode()))
@@ -43,7 +46,19 @@ class RequestContextMiddleware:
             await send(message)
 
         try:
-            await self.app(scope, receive, send_wrapper)
+            try:
+                await self.app(scope, receive, send_wrapper)
+            except Exception as exc:  # noqa: BLE001 - 처리 못 한 예외도 요청 ID를 단 문제 응답으로 (01번 요구사항 4)
+                if started["v"]:
+                    raise
+                # 바깥 ServerErrorMiddleware까지 가면 요청 ID 문맥이 이미 풀려 request_id가 빈 값이 된다 (M8)
+                log.error("unhandled_exception", exc_info=exc, extra={"path": scope.get("path")})
+                from starlette.responses import JSONResponse
+
+                from app.errors import PROBLEM_JSON, instance_of, problem_body
+
+                body = problem_body("INTERNAL", instance=instance_of(scope.get("path", "")))
+                await JSONResponse(body, status_code=500, media_type=PROBLEM_JSON)(scope, receive, send_wrapper)
         finally:
             route = scope.get("route")
             route_path = getattr(route, "path", None) or "unmatched"

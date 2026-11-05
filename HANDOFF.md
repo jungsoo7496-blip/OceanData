@@ -11,6 +11,7 @@
 -1d. **04번 웹훅 완료 (2026-11-05, 클라우드, ADR-0030):** 구독 API(https·사설 주소 거부·비밀 한 번), 상태 변경 같은 트랜잭션의 outbox(0015, down 포함), 워커 서명 전송·지수 백오프·N회 실패 시 구독 끔+기관 메일, 전송 직전 DNS 사설 주소 차단. 남은 위험: DNS 재바인딩은 나가는 방화벽으로(확인 필요).
 -1e. **04번 악성코드 검사 포트 완료 (2026-11-05, 클라우드, ADR-0031):** 무결성 검증 스트리밍 중 검사, 의심 시 QUARANTINED(MALWARE_SUSPECTED), 기관 정책 `org-policy --malware-scan on`(0016, down 포함), 검사기 없으면 상태 전이 전에 멈춰 재시도. `MALWARE_SCANNER=mock-eicar`는 시험용 — **실제 검사기 제품은 결정 대기**.
 -1f. **07번 MQTT 암호 보안 저장 (2026-11-05, 클라우드):** 에이전트가 시작할 때 config.json의 평문 `password`를 보안 저장소(`secrets/mqtt-<장비>.json`, Windows DPAPI·Unix 0600)로 옮기고 `password_secret`만 남긴다. Linux Go 전체 시험 통과, Windows는 교차 빌드·vet만 — **Windows 실기 시험 필요**.
+-1k. **04번 예제 클라이언트·Schemathesis 완료 + 찾은 불일치 8건 수정 (2026-11-05, 클라우드, ADR-0035):** `examples/python/marine_client.py`(API 키·토큰, 끊긴 업로드는 빠진 파트만, 429·503 Retry-After, 만료 URL·세션 처리)와 `tests/contract/test_schemathesis.py`(수집 흐름 20개 조회 + 업로드 쓰기 음성, 결정적 실행, schemathesis 4.31.1 MIT). 처음 찾은 M1~M8을 고침: 계약에 400·404·409·429(인증 작업 141개 모두)·완료 요청 상한, 조회 조건을 계약 스키마로 검사(`app/api/contract_query.py`, 인증 뒤 400), NUL은 경로 404·조건/본문 400(전에는 500), 처리 못 한 예외도 요청 ID를 단 500, instance 퍼센트 인코딩. 계약 검사기가 YAML 중복 키를 잡는다. 부하 시험 매니페스트의 `client.kind: SDK`(계약 밖)를 `API`로.
 -1i. **02번 Keycloak MFA 강제 완료 (2026-11-05, 클라우드 보조 작업, ADR-0034):** realm 역할 ORG_ADMIN·PLATFORM_OPERATOR → 표지 역할 `mfa-required` → 브라우저 흐름이 로그인마다 OTP, `marine-web` 기본 LoA 2(acr=2)·amr 매퍼(pwd·otp), 개발용 비밀번호 그랜트는 관리자 totp 필수. 실제 Keycloak 26.0.7 일회용 컨테이너에서 브라우저 6/6·백엔드 토큰 검증 19/19 통과(`deploy/compose/keycloak/tests/verify-mfa.sh`), 도커 없는 구조 시험은 CI `tools/tests`. **남은 것:** web 앱·전체 compose로는 미확인, `--import-realm`이 기존 realm을 덮는지 미확인(README는 `up -d --force-recreate keycloak` 안내), 구성원 관리(작업 12)에서 DB 역할과 realm 역할을 함께 바꿔야 함.
 -1j. **09번 회차 타임라인 완료 (2026-11-05, 클라우드 보조 작업):** `/sessions/:sessionId` — 장비별 자산 촬영 구간(미검증 빗금, 촬영시각 미상은 따로), 이벤트(누르면 겹치는 자산), 관측값 수집 구간(회차 필터가 없어 시간 창의 장비·항목별 `GET /v1/observations` 구간 집계, 최대 40조합), 환경 정보, 표 대체 보기. 새 의존성 없음, axe 위반 0. `a11y.css` 태그 대비 규칙이 AntD 스타일보다 늦게 적용되던 문제(모든 화면)도 고침. **남은 것:** 회차 수정(5.1)은 계약에 수정 API가 없어 작업 6 미완.
 -1h. **09번 구간 클립 내보내기 완료 (2026-11-05, 클라우드, ADR-0033):** `POST/GET /v1/assets/{id}/clips`(자기 기관 ORG 역할) → 작업 `clip_export`가 입력 앞 -ss + libx264 재인코딩으로 프레임 단위로 잘라 파생 자산 CLIP(계보 relation=CLIP, `provenance.clip_range_s`, 옮긴 촬영 시각)을 만든다. 같은 구간 두 번 누름은 같은 작업, 원 영상 격리·삭제·인코딩 실패는 새 공통 예외 `PermanentJobError`로 재시도 없이 FAILED. 마이그레이션 0021(작업 정책, down 포함). 자산 상세 화면에서 프록시 재생 위치로 구간 지정·작업 목록. 계약 먼저(common.schema `clip_range_s`·ClipRequest·ClipJob), 웹 타입 재생성. **남은 일:** 짧은 구간도 원본 전체를 받아 오는 비용(범위 읽기 개선 — 확인 필요), 운영 하드웨어 인코딩 시간 실측.
@@ -40,7 +41,7 @@
 **스펙별 남은 [ ] (자세히는 각 tasks.md)**
 - 02: 구성원 관리 — Keycloak 관리 API 연동 방식 결정 필요 (긴급 열람 ADR-0029·관리자 MFA 강제 ADR-0034 완료)
 - 03: (작업 완료) 약정·연계 카드 API·좌표 변환 검증·기관 하위코드 등록·품질 재평가·웹 타입 생성
-- 04: 예제 클라이언트·Schemathesis, 실제 악성코드 검사기 제품 결정 (웹훅·검사 포트/모의 완료, ADR-0030·0031)
+- 04: 실제 악성코드 검사기 제품 결정, 10GB 시험 (웹훅·검사 포트/모의·예제 클라이언트·Schemathesis 완료, ADR-0030·0031·0035)
 - 05: GPU 인코더·대용량 실측 (Model_Registry API·화면·임시 디스크 한도 완료)
 - 06: 실제 PC 서비스 설치·부팅 확인, ROTATING은 15번과 함께. DPAPI·Go SDK·Windows 서명 업데이트 로컬 검증 완료
 - 08: 백업 도구 PoC → ADR-0021 갱신, PITR·백업 암호화·회차 정리, Hot/Warm (용량 예측·월간 리포트·SSE 요청/경고 완료. 전체 용량 값·SSE 지원 확인 필요)
@@ -60,7 +61,7 @@
 | 01 개발 기반 | 완료 | `make up` 실패 경로 자동 시험·golangci-lint(ADR-0032) 완료. 원격 CI 실행 확인만 남음 |
 | 02 인증·테넌트 | 핵심 완료 | 긴급 열람(요구사항 8)·Keycloak 관리자 MFA 강제(ADR-0034) 완료. 구성원 관리(요구사항 9, Keycloak 관리 API 연동 결정 필요) 남음 |
 | 03 메타데이터 표준 | 완료 | 좌표 변환 검증·기관 하위 이벤트 코드 등록·품질 재평가·약정·연계 카드 API·계약 타입 생성(웹 TS·Go SDK, 백엔드는 스키마 검증) |
-| 04 수집 API | 핵심 완료 | 웹훅·쿼터 동시성 시험·악성코드 검사 포트(모의) 완료. 검사기 제품 결정, 예제 클라이언트·Schemathesis, 10GB 시험 남음 |
+| 04 수집 API | 핵심 완료 | 웹훅·쿼터 동시성 시험·악성코드 검사 포트(모의) 완료. 예제 클라이언트·Schemathesis(불일치 8건 수정, ADR-0035) 완료. 검사기 제품 결정, 10GB 시험 남음 |
 | 06 동기화 에이전트 | 로컬 핵심 완료 | DPAPI·재개/영수증·계약 SDK·수동/자동 서명 업데이트 완료. 순환 삭제(15번과), 실제 서비스 설치·부팅 확인 남음 |
 | 05 처리 파이프라인 | 핵심 완료 | Model_Registry 등록 API·화면·임시 디스크 한도/정리 완료. GPU 인코더·대용량 실측 남음 |
 | 07 센서·이벤트 | 완료 | 겹침 자산 조회 API·하위코드 등록 API·MQTT 암호 보안 저장(Windows 실기 확인 필요) |
@@ -179,6 +180,7 @@ tools/         validate_contracts.py, check_traceability.py, check_licenses.py, 
 - ADR-0023 공급망·릴리스 검사 강화·실제 브라우저 탭 종료/재개
 - ADR-0024 CurrentUser DPAPI·서명 업데이트 감독 (Windows native·제품 CLI 재검증 완료)
 - ADR-0025 계약 SDK 생성용 참조 투영·고정 생성기·재생성/실제 호출 검사
+- ADR-0035 계약 기반 조회 조건 검사·NUL 400/404·처리 못 한 예외도 요청 ID·계약 429/400 보강
 - ADR-0034 Keycloak MFA: mfa-required 표지 역할 조건부 OTP + LoA 2 기본 요청 + amr 매퍼
 - ADR-0033 구간 클립: 재인코딩(프레임 정확)·파생 자산 CLIP·clip_range_s·같은 실패는 바로 FAILED(PermanentJobError)
 - ADR-0032 golangci-lint: GPL-3.0 개발 도구로만 `go run` 실행, go.mod·납품물 제외, Linux·Windows 두 번 검사
