@@ -5742,8 +5742,8 @@ components:
         collector_device_id: {$ref: './schemas/common.schema.json#/$defs/device_id'}
         project_id: {$ref: './schemas/common.schema.json#/$defs/project_id'}
         local_copy_policy: {$ref: './schemas/common.schema.json#/$defs/local_copy_policy'}
-        local_retention_days: {type: [integer, 'null'], minimum: 0}
-        expected_interval_s: {type: [integer, 'null'], minimum: 1}
+        local_retention_days: {type: [integer, 'null'], minimum: 0, maximum: 24855, description: '장비 정책 sources[].local_retention_days와 같은 범위 (device-policy.schema.json, ADR-0040)'}
+        expected_interval_s: {type: [integer, 'null'], minimum: 1, maximum: 2147483647, description: '장비 정책 sources[].expected_interval_s와 같은 범위 (device-policy.schema.json, ADR-0040)'}
 
     Agreement:
       type: object

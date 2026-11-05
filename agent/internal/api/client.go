@@ -14,9 +14,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jungsoo7496-blip/oceandata/agent/internal/timex"
 )
 
 // Problem은 RFC 9457 오류 응답이다.
@@ -98,12 +101,23 @@ func readProblem(resp *http.Response) *Problem {
 	if p.Code == "" {
 		p.Code = http.StatusText(resp.StatusCode)
 	}
-	if ra := resp.Header.Get("Retry-After"); ra != "" {
-		if d, err := time.ParseDuration(ra + "s"); err == nil {
-			p.RetryAfter = d
-		}
-	}
+	p.RetryAfter = retryAfter(resp.Header.Get("Retry-After"))
 	return p
+}
+
+// retryAfter는 Retry-After를 기다릴 시간으로 바꾼다. 계약(RetryAfter 머리: 정수 초)과 RFC 9110 delay-seconds처럼 숫자만
+// 받는다. HTTP 날짜·소수·음수·단위가 붙은 값은 0(평소 백오프)이다. 아주 큰 값은 timex 상한(약 68년)으로 자른다 —
+// 대기를 지금 시각에 더한 재시도 시각을 UnixNano로 저장하는데, 넘쳐 과거가 되면 다음 주기에 곧바로 다시 보냈다 (ADR-0040).
+func retryAfter(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" || strings.Trim(v, "0123456789") != "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil { // 숫자만인데 int64도 넘는다
+		n = timex.MaxSeconds
+	}
+	return timex.Seconds(n)
 }
 
 // Enroll은 1회용 등록 코드로 자격증명을 받는다 (POST /v1/agents/enroll).
@@ -168,9 +182,19 @@ func (c *Client) accessToken(ctx context.Context, force bool) (string, error) {
 		return "", err
 	}
 	c.token = tr.AccessToken
-	ttl := time.Duration(tr.ExpiresIn) * time.Second
-	c.tokenExp = time.Now().Add(ttl - ttl/5) // 만료 전에 갱신
+	c.tokenExp = tokenRefreshAt(time.Now(), tr.ExpiresIn)
 	return c.token, nil
+}
+
+// tokenRefreshAt은 토큰을 새로 받을 시각이다 (만료 전에 갱신: 수명의 80%). expires_in이 0 이하면 수명을 모르는 것으로
+// 보고 지금을 돌려준다 — 받은 토큰은 이번 요청에만 쓰고 다음 요청 때 새로 받는다. 아주 큰 값은 timex 상한으로 잘라
+// time.Duration 곱셈이 넘쳐 늘 만료(음수)되거나 엉뚱한 수명이 되지 않게 한다 (ADR-0040).
+func tokenRefreshAt(now time.Time, expiresIn int) time.Time {
+	if expiresIn <= 0 {
+		return now
+	}
+	ttl := timex.Seconds(int64(expiresIn))
+	return now.Add(ttl - ttl/5)
 }
 
 // Do는 인증된 JSON 요청을 보낸다. 401이면 토큰을 한 번 새로 받아 재시도하고, 그래도 401이면 ErrRevoked.

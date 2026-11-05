@@ -80,8 +80,10 @@ class DeviceCreate(BaseModel):
     collector_device_id: str | None = Field(default=None, pattern=ID_PATTERN)
     project_id: str | None = Field(default=None, pattern=ID_PATTERN)
     local_copy_policy: Literal["RETAINED", "ROTATING", "NONE", "UNKNOWN"]
-    local_retention_days: int | None = Field(default=None, ge=0)
-    expected_interval_s: int | None = Field(default=None, ge=1)
+    # 장비 정책 계약과 같은 기술 상한 (device-policy.schema.json, ADR-0040). 장비 기록이 기본 정책의 sources 항목이 되므로
+    # 더 큰 값(예: 24856일)을 받으면 정책 응답이 계약을 어긴다
+    local_retention_days: int | None = Field(default=None, ge=0, le=24855)
+    expected_interval_s: int | None = Field(default=None, ge=1, le=2147483647)
 
 
 @router.get("/v1/devices")
