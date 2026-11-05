@@ -11,7 +11,7 @@ React 18 + TS + Vite, Ant Design 5(ko_KR, 대비 강화 테마), TanStack Query,
 | / | 모두 | 역할별 첫 화면(ORG→/workspace, 운영자→/operator, 관리기관→/program), 역할별 메뉴 | 1 |
 | /workspace | ORG | 회차 수·사용량/쿼터·처리 대기·격리, 수집기 상태(하트비트·마지막 수집), 최근 격리, 기능 배너(GPU 없음 등) | 2 |
 | /devices | ORG | 장비 목록·등록(ORG_ADMIN), 등록 코드 발급(1회 표시)·자격증명 폐기, 수집 방식·현장 사본, 유일본 경고, 설치 안내 | 4 |
-| /sessions | ORG | 회차 목록·생성(KST 입력 → UTC), 회차 미상 자산 회차 지정(재검증) | 5.1, 5.3 |
+| /sessions, /sessions/:id | ORG | 회차 목록·생성(KST 입력 → UTC), 회차 미상 자산 회차 지정(재검증), 회차 타임라인(자산·이벤트·관측값·환경 정보), 회차 수정(제목·기간·장소·메모·장비) | 5.1~5.3 |
 | /assets, /assets/:id | ORG | 필터(회차·장비·유형·변형·품질·상태·등급), L0~L4·역할, "촬영시각 미상"·"미검증" 구분, 상세·계보, 프록시 재생(단기 URL), 원본 내려받기(감사), 구간 클립 내보내기(재생 위치·숫자로 구간 → 작업 등록, 작업 목록 5초마다 갱신) | 6, 7.1~7.3 |
 | /upload | ORG | 원천 장비·변형·회차 선택, 브라우저 SHA-256 → POST /v1/uploads → Uppy 파트 전송 → complete. 같은 파일 재선택 시 서버가 진행 중 세션을 주고 listParts로 받은 파트를 건너뜀. 결과 표에 오류별 원인·다음 행동 | 8 |
 | /program | PROGRAM_VIEWER | 담당 사업·회차, L1 자산 메타데이터만 (바이너리 없음) | 9 |
@@ -23,6 +23,9 @@ React 18 + TS + Vite, Ant Design 5(ko_KR, 대비 강화 테마), TanStack Query,
 `POST·GET /v1/assets/{id}/clips`(계약 추가, ADR-0033): 자기 기관 ORG 역할만. 요청은 원 영상·구간을 검사하고 작업 `clip_export`를
 등록(202)하며, 작업은 입력 앞 -ss + libx264 재인코딩으로 프레임 단위로 잘라 파생 자산(CLIP, 계보 relation=CLIP,
 `provenance.clip_range_s`, 옮긴 촬영 시각)을 만든다. 원 영상 격리·삭제와 인코딩 실패는 재시도하지 않고 바로 FAILED(코드 표시).
+
+`PATCH /v1/sessions/{id}`(계약 추가): 자기 기관 ORG 역할만. 보낸 항목만 바꾸고 ends_at·site·note는 null로 비운다. label(에이전트 폴더 매칭)과
+project_id(자산 소속)는 바꾸지 않는다. 바뀐 항목의 전후 값은 감사 SESSION_UPDATED(메모 본문은 길이만).
 
 ## 시험
 `web/e2e/portal.mjs`: 실제 스택에서 Keycloak 로그인 → 대시보드 → 업로드 → 재선택(이미 등록) → 자산 목록, axe(WCAG 2 A·AA) critical 0건 확인. 2026-11-04 통과 (프록시 재생 포함 수동 확인).

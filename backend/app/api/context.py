@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -198,3 +198,68 @@ def get_session(session_id: str, request: Request, db: Session = Depends(get_db)
                 c: Container = Depends(container), p: Principal = Depends(require("session:read"))) -> dict:
     s = load_scoped(db, c, request, TrialSession, session_id, p)
     return session_view(s, _session_devices(db, [s.session_id])[s.session_id])
+
+
+class SessionPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # label·project_id는 바꿀 수 없다 (보내면 400)
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    site: str | None = Field(default=None, max_length=200)
+    note: str | None = Field(default=None, max_length=2000)
+    device_ids: list[str] | None = Field(default=None, max_length=500)
+
+
+@router.patch("/v1/sessions/{session_id}")
+def update_session(session_id: str, body: SessionPatch, request: Request, db: Session = Depends(get_db),
+                   c: Container = Depends(container), p: Principal = Depends(require("session:write"))) -> dict:
+    """실증회차 일정·장소·메모·장비 수정 (09번 요구사항 5.1). 바뀐 항목의 전후 값을 감사한다."""
+    sent = body.model_fields_set
+    if not sent:
+        raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "", "code": "min_properties",
+                                                        "message": "바꿀 항목이 하나 이상 필요합니다"}])
+    for name in ("title", "starts_at", "device_ids"):  # 비울 수 없는 항목
+        if name in sent and getattr(body, name) is None:
+            raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": f"/{name}", "code": "not_nullable",
+                                                            "message": "비울 수 없는 항목입니다"}])
+    _require_tz("starts_at", body.starts_at)
+    _require_tz("ends_at", body.ends_at)
+    s = load_scoped(db, c, request, TrialSession, session_id, p)
+    starts = body.starts_at if "starts_at" in sent and body.starts_at is not None else s.starts_at
+    ends = body.ends_at if "ends_at" in sent else s.ends_at
+    if ends is not None and ends < starts:
+        raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/ends_at", "code": "before_start",
+                                                        "message": "종료 시각이 시작 시각보다 빠릅니다"}])
+    before_devices = _session_devices(db, [s.session_id])[s.session_id]
+    changes: dict[str, dict[str, Any]] = {}
+
+    def note_change(name: str, old: Any, new: Any) -> None:
+        if old != new:
+            if name == "note":  # 메모 본문은 감사 로그에 옮기지 않는다 (길이만)
+                old, new = (len(old) if old else 0), (len(new) if new else 0)
+            changes[name] = {"from": old, "to": new}
+
+    for name in ("title", "site", "note"):
+        if name in sent:
+            note_change(name, getattr(s, name), getattr(body, name))
+            setattr(s, name, getattr(body, name))
+    if "starts_at" in sent:
+        note_change("starts_at", iso(s.starts_at), iso(starts))
+        s.starts_at = starts
+    if "ends_at" in sent:
+        note_change("ends_at", iso(s.ends_at), iso(ends))
+        s.ends_at = ends
+    devices = before_devices
+    if "device_ids" in sent and body.device_ids is not None:
+        devices = sorted(set(body.device_ids))
+        for did in devices:
+            load_scoped(db, c, request, Device, did, p)  # 자기 기관 장비만 (아니면 404)
+        if devices != before_devices:
+            note_change("device_ids", before_devices, devices)
+            db.execute(delete(SessionDevice).where(SessionDevice.session_id == s.session_id))
+            db.add_all([SessionDevice(session_id=s.session_id, device_id=d) for d in devices])
+    if changes:
+        c.audit.record("SESSION_UPDATED", principal=p, organization_id=s.organization_id, target_type="Session",
+                       target_id=s.session_id, source_ip=client_ip(request), details={"changes": changes})
+    db.flush()
+    return session_view(s, devices)

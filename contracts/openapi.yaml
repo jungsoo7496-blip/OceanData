@@ -378,6 +378,34 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {$ref: '#/components/responses/NotFound'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
+    patch:
+      tags: [context]
+      operationId: updateSession
+      summary: 실증회차 일정·장소·메모·장비 수정 (자기 기관 ORG 역할, 변경 전후 감사)
+      description: |
+        09번 요구사항 5.1. 보낸 항목만 바꾼다. ends_at·site·note에 null을 보내면 비운다. device_ids는 통째로 바꾼다(자기 기관 장비만).
+        label(에이전트가 폴더 이름과 맞추는 표시값)과 project_id는 바꾸지 않는다 — 바꾸면 폴더 자동 매칭·자산 소속이 어긋난다.
+        바뀐 항목의 전후 값은 감사 로그 SESSION_UPDATED에 남는다(메모 본문은 길이만).
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SessionPatch'}
+            example: {ends_at: '2026-11-03T09:00:00Z', site: 부산 남항 시험 해역 (합성), note: 기상 악화로 하루 연장}
+      responses:
+        '200':
+          description: 수정된 회차
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Session'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+
   /v1/sessions/{session_id}/records:
     parameters:
       - {$ref: '#/components/parameters/SessionId'}
@@ -4848,6 +4876,26 @@ components:
         project_id: {$ref: './schemas/common.schema.json#/$defs/project_id'}
         name: {type: string}
         status: {enum: [PLANNED, ACTIVE, CLOSED]}
+
+    SessionPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: label·project_id는 바꿀 수 없다 (보내면 400)
+      properties:
+        title: {type: string, minLength: 1, maxLength: 200}
+        starts_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+        ends_at:
+          oneOf:
+            - {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+            - {type: 'null'}
+        site: {type: [string, 'null'], maxLength: 200}
+        note: {type: [string, 'null'], maxLength: 2000}
+        device_ids:
+          type: array
+          maxItems: 500
+          uniqueItems: true
+          items: {$ref: './schemas/common.schema.json#/$defs/device_id'}
 
     SessionCreate:
       type: object

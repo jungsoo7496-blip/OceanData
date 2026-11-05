@@ -236,7 +236,13 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * 실증회차 일정·장소·메모·장비 수정 (자기 기관 ORG 역할, 변경 전후 감사)
+         * @description 09번 요구사항 5.1. 보낸 항목만 바꾼다. ends_at·site·note에 null을 보내면 비운다. device_ids는 통째로 바꾼다(자기 기관 장비만).
+         *     label(에이전트가 폴더 이름과 맞추는 표시값)과 project_id는 바꾸지 않는다 — 바꾸면 폴더 자동 매칭·자산 소속이 어긋난다.
+         *     바뀐 항목의 전후 값은 감사 로그 SESSION_UPDATED에 남는다(메모 본문은 길이만).
+         */
+        patch: operations["updateSession"];
         trace?: never;
     };
     "/v1/sessions/{session_id}/records": {
@@ -2883,6 +2889,15 @@ export interface components {
             /** @enum {unknown} */
             status: "PLANNED" | "ACTIVE" | "CLOSED";
         };
+        /** @description label·project_id는 바꿀 수 없다 (보내면 400) */
+        SessionPatch: {
+            title?: string;
+            starts_at?: components["schemas"]["utc_datetime"];
+            ends_at?: components["schemas"]["utc_datetime"] | null;
+            site?: string | null;
+            note?: string | null;
+            device_ids?: components["schemas"]["device_id"][];
+        };
         SessionCreate: {
             project_id: components["schemas"]["project_id"];
             /** @description 기관 안에서 유일한 회차 표시값 (폴더 이름 규칙과 맞춘다) */
@@ -5058,6 +5073,44 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    updateSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "ends_at": "2026-11-03T09:00:00Z",
+                 *       "site": "부산 남항 시험 해역 (합성)",
+                 *       "note": "기상 악화로 하루 연장"
+                 *     }
+                 */
+                "application/json": components["schemas"]["SessionPatch"];
+            };
+        };
+        responses: {
+            /** @description 수정된 회차 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Session"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             429: components["responses"]["TooManyRequests"];
         };

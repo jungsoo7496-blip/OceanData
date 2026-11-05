@@ -9,6 +9,7 @@ import type { components, paths } from '../contract/api.gen'
 import { api, ApiError, type Me, type Page } from '../lib/api'
 import { EVENT_SOURCE_LABEL, eventLabel, kst, kstRange, QUARANTINE_LABEL, SEVERITY_COLOR, STATUS_LABEL } from '../lib/format'
 import { explain } from '../lib/problems'
+import { SessionEditButton } from './SessionEdit'
 
 // 계약에서 생성한 타입 (09번 작업 16)
 type SessionT = components['schemas']['Session']
@@ -279,8 +280,10 @@ export function SessionTimeline({ me }: { me: Me }) {
   ]
   const project = projects.data?.items.find((p) => p.project_id === s.project_id)
   // 회차 기록·보고서(10번)로 이동 (요구사항 5.2)
+  const canEdit = me.roles.some((r) => r === 'ORG_ADMIN' || r === 'ORG_MEMBER')
   const links = (
     <Space wrap size="middle">
+      {canEdit && <SessionEditButton session={s} devices={devices.data?.items ?? []} />}
       <Link to={`/sessions/${s.session_id}/records`}>회차 기록</Link>
       <Link to="/reports">보고서</Link>
       <Link to="/sessions">회차 목록</Link>
