@@ -155,7 +155,8 @@ def backfill(source_id: str, body: Backfill, request: Request, db: Session = Dep
     while cur < end:  # 한 작업은 max_window_s까지
         nxt = min(end, cur + timedelta(seconds=s.max_window_s))
         c.queue.enqueue("collect_source", {"source_id": s.source_id, "since": iso(cur), "until": iso(nxt)},
-                        dedupe_key=f"collect:{s.source_id}:{int(cur.timestamp())}:{int(nxt.timestamp())}")
+                        dedupe_key=f"collect:{s.source_id}:{int(cur.timestamp())}:{int(nxt.timestamp())}",
+                        dedupe_active_only=True)  # 같은 구간을 다시 요청하면 끝난 작업이 막지 않고 다시 돈다
         jobs += 1
         cur = nxt
     c.audit.record("EXTERNAL_SOURCE_BACKFILL", principal=p, target_type="ExternalSource", target_id=s.source_id,

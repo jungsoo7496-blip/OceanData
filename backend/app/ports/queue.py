@@ -45,9 +45,12 @@ class PermanentJobError(Exception):
 
 class QueuePort(Protocol):
     # connection을 주면 호출자 트랜잭션 안에서 넣는다 (같이 쓰는 감사·상태 변경과 함께 확정·취소, 예: 구간 클립 등록)
+    # dedupe_key는 기본적으로 작업이 끝난 뒤에도 같은 키의 새 작업을 막는다 (단계가 한 번만 돌게).
+    # dedupe_active_only=True면 대기·실행 중(QUEUED·RUNNING)일 때만 막고, 끝난(DONE·FAILED) 작업은 키를 놓는다
+    # — 다시 돌려야 하는 작업(백업, 보충 수집)용
     def enqueue(self, job_type: str, payload: dict[str, Any], *, priority: int | None = None,
                 organization_id: str | None = None, dedupe_key: str | None = None,
-                connection: Connection | None = None) -> str: ...
+                dedupe_active_only: bool = False, connection: Connection | None = None) -> str: ...
     def count_active(self, job_type: str, organization_id: str, *, connection: Connection | None = None) -> int: ...
     def claim(self, job_types: list[str] | None = None, worker_id: str = "",
               resource_classes: tuple[str, ...] = ("CPU",)) -> Job | None: ...

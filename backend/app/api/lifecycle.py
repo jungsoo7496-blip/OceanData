@@ -45,7 +45,7 @@ def start_backup_run(request: Request, db: Session = Depends(get_db), c: Contain
     """지금 백업 (요구사항 6.1). 실행 중이면 409. 작업은 워커가 한다."""
     if db.execute(select(BackupRun.backup_run_id).where(BackupRun.status == "RUNNING")).first():
         raise ProblemError("CONFLICT", detail="백업이 이미 실행 중입니다")
-    job_id = c.queue.enqueue("backup", {"requested_by": p.principal_id}, dedupe_key="backup")
+    job_id = c.queue.enqueue("backup", {"requested_by": p.principal_id}, dedupe_key="backup", dedupe_active_only=True)
     c.audit.record("BACKUP_REQUESTED", principal=p, target_type="Job", target_id=job_id, source_ip=client_ip(request))
     return {"job_id": job_id}
 

@@ -318,7 +318,7 @@ def maintenance(c: Container) -> None:
 
     with c.sessionmaker.begin() as db:
         if backup.due(c, db):
-            c.queue.enqueue("backup", {"requested_by": "schedule"}, dedupe_key="backup")
+            c.queue.enqueue("backup", {"requested_by": "schedule"}, dedupe_key="backup", dedupe_active_only=True)
     # Hot/Warm 계층 (08번 요구사항 9): 유예가 지난 원래 객체 삭제(이동을 꺼도 끝까지)·정책 규칙으로 새 이동 고르기
     from app.services import tier_mover
 
