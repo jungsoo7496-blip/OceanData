@@ -347,12 +347,18 @@ class IngestService:
         apply_rules(asset, rules, self.c.clock.now())
         return 201, {"status": "METADATA_ONLY_REGISTERED", "asset_id": asset.asset_id}
 
+    @staticmethod
+    def _part_len(up: Upload, n: int) -> int:
+        """계획한 n번 파트 크기: 마지막 파트만 나머지 (신고 byte_size를 part_size로 나눈 계획)."""
+        return max(0, min(up.part_size, up.declared_size - (n - 1) * up.part_size))
+
     def _part_urls(self, up: Upload, numbers: list[int]) -> list[dict[str, Any]]:
         ttl = self.c.settings.presign_upload_ttl_s
         exp = iso(self.c.clock.now() + timedelta(seconds=ttl))
         limit = self.c.settings.max_part_urls_per_response
-        return [{"part_number": n, "url": self.c.storage.presign_upload_part(up.bucket, up.object_key,
-                                                                              up.s3_upload_id, n, ttl),
+        # 파트마다 계획한 크기를 Content-Length로 서명한다: 신고보다 큰 본문은 저장소가 거부한다 (쿼터 우회 방지)
+        return [{"part_number": n, "url": self.c.storage.presign_upload_part(
+                    up.bucket, up.object_key, up.s3_upload_id, n, ttl, content_length=self._part_len(up, n)),
                  "expires_at": exp} for n in numbers[:limit]]
 
     def _created_view(self, up: Upload, asset: Asset) -> dict[str, Any]:
@@ -464,6 +470,30 @@ class IngestService:
             raise ProblemError("CONFLICT", detail="진행 중인 업로드만 취소할 수 있습니다")
         self._release(up, "ABORTED")
 
+    def _check_part_sizes(self, up: Upload) -> None:
+        """저장소에 올라간 파트 크기가 계획(신고 byte_size)과 같아야 완료한다.
+
+        쿼터는 신고 크기로 예약하므로, 더 큰 파트를 올려 완료하면 쿼터 밖 바이트가 남는다. 다르면 세션을 취소하고
+        (멀티파트 정리·예약 해제, ABORTED) 409로 알린다. 없는 파트는 여기서 보지 않는다 — 아래 완료 호출이
+        CONFLICT로 알리고 세션은 남아 GET .../parts로 이어 올릴 수 있다.
+        """
+        try:
+            stored = self.c.storage.list_parts(up.bucket, up.object_key, up.s3_upload_id)
+        except Exception:  # noqa: BLE001
+            raise ProblemError("STORAGE_UNAVAILABLE", headers={"Retry-After": "30"}) from None
+        wrong = [{"part_number": s.part_number, "expected_size": self._part_len(up, s.part_number),
+                  "actual_size": s.size} for s in sorted(stored, key=lambda s: s.part_number)
+                 if s.size is not None and (s.part_number > up.part_count
+                                            or s.size != self._part_len(up, s.part_number))]
+        if not wrong:
+            return
+        log.warning("upload_part_size_mismatch", extra={"upload_id": up.upload_id, "parts": len(wrong)})
+        self._release(up, "ABORTED")
+        self.db.commit()  # 409를 돌려주기 전에 취소·예약 해제를 확정한다
+        raise ProblemError("CONFLICT", detail="올린 파트 크기가 신고한 파일 크기(byte_size)와 다릅니다. 업로드를 "
+                                              "취소했습니다 — 새 업로드로 다시 보내세요",
+                           extra={"size_mismatch": wrong[:100]})
+
     def complete(self, p: Principal, up: Upload, parts: list[dict[str, Any]]) -> dict[str, Any]:
         self._expire_if_needed(up)
         if up.status == "RECEIVED":
@@ -474,6 +504,7 @@ class IngestService:
         if numbers != list(range(1, up.part_count + 1)):
             raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/parts", "code": "incomplete_parts",
                                                             "message": f"파트 1~{up.part_count}이 모두 필요합니다"}])
+        self._check_part_sizes(up)
         try:
             self.c.storage.complete_multipart_upload(up.bucket, up.object_key, up.s3_upload_id,
                                                      [CompletedPart(int(x["part_number"]), x["etag"]) for x in parts])
@@ -598,20 +629,22 @@ class IntegrityVerifier:
             if reason:
                 self._quarantine(db, asset, reason)
                 if not revalidate:
-                    quota.settle(asset.organization_id, reserved, to="quarantine", actual=size)
+                    # 격리 사용량은 자산의 byte_size로 센다: 삭제(retention.delete_assets)·재검증이 같은 값을 빼야
+                    # 쌓이지 않는다. 완료 시점에 파트 크기를 신고 크기와 맞춰 보므로 받은 객체 크기와도 같다
+                    quota.settle(asset.organization_id, reserved, to="quarantine", actual=asset.byte_size)
                 return "QUARANTINED"
             if revalidate:  # 격리 존에서 정식 위치(HOT)로 되돌리고 격리 사용량을 사용량으로 옮긴다
                 asset.quarantine_reason = None
                 tiers.relocate(self.c, asset, zone=zone_for(asset.variant), key=object_key(asset))
                 q = quota._row(asset.organization_id)
-                q.quarantine_bytes = max(0, q.quarantine_bytes - size)
-                q.used_bytes += size
+                q.quarantine_bytes = max(0, q.quarantine_bytes - asset.byte_size)
+                q.used_bytes += asset.byte_size
             asset.ingest_status = states.transition("ingest_status", "VALIDATING", "REGISTERED", {"SERVICE"})
             apply_rules(asset, rules, self.c.clock.now())
             asset.updated_at = self.c.clock.now()
             append_integrity(db, asset, self.c.clock.now())
             if not revalidate:  # 재검증은 위에서 격리 사용량을 사용량으로 옮겼다
-                quota.settle(asset.organization_id, reserved, to="used", actual=size)
+                quota.settle(asset.organization_id, reserved, to="used", actual=asset.byte_size)  # 통과면 size와 같다
             if asset.data_type != "VIDEO":  # 프록시가 필요 없는 유형 (05번이 영상 프록시를 만든다)
                 asset.ingest_status = states.transition("ingest_status", "REGISTERED", "READY_PRIVATE", {"SERVICE"})
             from app.services.pipeline import schedule_after_register

@@ -118,3 +118,54 @@ def test_sweep_continues_past_failing_upload(ictx, monkeypatch: pytest.MonkeyPat
     assert sweep(ictx.c) == 1
     assert _upload(ictx, bad["upload_id"]).status == "EXPIRED"
     assert _quota(ictx).reserved_bytes == 0
+
+
+def test_part_urls_sign_planned_content_length(ictx) -> None:  # type: ignore[no-untyped-def]
+    """사전 서명 파트 URL은 계획한 파트 크기를 Content-Length로 서명한다 (마지막 파트는 나머지)."""
+    from urllib.parse import parse_qs, urlparse
+
+    from app.services.ingest import IngestService
+
+    h = ictx.as_user(102)
+    data = mp4_bytes(12 * MB, seed=201)
+    cr = ictx.client.post("/v1/uploads", json=manifest(data), headers=h).json()
+    assert cr["part_count"] == 3
+    for part in cr["parts"]:
+        q = parse_qs(urlparse(part["url"]).query)
+        assert "content-length" in q["X-Amz-SignedHeaders"][0].split(";")
+    with ictx.c.sessionmaker() as db:
+        up = db.get(Upload, cr["upload_id"])
+        assert [IngestService._part_len(up, n) for n in (1, 2, 3)] == [5 * MB, 5 * MB, 2 * MB]
+
+
+def test_complete_rejects_parts_larger_than_declared(ictx) -> None:  # type: ignore[no-untyped-def]
+    """1바이트로 신고하고 더 큰 파트를 올려 완료하면 409, 세션 취소·예약 해제, 객체를 만들지 않는다 (쿼터 우회 방지)."""
+    import httpx
+
+    from tests.contract.openapi_contract import assert_matches_contract as check
+
+    h = ictx.as_user(102)
+    cr = ictx.client.post("/v1/uploads", json=manifest(b"Z"), headers=h).json()
+    assert cr["part_count"] == 1
+    assert _quota(ictx).reserved_bytes == 1
+    # 저장소가 Content-Length 서명을 검사하지 않는 경우(moto)를 가정해 그대로 올린다 — 완료 검사가 이중 방어
+    r = httpx.put(cr["parts"][0]["url"], content=mp4_bytes(6 * MB, seed=299), timeout=60)
+    if r.status_code != 200:  # 서명을 검사하는 저장소(SeaweedFS·AWS)는 여기서 이미 거부한다
+        assert r.status_code == 403, r.text
+        return
+    r2 = ictx.client.post(f"/v1/uploads/{cr['upload_id']}/complete",
+                          json={"parts": [{"part_number": 1, "etag": r.headers["etag"]}]}, headers=h)
+    assert r2.status_code == 409, r2.text
+    body = r2.json()
+    assert body["code"] == "CONFLICT"
+    assert body["size_mismatch"] == [{"part_number": 1, "expected_size": 1, "actual_size": 6 * MB}]
+    check(r2, "post", "/v1/uploads/{upload_id}/complete")
+    up = _upload(ictx, cr["upload_id"])
+    assert up.status == "ABORTED"
+    assert _quota(ictx).reserved_bytes == 0
+    assert ictx.c.storage.head_object(up.bucket, up.object_key) is None
+    with ictx.c.sessionmaker() as db:
+        assert db.get(Asset, cr["asset_id"]) is None  # 받은 것이 없는 자산 기록은 지운다
+    again = ictx.client.post(f"/v1/uploads/{cr['upload_id']}/complete",
+                             json={"parts": [{"part_number": 1, "etag": r.headers["etag"]}]}, headers=h)
+    assert again.status_code == 410
