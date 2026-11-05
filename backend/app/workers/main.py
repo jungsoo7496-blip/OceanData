@@ -135,6 +135,9 @@ def _env_join(c: Container, job: Job) -> Any:
         env = external.join_env(c, db, a)
         if env is not None:
             a.env_context = env
+            from app.services.tagging import apply_weather
+
+            apply_weather(db, c.settings, a, c.clock.now())  # 날씨 태그 관측값 보정 (14번 요구사항 6.3)
     return "OK" if env is not None and env["observations"] else "NO_MATCH"
 
 

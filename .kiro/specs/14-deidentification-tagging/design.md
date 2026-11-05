@@ -25,3 +25,10 @@
 - 표본 비율·위험도 기준·태그 → 이벤트 규칙 값은 초안 — 운영기관 확정
 - 검수 결과로 다시 렌더링할 때 원본 공유 심사가 QUALITY_REVIEW가 아니면(예: 이미 APPROVED) 재렌더링하지 않는다. 승인 뒤 미탐 발견 시 처리 절차는 운영기관과 정한다
 - REVIEWER가 자산 API로 원본 메타데이터를 보는 범위(배정 기반 범위 규칙)는 정하지 않았다 — 지금은 검수 API로만 본다
+
+## 날씨 태그 관측값 보정 (요구사항 6.3)
+`tagging.apply_weather`: 자산 env_context(12번)의 시정·유의파고로 자산 전체 태그 FOG·HIGH_WAVE를 더하거나(source=MODEL, model_ref=env-weather@1,
+신뢰도 1.0 — 계약의 태그 출처 코드는 그대로), 관측과 어긋나는 영상 모델 태그를 지우고 `asset_tag_edits`에 REMOVE로 남긴다. 사람 태그는 그대로.
+기준 `WEATHER_FOG_VISIBILITY_M`(1000)·`WEATHER_CLEAR_VISIBILITY_M`(5000)·`WEATHER_HIGH_WAVE_M`(3.0)·`WEATHER_CALM_WAVE_M`(1.0)은 정책값(확정 필요).
+태깅 때 환경 정보가 있으면 바로, 없으면 env_join 작업·보충 수집(refresh_env) 뒤에 적용한다. 장면 임베딩은 다시 만들지 않는다.
+

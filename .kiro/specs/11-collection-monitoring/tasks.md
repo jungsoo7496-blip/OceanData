@@ -5,7 +5,7 @@
 - [x] 3. 적용·현재 정책 버전 차이(`policy_mismatch`)와 시계 오차 표시 — 요구사항 1.4
 - [x] 4. 감시 규칙 정책 표(13개), 규칙별 대상·심각도·채널·재알림 간격, 운영자 조정 API(MFA·감사·임계값 검사) — 요구사항 2.1, 2.2 · 시험 `test_watch_rules_api`, `test_validate_params`
 - [x] 5. 규칙 계산: 하트비트·수집 지연·회차 무수집·수집량 급감·업로드 실패율·처리 대기·격리 급증·용량 예측·관측값 지연·시계 오차·현장 저장 부족·하드웨어 — 요구사항 2.1 · 시험 `test_processing_upload_quarantine_storage_rules`, `test_volume_drop`, `test_t07b_*`
-- [ ] 6. 외부 Open API 수집 실패 규칙의 신호원 — 요구사항 2.1 (12번에서 연결, 지금은 `data_source_ready=false`)
+- [x] 6. 외부 Open API 수집 실패 규칙의 신호원 — 요구사항 2.1 · 12번에서 연결(`monitoring._openapi_failure`: 연속 실패·형식 오류) · 시험 `tests/acceptance/test_t17_env_join.py`(OPENAPI_FAILURE 경보·장애), `tests/unit/test_monitoring_rules.py`(모든 규칙에 신호원)
 - [x] 7. 메일(SMTP)·운영자 웹훅 알림, 재알림 간격, 해제 알림, 본문에 토큰·URL·개인정보 없음 — 요구사항 3.1~3.4 · 시험 `test_t07a_*`, `test_webhook_channel_body`
 - [ ] 8. 운영 메신저 채널, 기관 웹훅 구독으로 경보 보내기 — 요구사항 3.1 (메신저 결정 대기, 04번 웹훅 구독 이후)
 - [x] 9. 경보 → 장애 자동 생성, 확인·해결·담당자·메모, 기관·장비·기간 조회 — 요구사항 4.1, 4.2 · 시험 `test_t07a_*`, `test_T01_a_cross_org_incident_update_and_list`

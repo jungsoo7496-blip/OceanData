@@ -13,7 +13,7 @@
 - [x] 9. domain import 검사 — 요구사항 7.3 · 시험 `test_domain_layer_has_no_framework_imports`
 - [x] 10. Alembic 0001 (down 포함) — 요구사항 5.1, 5.2 · CI에서 up→down→up
 - [x] 11. Compose·make up·버킷 생성 — 요구사항 1.1, 1.2, 1.4, 1.5 (2026-11-04 클라우드 환경에서 전체 healthy 확인)
-- [ ] 12. make up 실패 경로 시험 (서비스 하나를 일부러 실패시켜 이름 출력·비0 종료 확인) — 요구사항 1.3 (스크립트는 있음, 자동 시험 없음)
+- [x] 12. make up 실패 경로 시험 — 요구사항 1.2, 1.3 · `tools/tests/test_compose_up.py`(가짜 docker로 헬스체크 실패 서비스 이름 출력·비0 종료, 정상 종료한 migrate 제외, .env 없음 2, 모두 정상 0). CI `python -m unittest discover -s tools/tests`에서 실행
 - [x] 13. 시험 데이터·반복 실행 — 요구사항 6.1, 6.2
 - [x] 14. 합성 영상·대용량 파일 — 요구사항 6.3~6.5 (`make sample-video`, `LARGE_GB=10`)
 - [x] 15. /v1/system/capabilities — 요구사항 11.1, 11.2 · 시험 `test_capabilities_requires_auth_and_hides_settings`

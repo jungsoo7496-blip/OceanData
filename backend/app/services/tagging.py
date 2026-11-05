@@ -109,6 +109,9 @@ def tag_scenes(c: Container, asset_id: str) -> str:
                                                source="MODEL", model_ref=MODEL, created_at=now, **r)
                        .on_conflict_do_nothing())
         _events_from_tags(db, a, objects, now)
+        fresh = db.get(Asset, a.asset_id)  # 환경 정보가 먼저 붙어 있으면 바로 보정 (나중에 붙으면 env_join에서)
+        if fresh is not None and fresh.env_context:
+            apply_weather(db, s, fresh, now)
         last = -1e9
         for t, tags in frames:  # 정책 간격마다 한 벡터
             if t - last + 1e-9 < s.embed_interval_s:
@@ -120,6 +123,53 @@ def tag_scenes(c: Container, asset_id: str) -> str:
                        {"a": a.asset_id, "o": a.organization_id, "t": t, "m": MODEL,
                         "v": vec_literal(vector(tags)), "now": now})
     return "OK"
+
+
+WEATHER_MODEL = "env-weather@1"  # 관측값 기반 보정 (계약상 source=MODEL, model_ref로 구분)
+
+
+def apply_weather(db: Session, settings: Any, a: Asset, now: datetime) -> dict[str, list[str]]:
+    """결합된 관측값(12번 env_context)으로 날씨 태그를 보정한다 (요구사항 6.3).
+
+    시정·유의파고가 기준을 넘으면 자산 전체 태그를 더하고(신뢰도 1.0), 관측과 어긋나는 영상 모델의 날씨 태그는 지운다.
+    사람이 단 태그(HUMAN)는 건드리지 않는다. 지운 것은 수정 이력(asset_tag_edits)에 남긴다.
+    """
+    obs = {o.get("metric"): o for o in (a.env_context or {}).get("observations", [])}
+
+    def val(metric: str) -> float | None:
+        v = (obs.get(metric) or {}).get("value")
+        return float(v) if isinstance(v, int | float) else None
+
+    decide: dict[str, bool] = {}
+    vis, wave = val("visibility"), val("significant_wave_height")
+    if vis is not None:
+        if vis < settings.weather_fog_visibility_m:
+            decide["FOG"] = True
+        elif vis > settings.weather_clear_visibility_m:
+            decide["FOG"] = False
+    if wave is not None:
+        if wave >= settings.weather_high_wave_m:
+            decide["HIGH_WAVE"] = True
+        elif wave < settings.weather_calm_wave_m:
+            decide["HIGH_WAVE"] = False
+    out: dict[str, list[str]] = {"added": [], "removed": []}
+    for tag, present in sorted(decide.items()):
+        if present:
+            res = db.execute(insert(AssetTag).values(
+                asset_id=a.asset_id, organization_id=a.organization_id, tag=tag, t_offset=-1.0, confidence=1.0,
+                source="MODEL", model_ref=WEATHER_MODEL, created_at=now).on_conflict_do_nothing())
+            if getattr(res, "rowcount", 0):
+                out["added"].append(tag)
+            continue
+        wrong = list(db.execute(select(AssetTag).where(
+            AssetTag.asset_id == a.asset_id, AssetTag.tag == tag, AssetTag.source == "MODEL")).scalars())
+        for t in wrong:
+            db.delete(t)
+            db.add(AssetTagEdit(asset_id=a.asset_id, action="REMOVE", tag=tag, edited_by=WEATHER_MODEL,
+                                edited_at=now))
+        if wrong:
+            out["removed"].append(tag)
+    return out
 
 
 def _events_from_tags(db: Session, a: Asset, objects: list[dict[str, Any]], now: datetime) -> None:

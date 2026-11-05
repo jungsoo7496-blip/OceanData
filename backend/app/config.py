@@ -79,6 +79,13 @@ class Settings(BaseSettings):
     job_lease_reap_interval_s: int = 60
     integrity_sample_size: int = 20
 
+    # 날씨 태그 관측값 보정 (14번 요구사항 6.3). 값은 정책 — 운영기관 확정 필요.
+    # 강수 관측 항목이 없어 RAIN은 보정하지 않는다
+    weather_fog_visibility_m: float = 1000.0  # 시정이 이보다 낮으면 FOG
+    weather_clear_visibility_m: float = 5000.0  # 이보다 높으면 영상 모델의 FOG를 지운다
+    weather_high_wave_m: float = 3.0  # 유의파고가 이 이상이면 HIGH_WAVE
+    weather_calm_wave_m: float = 1.0  # 이보다 낮으면 영상 모델의 HIGH_WAVE를 지운다
+
     # 악성코드 검사 (04번 요구사항 4.7, ADR-0031). 기관 정책(organizations.malware_scan_required)이 켜진 기관만 검사
     malware_scanner: str = "none"  # none | mock-eicar (제품 결정 후 어댑터 추가)
 

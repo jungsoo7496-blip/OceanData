@@ -218,6 +218,9 @@ def refresh_env(c: Container, since: datetime, until: datetime) -> int:
             if env is not None:
                 a.env_context = env
                 n += 1 if env["observations"] else 0
+                from app.services.tagging import apply_weather
+
+                apply_weather(db, c.settings, a, c.clock.now())  # 보충 수집 뒤 날씨 태그 보정 (14번 요구사항 6.3)
     return n
 
 
