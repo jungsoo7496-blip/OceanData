@@ -1621,6 +1621,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model_Registry (PLATFORM_OPERATOR·REVIEWER). loadable=허용 라이선스라 추론 백엔드가 로드할 수 있음
+         * @description 05번 요구사항 8.3·8.4, 14번 ADR-0020. 기록된 모델만 로드하고, 라이선스가 허용 목록에 없으면 로드를 거부한다.
+         */
+        get: operations["listModels"];
+        put?: never;
+        /**
+         * 모델 등록 (PLATFORM_OPERATOR, 다중 인증). 버전은 바꾸지 않는다 — 새 버전으로 등록
+         * @description 라이선스가 허용 목록 밖이면 422(예외는 ADR·승인 후 목록에 추가). 가중치 파일은 저장소에 넣지 않고 위치(weights_uri)만 기록한다.
+         */
+        post: operations["registerModel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/retention/dry-run": {
         parameters: {
             query?: never;
@@ -2485,6 +2509,30 @@ export interface components {
                 /** @description 데이터셋 배포 발급 수 (이용기관이면 받은 것) */
                 distribution_count: number;
             };
+        };
+        ModelCreate: {
+            name: string;
+            version: string;
+            sha256: components["schemas"]["sha256"];
+            /** @description SPDX 식별자 */
+            license: string;
+            /** @description 가중치 위치 (파일 이름 또는 저장소 참조) */
+            weights_uri: string;
+            /** @description 학습 데이터 이용 조건 검토 결과 */
+            training_data_terms: string;
+        };
+        ModelEntry: {
+            name: string;
+            version: string;
+            sha256: components["schemas"]["sha256"];
+            license: string | null;
+            weights_uri: string;
+            training_data_terms?: string | null;
+            approved_by?: string | null;
+            /** @description 라이선스가 허용 목록에 있어 추론 백엔드가 로드할 수 있음 */
+            loadable: boolean;
+            /** Format: date-time */
+            created_at: string;
         };
         BreakGlassGrant: {
             grant_id: components["schemas"]["break_glass_id"];
@@ -7578,6 +7626,60 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    listModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 모델 목록 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["ModelEntry"][];
+                        allowed_licenses: string[];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    registerModel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelCreate"];
+            };
+        };
+        responses: {
+            /** @description 등록됨 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelEntry"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
         };
     };
     retentionDryRun: {

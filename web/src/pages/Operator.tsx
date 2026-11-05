@@ -13,6 +13,8 @@ type Agreement = components['schemas']['Agreement']
 type Grant = components['schemas']['BreakGlassGrant']
 type BackupRun = components['schemas']['BackupRun']
 type Forecast = components['schemas']['CapacityForecast']
+type ModelEntry = components['schemas']['ModelEntry']
+type ModelCreate = components['schemas']['ModelCreate']
 const PURPOSES = ['JOINT_RESEARCH', 'AI_TRAINING', 'MODEL_IMPROVEMENT', 'COMMERCIAL_SERVICE', 'EXTERNAL_SALE']
 
 function failText(e: unknown): string {
@@ -126,6 +128,43 @@ function CapacityForecast() {
   )
 }
 
+// Model_Registry (05번 요구사항 8): 이름·버전·sha256·허용 라이선스가 기록된 모델만 로드한다
+function Models() {
+  const { message } = App.useApp()
+  const qc = useQueryClient()
+  const list = useQuery({ queryKey: ['models'], queryFn: () => api<{ items: ModelEntry[]; allowed_licenses: string[] }>('/v1/models') })
+  const [adding, setAdding] = useState(false)
+  const add = useMutation({
+    mutationFn: (v: ModelCreate) => post<ModelEntry>('/v1/models', v),
+    onSuccess: () => { setAdding(false); void qc.invalidateQueries({ queryKey: ['models'] }) },
+    onError: (e) => message.error(failText(e)),
+  })
+  return (
+    <Card title="모델 등록부 (Model_Registry)" extra={<Button onClick={() => setAdding(true)}>모델 등록</Button>}>
+      <Table rowKey={(m) => `${m.name}@${m.version}`} size="small" dataSource={list.data?.items ?? []} locale={{ emptyText: '등록된 모델이 없습니다 (지금은 모의 탐지기)' }}
+        columns={[{ title: '이름', dataIndex: 'name' }, { title: '버전', dataIndex: 'version' }, { title: '라이선스', dataIndex: 'license' },
+          { title: 'sha256', dataIndex: 'sha256', render: (x: string) => <Typography.Text code>{x.slice(0, 12)}…</Typography.Text> },
+          { title: '로드', dataIndex: 'loadable', render: (x: boolean) => (x ? <Tag color="green">가능</Tag> : <Tag color="red">불가</Tag>) },
+          { title: '등록', dataIndex: 'created_at', render: kst }]} />
+      <Modal open={adding} title="모델 등록 (다중 인증 필요)" onCancel={() => setAdding(false)} footer={null} destroyOnClose>
+        <Form layout="vertical" onFinish={add.mutate}>
+          <Space wrap>
+            <Form.Item name="name" label="이름" rules={[{ required: true, pattern: /^[a-z0-9][a-z0-9._-]{0,119}$/ }]}><Input /></Form.Item>
+            <Form.Item name="version" label="버전" rules={[{ required: true }]}><Input /></Form.Item>
+            <Form.Item name="license" label="라이선스 (SPDX)" rules={[{ required: true }]}>
+              <Select style={{ width: 180 }} options={(list.data?.allowed_licenses ?? []).map((l) => ({ value: l, label: l }))} />
+            </Form.Item>
+          </Space>
+          <Form.Item name="sha256" label="가중치 sha256" rules={[{ required: true, pattern: /^[0-9a-f]{64}$/ }]}><Input /></Form.Item>
+          <Form.Item name="weights_uri" label="가중치 위치 (파일 이름 또는 저장소 참조)" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="training_data_terms" label="학습 데이터 이용 조건 검토 결과" rules={[{ required: true, min: 2 }]}><Input.TextArea rows={3} /></Form.Item>
+          <Button type="primary" htmlType="submit" loading={add.isPending}>등록</Button>
+        </Form>
+      </Modal>
+    </Card>
+  )
+}
+
 // 백업 회차·복원 시험 결과 (08번 요구사항 6·7)
 function BackupRuns() {
   const { message } = App.useApp()
@@ -192,6 +231,7 @@ export function OperatorConsole() {
       <Agreements />
       <BreakGlass />
       <BackupRuns />
+      <Models />
       <Card title="감사 로그 (최근)">
         <Table rowKey="audit_id" size="small" dataSource={audit.data?.items ?? []}
           columns={[{ title: '시각', dataIndex: 'occurred_at', render: kst }, { title: '행위', dataIndex: 'action' },

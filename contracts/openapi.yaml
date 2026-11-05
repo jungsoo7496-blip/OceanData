@@ -2734,6 +2734,51 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
 
+  /v1/models:
+    get:
+      tags: [system]
+      operationId: listModels
+      summary: Model_Registry (PLATFORM_OPERATOR·REVIEWER). loadable=허용 라이선스라 추론 백엔드가 로드할 수 있음
+      description: 05번 요구사항 8.3·8.4, 14번 ADR-0020. 기록된 모델만 로드하고, 라이선스가 허용 목록에 없으면 로드를 거부한다.
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 모델 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, allowed_licenses]
+                properties:
+                  items: {type: array, items: {$ref: '#/components/schemas/ModelEntry'}}
+                  allowed_licenses: {type: array, items: {type: string}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+    post:
+      tags: [system]
+      operationId: registerModel
+      summary: 모델 등록 (PLATFORM_OPERATOR, 다중 인증). 버전은 바꾸지 않는다 — 새 버전으로 등록
+      description: 라이선스가 허용 목록 밖이면 422(예외는 ADR·승인 후 목록에 추가). 가중치 파일은 저장소에 넣지 않고 위치(weights_uri)만 기록한다.
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ModelCreate'}
+      responses:
+        '201':
+          description: 등록됨
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ModelEntry'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+
   /v1/retention/dry-run:
     post:
       tags: [status]
@@ -4176,6 +4221,32 @@ components:
             url_count: {type: integer}
             url_bytes: {type: integer, description: 발급한 다운로드 URL 대상 크기 합 (실제 전송량 아님)}
             distribution_count: {type: integer, description: 데이터셋 배포 발급 수 (이용기관이면 받은 것)}
+
+    ModelCreate:
+      type: object
+      additionalProperties: false
+      required: [name, version, sha256, license, weights_uri, training_data_terms]
+      properties:
+        name: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,119}$'}
+        version: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._+-]{0,59}$'}
+        sha256: {$ref: './schemas/common.schema.json#/$defs/sha256'}
+        license: {type: string, maxLength: 60, description: SPDX 식별자}
+        weights_uri: {type: string, minLength: 1, maxLength: 400, description: 가중치 위치 (파일 이름 또는 저장소 참조)}
+        training_data_terms: {type: string, minLength: 2, maxLength: 4000, description: 학습 데이터 이용 조건 검토 결과}
+
+    ModelEntry:
+      type: object
+      required: [name, version, sha256, license, weights_uri, loadable, created_at]
+      properties:
+        name: {type: string}
+        version: {type: string}
+        sha256: {$ref: './schemas/common.schema.json#/$defs/sha256'}
+        license: {type: [string, 'null']}
+        weights_uri: {type: string}
+        training_data_terms: {type: [string, 'null']}
+        approved_by: {type: [string, 'null']}
+        loadable: {type: boolean, description: 라이선스가 허용 목록에 있어 추론 백엔드가 로드할 수 있음}
+        created_at: {type: string, format: date-time}
 
     BreakGlassGrant:
       type: object

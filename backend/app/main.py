@@ -16,6 +16,7 @@ from app.api import (
     deid,
     external,
     lifecycle,
+    models_registry,
     monitoring,
     observations,
     onboarding,
@@ -57,6 +58,7 @@ def create_app(c: Container | None = None) -> FastAPI:
     app.include_router(onboarding.router)
     app.include_router(break_glass.router)
     app.include_router(webhooks.router)
+    app.include_router(models_registry.router)
     app.include_router(monitoring.router)
     app.include_router(reports.router)
     app.include_router(sharing.router)

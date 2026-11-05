@@ -13,4 +13,4 @@
 - [x] 11. Model_Registry·라이선스·sha256 확인 후 로드, CPU 기본·CUDA — 요구사항 8.1~8.4 · 시험 `test_model_registry_checks` (실제 onnxruntime 로드는 14번에서)
 - [x] 12. 워커 메트릭(처리 시간·프레임·대기·실패)·`make bench` — 요구사항 9.1, 9.2
 - [ ] 13. 대용량(수 GB) 영상 처리 시 임시 디스크 사용량 한도·정리 정책 (지금은 작업마다 임시 파일 후 삭제)
-- [ ] 14. Model_Registry 등록 API·화면 (지금은 표만) — 14번과 함께
+- [x] 14. Model_Registry 등록 API·화면 — 요구사항 8.3·8.4 · `GET/POST /v1/models`(운영자·다중 인증, 허용 라이선스만·버전 불변·학습 데이터 조건 필수, 조회는 REVIEWER도), 운영 콘솔 '모델 등록부' · 시험 `tests/integration/test_model_registry.py`(등록·로드 판단 sha256). 실제 모델은 14번 선정 후
