@@ -54,6 +54,8 @@ type fakeServer struct {
 	seq         int
 	receipts    map[string]api.Receipt
 	receiptGets int
+	// override가 true를 돌려주면 그 요청에는 override가 응답한 것이다 (시험별 응답 주입, f.mu를 잡은 채 부른다)
+	override func(w http.ResponseWriter, r *http.Request) bool
 }
 
 func newFake(t *testing.T) *fakeServer {
@@ -82,6 +84,9 @@ func (f *fakeServer) json(w http.ResponseWriter, code int, v any) {
 func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.override != nil && f.override(w, r) {
+		return
+	}
 	p := r.URL.Path
 	if p == "/v1/auth/token" {
 		if f.revoked {

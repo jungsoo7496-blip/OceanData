@@ -43,6 +43,7 @@ from app.db.models import (
 )
 from app.domain.ids import new_id
 from app.ports.notifier import Notification
+from app.services.contracts import schema_files
 from app.services.observations import OBS
 from app.timefmt import iso
 
@@ -168,6 +169,13 @@ def latest_policies(db: Session, device_ids: list[str]) -> dict[str, dict[str, A
     return {r.device_id: r.policy for r in rows}
 
 
+def policy_heartbeat_interval_s(policy: dict[str, Any]) -> int:
+    """저장된 정책의 하트비트 주기(초). 계약 상한(device-policy.schema.json maximum, ADR-0040)이 생기기 전에 저장된
+    더 큰 값도 상한으로 잘라, 마지막 하트비트에 더하는 시각 계산(timedelta·datetime)이 넘쳐 500이 되지 않게 한다."""
+    limit = int(schema_files()["device-policy"]["properties"]["heartbeat_interval_s"]["maximum"])
+    return min(int(policy.get("heartbeat_interval_s", 60)), limit)
+
+
 def rule_params(db: Session, code: str) -> dict[str, Any]:
     r = db.get(WatchRule, code)
     return dict(r.params) if r else {}
@@ -215,7 +223,7 @@ def device_health(db: Session, devices: list[Device], now: datetime) -> list[dic
             st = statuses.get(d.device_id)
             pol = policies.get(d.device_id, {})
             current = str(pol.get("policy_version", "pv-0"))
-            interval = int(pol.get("heartbeat_interval_s", 60))
+            interval = policy_heartbeat_interval_s(pol)
             last_reg = max([t for t in (by_collector.get(d.device_id), act.last_registered_at if act else None)
                             if t is not None], default=None)
             hb = st.heartbeat if st else {}
@@ -336,7 +344,7 @@ def _heartbeat_missing(ctx: EvalCtx, p: dict[str, Any]) -> Iterable[Violation]:
     for d in ctx.devices():
         if d.kind != "COLLECTOR" or d.status != "ACTIVE":
             continue  # 등록 전 수집기는 아직 보고할 수 없다
-        interval = int(policies.get(d.device_id, {}).get("heartbeat_interval_s", 60))
+        interval = policy_heartbeat_interval_s(policies.get(d.device_id, {}))
         limit = heartbeat_threshold_s(p, interval)
         st = ctx.db.get(AgentStatus, d.device_id)
         last: datetime | None

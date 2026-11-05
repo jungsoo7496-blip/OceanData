@@ -358,11 +358,17 @@ type ExternalDevicePolicySchemaD0320935 struct {
 		Channel interface{} `json:"channel,omitempty"`
 		Enabled bool        `json:"enabled"`
 	} `json:"auto_update,omitempty"`
-	CollectorDeviceId  ExternalCommonSchemaDefsDeviceIdE5fb5348 `json:"collector_device_id"`
-	HeartbeatIntervalS int                                      `json:"heartbeat_interval_s"`
-	MaxParallelParts   *int                                     `json:"max_parallel_parts,omitempty"`
-	PolicyVersion      string                                   `json:"policy_version"`
-	SizeStableS        int                                      `json:"size_stable_s"`
+	CollectorDeviceId ExternalCommonSchemaDefsDeviceIdE5fb5348 `json:"collector_device_id"`
+
+	// HeartbeatIntervalS 하트비트 주기(초). 상한 2147483647초(32비트 정수, 약 68년)는 제품 한도가 아니라 기술 한도다 — 에이전트가 time.Duration(int64 나노초, 약 292년까지)으로 바꾸거나 서버가 지금 시각에 더해도 넘치지 않는다. 범위 밖 정책은 에이전트가 적용하지 않고 이전 정책을 유지한다 (ADR-0040)
+	HeartbeatIntervalS int `json:"heartbeat_interval_s"`
+
+	// MaxParallelParts 파트 동시 전송 수 (06번 요구사항 5.1). 상한 10000은 업로드 파트 번호 상한(openapi.yaml PartUrl.part_number)과 같은 기술 한도다 — 한 업로드에서 동시에 보낼 파트가 그보다 많을 수 없다 (ADR-0040)
+	MaxParallelParts *int   `json:"max_parallel_parts,omitempty"`
+	PolicyVersion    string `json:"policy_version"`
+
+	// SizeStableS 쓰기 완료 판정: 파일 크기·수정 시각이 이 시간(초) 동안 그대로여야 전송 대상에 넣는다 (06번 요구사항 3.1). 상한은 heartbeat_interval_s와 같은 기술 한도다 (ADR-0040)
+	SizeStableS int `json:"size_stable_s"`
 
 	// Sources 이 수집기가 데이터를 보낼 수 있는 원천 장비와 장비별 정책
 	Sources []struct {
@@ -370,13 +376,15 @@ type ExternalDevicePolicySchemaD0320935 struct {
 		CollectionMode   ExternalCommonSchemaDefsCollectionMode8b570e81 `json:"collection_mode"`
 		DeviceId         ExternalCommonSchemaDefsDeviceIdE5fb5348       `json:"device_id"`
 
-		// ExpectedIntervalS 기대 수집 주기. 수집 정상성 판정에 쓴다 (11번)
-		ExpectedIntervalS         *int                                            `json:"expected_interval_s,omitempty"`
-		LocalCopyPolicy           ExternalCommonSchemaDefsLocalCopyPolicy091c1d0c `json:"local_copy_policy"`
-		LocalRetentionDays        *int                                            `json:"local_retention_days,omitempty"`
-		ObservationMappingVersion *string                                         `json:"observation_mapping_version,omitempty"`
-		ProjectId                 *ExternalCommonSchemaDefsProjectIdC3def932      `json:"project_id,omitempty"`
-		SourceTimezone            *ExternalCommonSchemaDefsIanaTimezoneD29ddc66   `json:"source_timezone,omitempty"`
+		// ExpectedIntervalS 기대 수집 주기. 수집 정상성 판정에 쓴다 (11번). 상한 2147483647초(32비트 정수, 약 68년)는 기술 한도다 — 장비 표 열(PostgreSQL integer)에 들어가고 수집 정상성 판정이 지금 시각에 더해도 넘치지 않는다 (ADR-0040)
+		ExpectedIntervalS *int                                            `json:"expected_interval_s,omitempty"`
+		LocalCopyPolicy   ExternalCommonSchemaDefsLocalCopyPolicy091c1d0c `json:"local_copy_policy"`
+
+		// LocalRetentionDays 현장 보존 기간(일). 상한 24855일은 제품 한도가 아니라 기술 한도다 — 초로 바꿔도(×86400) 다른 시간 항목과 같은 2147483647초(32비트 정수, 약 68년) 안에 들어 에이전트·서버가 기간으로 계산할 때 넘치지 않는다 (ADR-0040)
+		LocalRetentionDays        *int                                          `json:"local_retention_days,omitempty"`
+		ObservationMappingVersion *string                                       `json:"observation_mapping_version,omitempty"`
+		ProjectId                 *ExternalCommonSchemaDefsProjectIdC3def932    `json:"project_id,omitempty"`
+		SourceTimezone            *ExternalCommonSchemaDefsIanaTimezoneD29ddc66 `json:"source_timezone,omitempty"`
 	} `json:"sources"`
 
 	// Timezone Examples: Asia/Seoul, UTC
@@ -385,7 +393,9 @@ type ExternalDevicePolicySchemaD0320935 struct {
 		Days []interface{} `json:"days"`
 
 		// EndLocal start보다 이르면 다음 날까지 이어진다
-		EndLocal   string `json:"end_local"`
+		EndLocal string `json:"end_local"`
+
+		// MaxKbps 이 시간대의 최대 전송 속도(kbps), null이면 제한 없음. 상한 2147483647(32비트 정수)은 기술 한도다 — 에이전트가 바이트/초로 바꿔도 넘치지 않는다 (ADR-0040)
 		MaxKbps    *int   `json:"max_kbps,omitempty"`
 		StartLocal string `json:"start_local"`
 	} `json:"transfer_windows,omitempty"`
@@ -396,7 +406,9 @@ type ExternalDevicePolicySchemaD0320935 struct {
 		Include         *[]string                                 `json:"include,omitempty"`
 
 		// PathPattern Examples: {session}/cam01/*
-		PathPattern    string                                   `json:"path_pattern"`
+		PathPattern string `json:"path_pattern"`
+
+		// Priority 한 파일에 여러 규칙이 맞으면 값이 작은 규칙을 쓴다. 상한 2147483647(32비트 정수)은 기술 한도다 — 에이전트(Go int)·웹(JS 숫자)이 정확히 읽는다. 더 큰 정수는 에이전트가 정책 전체를 읽지 못하게 한다 (ADR-0040)
 		Priority       *int                                     `json:"priority,omitempty"`
 		RuleId         string                                   `json:"rule_id"`
 		SourceDeviceId ExternalCommonSchemaDefsDeviceIdE5fb5348 `json:"source_device_id"`

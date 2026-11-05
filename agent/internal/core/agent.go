@@ -15,6 +15,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -33,6 +34,7 @@ import (
 	"github.com/jungsoo7496-blip/oceandata/agent/internal/sensor"
 	"github.com/jungsoo7496-blip/oceandata/agent/internal/state"
 	"github.com/jungsoo7496-blip/oceandata/agent/internal/sysinfo"
+	"github.com/jungsoo7496-blip/oceandata/agent/internal/timex"
 )
 
 const SchemaVersion = "1.0.0"
@@ -91,16 +93,71 @@ func (a *Agent) setErr(ctx context.Context, code string) {
 
 // ---------------------------------------------------------------- 정책
 
+// 정책 숫자 항목의 계약 범위 (contracts/schemas/device-policy.schema.json의 minimum·maximum, ADR-0040).
+// 상한은 제품 한도가 아니라 time.Duration·동시 실행 수 계산이 넘치지 않는 기술 한도다.
+const (
+	minHeartbeatIntervalS = 30
+	maxPolicySeconds      = timex.MaxSeconds // heartbeat_interval_s·size_stable_s
+	maxParallelParts      = 10000            // 업로드 파트 번호 상한(openapi.yaml PartUrl.part_number)과 같다
+	maxPolicyInt32        = math.MaxInt32    // transfer_windows[].max_kbps·watch_rules[].priority
+)
+
+// CodePolicyInvalid는 계약 범위를 벗어난 정책을 거부했을 때 하트비트 last_error_code로 보고하는 코드다.
+const CodePolicyInvalid = "POLICY_INVALID"
+
+// ErrPolicyInvalid는 정책의 숫자 값이 계약 범위를 벗어났다는 뜻이다. 그 정책은 저장·적용하지 않는다.
+var ErrPolicyInvalid = errors.New("정책 값이 계약 범위를 벗어났습니다")
+
+// checkPolicy는 에이전트가 시간·동시 전송 수·대역폭·규칙 순위로 쓰는 숫자가 계약 범위 안인지 본다.
+// heartbeat_interval_s·size_stable_s·max_parallel_parts의 0은 값이 없는 것과 구별할 수 없어 applyPolicy의 기본값을 쓴다.
+func checkPolicy(p *api.Policy) error {
+	type field struct {
+		path            string
+		value, low, max int
+		zeroIsDefault   bool
+	}
+	fields := []field{
+		{"/heartbeat_interval_s", p.HeartbeatIntervalS, minHeartbeatIntervalS, maxPolicySeconds, true},
+		{"/size_stable_s", p.SizeStableS, 1, maxPolicySeconds, true},
+		{"/max_parallel_parts", p.MaxParallelParts, 1, maxParallelParts, true},
+	}
+	for i, w := range p.TransferWindows {
+		if w.MaxKbps != nil { // null은 제한 없음
+			fields = append(fields, field{fmt.Sprintf("/transfer_windows/%d/max_kbps", i), *w.MaxKbps, 1, maxPolicyInt32, false})
+		}
+	}
+	for i, r := range p.WatchRules {
+		fields = append(fields, field{fmt.Sprintf("/watch_rules/%d/priority", i), r.Priority, 0, maxPolicyInt32, false})
+	}
+	for _, f := range fields {
+		if (f.value != 0 || !f.zeroIsDefault) && (f.value < f.low || f.value > f.max) {
+			return fmt.Errorf("%w: %s=%d (범위 %d~%d)", ErrPolicyInvalid, f.path, f.value, f.low, f.max)
+		}
+	}
+	return nil
+}
+
 // RefreshPolicy는 서버 정책을 받아 적용한다. 실패하면 마지막으로 저장한 정책을 쓴다 (오프라인 시작).
+// 숫자 값이 계약 범위를 벗어난 정책(Go 정수에 담기지 않는 수 포함)은 저장·적용하지 않고 이전 정책을 그대로 쓰며,
+// 하트비트 last_error_code로 POLICY_INVALID를 보고한다 (ADR-0040).
 func (a *Agent) RefreshPolicy(ctx context.Context) error {
 	var p api.Policy
-	_, err := a.Client.Do(ctx, "GET", "/v1/devices/"+a.Cfg.DeviceID+"/policy", nil, nil, &p)
+	status, err := a.Client.Do(ctx, "GET", "/v1/devices/"+a.Cfg.DeviceID+"/policy", nil, nil, &p)
+	var typeErr *json.UnmarshalTypeError
+	switch {
+	case err == nil:
+		err = checkPolicy(&p)
+	case status/100 == 2 && errors.As(err, &typeErr): // 응답은 받았지만 값이 Go 형에 담기지 않는다 (int64를 넘는 수 등)
+		err = fmt.Errorf("%w: %v", ErrPolicyInvalid, err)
+	}
+	if errors.Is(err, ErrPolicyInvalid) {
+		a.setErr(ctx, CodePolicyInvalid)
+		a.Log.Error("서버 정책 값이 계약 범위를 벗어나 적용하지 않습니다. 이전 정책을 계속 씁니다",
+			"error", err.Error(), "policy_version", p.PolicyVersion)
+	}
 	if err != nil {
 		if a.policy.Load() == nil {
-			if cached, _ := a.Store.KV(ctx, KeyPolicy); cached != "" && json.Unmarshal([]byte(cached), &p) == nil {
-				a.applyPolicy(ctx, &p)
-				a.Log.Warn("서버 정책을 받지 못해 저장된 정책을 씁니다", "policy_version", p.PolicyVersion)
-			}
+			a.useCachedPolicy(ctx)
 		}
 		return err
 	}
@@ -108,6 +165,22 @@ func (a *Agent) RefreshPolicy(ctx context.Context) error {
 	_ = a.Store.SetKV(ctx, KeyPolicy, string(b))
 	a.applyPolicy(ctx, &p)
 	return nil
+}
+
+// useCachedPolicy는 마지막으로 저장한 정책을 적용한다. 예전 버전이 범위 검사 없이 저장했을 수 있어 다시 검사한다.
+func (a *Agent) useCachedPolicy(ctx context.Context) {
+	cached, _ := a.Store.KV(ctx, KeyPolicy)
+	var p api.Policy
+	if cached == "" || json.Unmarshal([]byte(cached), &p) != nil {
+		return
+	}
+	if err := checkPolicy(&p); err != nil {
+		a.setErr(ctx, CodePolicyInvalid)
+		a.Log.Error("저장된 정책 값이 계약 범위를 벗어나 쓰지 않습니다", "error", err.Error(), "policy_version", p.PolicyVersion)
+		return
+	}
+	a.applyPolicy(ctx, &p)
+	a.Log.Warn("서버 정책을 받지 못했거나 쓸 수 없어 저장된 정책을 씁니다", "policy_version", p.PolicyVersion)
 }
 
 func (a *Agent) applyPolicy(ctx context.Context, p *api.Policy) {
@@ -206,7 +279,7 @@ func (a *Agent) Scan(ctx context.Context) (int, error) {
 		return 0, errors.New("정책이 없습니다")
 	}
 	now := a.Now()
-	stable := time.Duration(p.SizeStableS) * time.Second
+	stable := timex.Seconds(int64(p.SizeStableS)) // 정책 값과 별개로 변환도 넘치지 않게 한다 (ADR-0040)
 	seen := map[string]bool{}
 	added := 0
 	err := filepath.WalkDir(a.Cfg.WatchRoot, func(path string, d fs.DirEntry, err error) error {
@@ -381,7 +454,7 @@ func (a *Agent) ProcessOnce(ctx context.Context) (int, error) {
 		case errors.Is(err, api.ErrOffline):
 			_ = a.Store.SetKV(ctx, KeyConnected, "false")
 			a.setErr(ctx, "NETWORK_UNREACHABLE")
-			_ = a.Store.Retry(ctx, f.ID, "NETWORK_UNREACHABLE", sched.Backoff(f.Attempts, time.Duration(a.Cfg.MaxBackoffS)*time.Second))
+			_ = a.Store.Retry(ctx, f.ID, "NETWORK_UNREACHABLE", sched.Backoff(f.Attempts, a.maxBackoff()))
 			return n, err // 연결이 없으면 나머지도 기다린다
 		default:
 			a.Log.Warn("파일 처리 실패", "path", f.RelPath, "error", err.Error())
@@ -517,8 +590,11 @@ func (a *Agent) awaitReceipt(ctx context.Context, f *state.File, assetID string)
 	return a.confirmReceipt(ctx, f)
 }
 
+// maxBackoff는 재시도 간격 상한(설정 max_backoff_s)이다.
+func (a *Agent) maxBackoff() time.Duration { return timex.Seconds(int64(a.Cfg.MaxBackoffS)) }
+
 func (a *Agent) receiptRetry(ctx context.Context, f *state.File) error {
-	return a.Store.Retry(ctx, f.ID, "RECEIPT_PENDING", sched.Backoff(f.Attempts, time.Duration(a.Cfg.MaxBackoffS)*time.Second))
+	return a.Store.Retry(ctx, f.ID, "RECEIPT_PENDING", sched.Backoff(f.Attempts, a.maxBackoff()))
 }
 
 func (a *Agent) confirmReceipt(ctx context.Context, f *state.File) error {
@@ -631,7 +707,7 @@ func (a *Agent) handleProblem(ctx context.Context, f *state.File, err error) err
 	}
 	var pr *api.Problem
 	if !errors.As(err, &pr) {
-		_ = a.Store.Retry(ctx, f.ID, "UNEXPECTED", sched.Backoff(f.Attempts, time.Duration(a.Cfg.MaxBackoffS)*time.Second))
+		_ = a.Store.Retry(ctx, f.ID, "UNEXPECTED", sched.Backoff(f.Attempts, a.maxBackoff()))
 		return err
 	}
 	a.setErr(ctx, pr.Code)
@@ -640,7 +716,7 @@ func (a *Agent) handleProblem(ctx context.Context, f *state.File, err error) err
 		a.Log.Warn("서버가 정책 위반으로 거부해 보내지 않습니다", "path", f.RelPath, "detail", pr.Detail)
 		return a.Store.MarkStatus(ctx, f.ID, state.Excluded, "SERVER_RULE_VIOLATION")
 	case "QUOTA_EXCEEDED", "RATE_LIMITED", "STORAGE_UNAVAILABLE", "SERVICE_UNAVAILABLE", "CONFLICT":
-		wait := sched.Backoff(f.Attempts+3, time.Duration(a.Cfg.MaxBackoffS)*time.Second)
+		wait := sched.Backoff(f.Attempts+3, a.maxBackoff())
 		if pr.RetryAfter > 0 {
 			wait = pr.RetryAfter
 		}
@@ -811,7 +887,7 @@ func (a *Agent) Run(ctx context.Context) error {
 				_ = a.Store.SetKV(ctx, KeyReenroll, "true")
 				return err
 			}
-			wait := sched.Backoff(backoff, time.Duration(a.Cfg.MaxBackoffS)*time.Second)
+			wait := sched.Backoff(backoff, a.maxBackoff())
 			a.Log.Warn("정책을 받을 수 없어 기다립니다", "error", err.Error(), "retry_in", wait.String())
 			backoff++
 			select {
@@ -843,12 +919,12 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 		}()
 	}
-	loop("scan", func() time.Duration { return time.Duration(a.Cfg.ScanIntervalS) * time.Second },
+	loop("scan", func() time.Duration { return timex.Seconds(int64(a.Cfg.ScanIntervalS)) },
 		func() error { _, err := a.Scan(ctx); return err }, nil)
 	uploadBackoff := 0
 	loop("upload", func() time.Duration {
 		if uploadBackoff > 0 {
-			return sched.Backoff(uploadBackoff, time.Duration(a.Cfg.MaxBackoffS)*time.Second)
+			return sched.Backoff(uploadBackoff, a.maxBackoff())
 		}
 		return 5 * time.Second
 	}, func() error {
@@ -860,16 +936,15 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 		return err
 	}, a.wake)
-	loop("heartbeat", func() time.Duration { return time.Duration(a.policy.Load().HeartbeatIntervalS) * time.Second },
-		func() error { _, err := a.Heartbeat(ctx); return err }, nil)
-	loop("policy", func() time.Duration { return time.Duration(a.Cfg.PolicyRefreshS) * time.Second },
+	loop("heartbeat", a.heartbeatInterval, func() error { _, err := a.Heartbeat(ctx); return err }, nil)
+	loop("policy", func() time.Duration { return timex.Seconds(int64(a.Cfg.PolicyRefreshS)) },
 		func() error { return a.RefreshPolicy(ctx) }, nil)
 	if len(a.Cfg.SensorPlugins) > 0 {
 		a.startSensorPlugins(ctx, &wg)
 		obsBackoff := 0
 		loop("observations", func() time.Duration {
 			if obsBackoff > 0 {
-				return sched.Backoff(obsBackoff, time.Duration(a.Cfg.MaxBackoffS)*time.Second)
+				return sched.Backoff(obsBackoff, a.maxBackoff())
 			}
 			return 5 * time.Second
 		}, func() error {
@@ -885,6 +960,12 @@ func (a *Agent) Run(ctx context.Context) error {
 	<-ctx.Done()
 	wg.Wait()
 	return nil
+}
+
+// heartbeatInterval은 하트비트 루프의 대기 시간이다. 정책은 적용 전에 계약 범위를 검사했지만 변환도 따로 넘치지 않게 한다:
+// 아주 큰 주기가 time.Duration 곱셈에서 음수가 되면 루프가 쉬지 않고 하트비트를 보냈다 (ADR-0040).
+func (a *Agent) heartbeatInterval() time.Duration {
+	return timex.Seconds(int64(a.policy.Load().HeartbeatIntervalS))
 }
 
 // startWatcher는 fsnotify로 변경을 감지해 스캔을 앞당긴다. 실패해도 주기 스캔으로 동작한다.
