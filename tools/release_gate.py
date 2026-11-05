@@ -114,11 +114,15 @@ def gate(milestone: str, base_ref: str | None, with_tests: bool) -> dict:
     web_install = run("web_install", [npm, "ci", "--no-audit", "--no-fund"], ROOT / "web")
     checks.append(web_install)
     if web_install["ok"]:
-        checks.append(run("web_build", [npm, "run", "build"], ROOT / "web"))
+        web_build = run("web_build", [npm, "run", "build"], ROOT / "web")
+        checks.append(web_build)
+        # 09번 요구사항 11.2·ADR-0039: 빌드한 웹을 합성 응답으로 띄워 axe serious·critical 0·휴대폰 폭·초점 표시
+        checks.append(run("web_a11y", [npm, "run", "test:a11y"], ROOT / "web") if web_build["ok"]
+                      else blocked("web_a11y", "웹 빌드 실패로 접근성 검사를 하지 못했습니다"))
         checks.append(run("web_vulnerabilities", [npm, "audit", "--omit=dev", "--audit-level=high"], ROOT / "web"))
     else:
         checks.extend(blocked(n, "현재 잠금 파일대로 웹 의존성을 설치하지 못했습니다")
-                      for n in ("web_build", "web_vulnerabilities"))
+                      for n in ("web_build", "web_a11y", "web_vulnerabilities"))
     image = "marine-api:release-check"
     build = run("runtime_image", ["docker", "build", "-f", "backend/Dockerfile", "-t", image, "."])
     checks.append(build)

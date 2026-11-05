@@ -72,10 +72,11 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertTrue({"migrations", "backend_tests", "go_vet", "go_tests", "web_e2e", "dast", "licenses",
                          "sbom", "sbom_licenses", "image_vulnerabilities", "source_vulnerabilities",
                          "python_static_security", "python_vulnerabilities", "web_install", "dast_risk",
-                         "web_dast", "web_dast_risk",
+                         "web_dast", "web_dast_risk", "web_a11y",
                          "web_vulnerabilities", "security_acceptance"} <= names)
         order = [call.args[0] for call in runner.call_args_list]
         self.assertLess(order.index("web_install"), order.index("web_build"))
+        self.assertLess(order.index("web_build"), order.index("web_a11y"))
         self.assertLess(order.index("web_install"), order.index("web_e2e"))
         for call in runner.call_args_list:
             if call.args[0] in ("licenses", "sbom_licenses"):
@@ -104,7 +105,7 @@ class ReleaseGateTests(unittest.TestCase):
             report = release_gate.gate("M1", None, True)
         self.assertFalse(report["ok"])
         executed = {call.args[0] for call in runner.call_args_list}
-        self.assertTrue({"web_build", "web_e2e", "web_vulnerabilities"}.isdisjoint(executed))
+        self.assertTrue({"web_build", "web_a11y", "web_e2e", "web_vulnerabilities"}.isdisjoint(executed))
 
     def test_high_risk_json_blocks_even_if_zap_process_succeeds(self):
         def run(name, args, *other, **kwargs):
@@ -221,3 +222,18 @@ class ZapRiskTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WebBuildBlocksA11y(unittest.TestCase):
+    def test_build_failure_blocks_accessibility_check(self):
+        def run(name, args, *other, **kwargs):
+            return {"check": name, "ok": name != "web_build", "args": args}
+
+        valid = {"check": "contract_major_version", "ok": True}
+        with patch.object(release_gate, "run", side_effect=run) as runner, \
+             patch.object(release_gate, "contract_major_ok", return_value=valid):
+            report = release_gate.gate("M1", None, False)
+        executed = {call.args[0] for call in runner.call_args_list}
+        self.assertNotIn("web_a11y", executed)  # 예전 dist로 검사하지 않는다
+        a11y = next(c for c in report["checks"] if c["check"] == "web_a11y")
+        self.assertFalse(a11y["ok"])
