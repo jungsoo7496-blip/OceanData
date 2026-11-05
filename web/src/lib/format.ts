@@ -5,6 +5,17 @@ const KST = new Intl.DateTimeFormat('ko-KR', {
 
 export const kst = (iso: string | null | undefined) => (iso ? `${KST.format(new Date(iso))} KST` : '-')
 
+const KST_DAY = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' })
+const KST_TIME = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit' })
+
+// 구간 표시: 같은 날이면 끝은 시각만 ("2026. 11. 03. 오전 10:30 ~ 오전 11:45 KST"). 끝이 없으면 시작만
+export function kstRange(from: string | null | undefined, to: string | null | undefined): string {
+  if (!from) return '-'
+  if (!to) return kst(from)
+  const a = new Date(from), b = new Date(to)
+  return KST_DAY.format(a) === KST_DAY.format(b) ? `${KST.format(a)} ~ ${KST_TIME.format(b)} KST` : `${kst(from)} ~ ${kst(to)}`
+}
+
 export function bytes(n: number | null | undefined): string {
   if (n == null) return '-'
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
@@ -43,6 +54,19 @@ export const RULE_LABEL: Record<string, string> = {
 }
 
 export const SEVERITY_COLOR: Record<string, string> = { INFO: 'blue', WARNING: 'orange', CRITICAL: 'red' }
+
+// 실증 이벤트 공통 상위분류 (contracts/codes/event-categories.json, 기준 문서 7.2장). 기관 하위코드는 '상위.하위'
+export const EVENT_CATEGORY_LABEL: Record<string, string> = {
+  VESSEL: '선박', PERSON: '사람', FLOATING_OBJECT: '부유물', WEATHER_WAVE: '기상·파랑', EQUIPMENT_FAULT: '장비 장애', SAFETY_INCIDENT: '안전사고',
+}
+
+export function eventLabel(code: string): string {
+  const dot = code.indexOf('.')
+  const top = dot < 0 ? code : code.slice(0, dot)
+  return `${EVENT_CATEGORY_LABEL[top] ?? top}${dot < 0 ? '' : ` · ${code.slice(dot + 1)}`}`
+}
+
+export const EVENT_SOURCE_LABEL: Record<string, string> = { DEVICE: '장비', MANUAL: '수동 입력', MODEL: '모델', RULE: '규칙' }
 
 export function duration(s: number | null | undefined): string {
   if (s == null) return '-'

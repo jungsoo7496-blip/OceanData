@@ -16,6 +16,7 @@ import { Catalog, ProviderAccess, SharingConsole } from './pages/Sharing'
 import { OperatorConsole } from './pages/Operator'
 import { ProgramBoard } from './pages/Program'
 import { Sessions } from './pages/Sessions'
+import { SessionTimeline } from './pages/SessionTimeline'
 import { OrgSettings } from './pages/Settings'
 import { Upload } from './pages/Upload'
 
@@ -101,6 +102,7 @@ function Shell({ me }: { me: Me }) {
           <Route path="/assets" element={<Assets me={me} />} />
           <Route path="/assets/:assetId" element={<AssetDetail me={me} />} />
           <Route path="/sessions" element={<Sessions me={me} />} />
+          <Route path="/sessions/:sessionId" element={<SessionTimeline me={me} />} />
           <Route path="/devices" element={<Devices me={me} />} />
           <Route path="/settings" element={<OrgSettings me={me} />} />
           <Route path="/program" element={<ProgramBoard />} />
