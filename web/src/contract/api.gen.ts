@@ -863,7 +863,8 @@ export interface paths {
          *     (관리 명령 set-policy와 같은 검사), 새 버전으로 저장되고 policy_version은 'pv-<버전>'이다. 초안이 정한 항목은 장비 기록
          *     (collection_mode·local_copy_policy·local_retention_days·expected_interval_s·source_timezone)에도 반영한다 — 수집 서버의
          *     variant 허용·시각 변환·수집 정상성 판정이 그 값을 쓴다. 감사 POLICY_CHANGED(전후 값)·POLICY_DRAFT_APPLIED.
-         *     검토한 revision과 다르면 409, 검사에 걸리면 422(unmet_conditions).
+         *     검토한 revision과 다르면 409, 미리보기에서 본 수집기 정책 버전(expected_policy_version)이 지금과 다르면 409 —
+         *     transfer_windows처럼 수집기 전체에 걸린 값을 보지 못한 채 덮어쓰지 않게 한다. 검사에 걸리면 422(unmet_conditions).
          */
         post: operations["applyPolicyDraft"];
         delete?: never;
@@ -3593,6 +3594,8 @@ export interface components {
         PolicyDraftApply: {
             /** @description 검토한 초안의 revision. 그 뒤 고쳐졌으면 409 */
             revision: number;
+            /** @description 미리보기에서 본 수집기 정책 버전(preview.current_policy_version, 저장본이 없었으면 null). 그 뒤 다른 초안 적용·관리 명령으로 바뀌었으면 409 */
+            expected_policy_version: number | null;
             reason?: string;
         };
         PolicyDraftReject: {
@@ -6824,6 +6827,7 @@ export interface operations {
                 /**
                  * @example {
                  *       "revision": 2,
+                 *       "expected_policy_version": 3,
                  *       "reason": "연계 카드 v2와 현장 확인 결과 반영"
                  *     }
                  */

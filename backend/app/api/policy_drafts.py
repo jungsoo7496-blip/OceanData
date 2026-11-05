@@ -50,6 +50,7 @@ class DraftPatch(BaseModel):
 class DraftApply(BaseModel):
     model_config = ConfigDict(extra="forbid")
     revision: int = Field(ge=1, strict=True)
+    expected_policy_version: int | None = Field(ge=1, strict=True)  # 필수, 저장본이 없었으면 null
     reason: str | None = Field(default=None, min_length=2, max_length=500)
 
 
@@ -148,8 +149,9 @@ def apply_draft(policy_draft_id: str, body: DraftApply, request: Request, db: Se
                 c: Container = Depends(container), p: Principal = Depends(require("device_policy:write"))) -> dict:
     d = _load(db, c, request, p, policy_draft_id, lock=True)
     try:  # 검사(계약·매핑·같은 기관 카드)에 걸리면 RuleViolation → 422, 아무것도 저장하지 않는다
-        result = policy_drafts.apply(db, d, revision=body.revision, reason=body.reason, by=p.principal_id,
-                                     now=c.clock.now())
+        result = policy_drafts.apply(db, d, revision=body.revision,
+                                     expected_policy_version=body.expected_policy_version, reason=body.reason,
+                                     by=p.principal_id, now=c.clock.now())
     except policy_drafts.DraftConflict as exc:
         raise _conflict(exc) from None
     ip, conn = client_ip(request), db.connection()

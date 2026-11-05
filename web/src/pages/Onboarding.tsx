@@ -350,7 +350,10 @@ export function PolicyDraftList({ mode, canEdit }: { mode: 'org' | 'operator'; c
   })
   const decide = useMutation({
     mutationFn: ({ d, kind }: { d: Draft; kind: 'apply' | 'reject' }) => (kind === 'apply'
-      ? post<Draft>(`/v1/policy-drafts/${d.policy_draft_id}/apply`, { revision: d.revision, ...(reason.trim() ? { reason: reason.trim() } : {}) })
+      ? post<Draft>(`/v1/policy-drafts/${d.policy_draft_id}/apply`, {
+        revision: d.revision, expected_policy_version: d.preview?.current_policy_version ?? null, // 본 미리보기 기준 (바뀌었으면 409)
+        ...(reason.trim() ? { reason: reason.trim() } : {}),
+      })
       : post<Draft>(`/v1/policy-drafts/${d.policy_draft_id}/reject`, { reason: reason.trim() })),
     onSuccess: (d) => {
       message.success(d.status === 'APPLIED' ? `적용했습니다 — 수집기 정책 v${d.applied?.device_policy_version} (${d.applied?.policy_version})` : '반려했습니다')

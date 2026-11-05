@@ -117,7 +117,7 @@ def test_card_prefill_review_and_operator_apply(ctx) -> None:
     assert ctx.client.get(f"/v1/devices/{DEV_A_COLLECTOR}/policy", headers=admin).json() == policy_before
     for user, code in ((ctx.as_user(ADMIN_A, mfa=True), "FORBIDDEN"), (ctx.as_user(OP), "MFA_REQUIRED"),
                        (ctx.as_user(MEMBER_A, mfa=True), "FORBIDDEN")):
-        r = ctx.client.post(f"{draft_path}/apply", headers=user, json={"revision": 2})
+        r = ctx.client.post(f"{draft_path}/apply", headers=user, json={"revision": 2, "expected_policy_version": None})
         check(r, "POST", f"{ONE}/apply")
         assert r.status_code == 403 and r.json()["code"] == code
         assert ctx.client.post(f"{draft_path}/reject", headers=user, json={"reason": "스스로 반려"}).status_code == 403
@@ -129,10 +129,14 @@ def test_card_prefill_review_and_operator_apply(ctx) -> None:
     assert _state(ctx) == before
 
     # 운영자: 검토한 revision이 아니면 409, 맞으면 수집기 정책 새 버전 + 장비 기록 반영
-    r = ctx.client.post(f"{draft_path}/apply", headers=op, json={"revision": 1})
+    r = ctx.client.post(f"{draft_path}/apply", headers=op, json={"revision": 1, "expected_policy_version": None})
     check(r, "POST", f"{ONE}/apply")
     assert r.status_code == 409
-    r = ctx.client.post(f"{draft_path}/apply", headers=op, json={"revision": 2, "reason": "현장 확인 결과 반영"})
+    r = ctx.client.post(f"{draft_path}/apply", headers=op, json={"revision": 2})  # 본 정책 버전 필수
+    check(r, "POST", f"{ONE}/apply")
+    assert r.status_code == 400
+    r = ctx.client.post(f"{draft_path}/apply", headers=op, json={"revision": 2, "expected_policy_version": None,
+                                                                  "reason": "현장 확인 결과 반영"})
     check(r, "POST", f"{ONE}/apply")
     assert r.status_code == 200, r.text
     d = r.json()
@@ -164,7 +168,8 @@ def test_card_prefill_review_and_operator_apply(ctx) -> None:
     assert linked["linked_policies"] == [{"device_id": DEV_A_COLLECTOR, "version": 1}]
 
     # 끝난 초안은 다시 바뀌지 않는다
-    for path, body in ((f"{draft_path}/apply", {"revision": 2}), (f"{draft_path}/reject", {"reason": "이미 적용됨"})):
+    for path, body in ((f"{draft_path}/apply", {"revision": 2, "expected_policy_version": 1}),
+                       (f"{draft_path}/reject", {"reason": "이미 적용됨"})):
         r = ctx.client.post(path, headers=op, json=body)
         assert r.status_code == 409 and r.json()["code"] == "CONFLICT"
     r = ctx.client.patch(draft_path, headers=admin, json={"revision": 2, "values": {"expected_interval_s": 60}})
@@ -277,7 +282,7 @@ def test_drafts_scope_validation_reject_and_rules(ctx) -> None:
     assert r.json()["decision_reason"] == "카드 v2를 받은 뒤 다시 작성" and r.json()["applied"] is None
     assert _state(ctx) == before
     assert ctx.client.patch(draft_path, headers=admin, json={"revision": 1, "values": {}}).status_code == 409
-    r = ctx.client.post(f"{draft_path}/apply", headers=op, json={"revision": 1})
+    r = ctx.client.post(f"{draft_path}/apply", headers=op, json={"revision": 1, "expected_policy_version": None})
     assert r.status_code == 409
     rejected = _audit(ctx, "POLICY_DRAFT_REJECTED")
     assert rejected[0]["reason"] == "카드 v2를 받은 뒤 다시 작성"
@@ -305,7 +310,8 @@ def test_apply_keeps_stored_policy_and_refuses_invalid_result(ctx) -> None:
                                                      "values": {"expected_interval_s": 600}}).json()
     assert d["preview"]["current_policy_version"] == 1
     assert d["preview"]["current"]["allowed_data_roles"] == ["CORE", "BYPRODUCT"]  # 저장본 값
-    r = ctx.client.post(f"{DRAFTS}/{d['policy_draft_id']}/apply", headers=op, json={"revision": 1})
+    r = ctx.client.post(f"{DRAFTS}/{d['policy_draft_id']}/apply", headers=op,
+                        json={"revision": 1, "expected_policy_version": 1})
     assert r.status_code == 200, r.text
     pol = ctx.client.get(f"/v1/devices/{DEV_A_COLLECTOR}/policy", headers=admin).json()
     assert pol["policy_version"] == "pv-2" and pol["watch_rules"] == stored["watch_rules"]
@@ -327,10 +333,46 @@ def test_apply_keeps_stored_policy_and_refuses_invalid_result(ctx) -> None:
     assert d["preview"]["blockers"] == [{"condition": "원천 장비는 이 수집기에 매핑된 같은 기관 장비",
                                          "actual": DEV_B_CAMERA}]
     before = _state(ctx)
-    r = ctx.client.post(f"{DRAFTS}/{d['policy_draft_id']}/apply", headers=op, json={"revision": 1})
+    r = ctx.client.post(f"{DRAFTS}/{d['policy_draft_id']}/apply", headers=op,
+                        json={"revision": 1, "expected_policy_version": d["preview"]["current_policy_version"]})
     check(r, "POST", f"{ONE}/apply")
     assert r.status_code == 422 and r.json()["unmet_conditions"] == d["preview"]["blockers"]
     assert _state(ctx) == before
     with ctx.c.sessionmaker() as db:
         assert db.get(PolicyDraft, d["policy_draft_id"]).status == "DRAFT"
         assert db.execute(select(func.count()).select_from(DevicePolicy)).scalar() == 3
+
+
+def test_apply_refuses_when_collector_policy_changed_after_preview(ctx) -> None:
+    """보안 검토 발견 7: 같은 수집기의 두 초안 — 먼저 적용된 초안의 transfer_windows(수집기 전체)를 다음 적용이 보지 못한 채
+    덮어쓰지 않는다. 미리보기에서 본 정책 버전(expected_policy_version)이 다르면 409, 다시 보고 적용하면 된다."""
+    admin, op = ctx.as_user(ADMIN_A), ctx.as_user(OP, mfa=True)
+    weekend = [{"days": ["SAT", "SUN"], "start_local": "00:00", "end_local": "23:59", "max_kbps": 5000}]
+    first = ctx.client.post(DRAFTS, headers=admin, json={"device_id": DEV_A_CAMERA,
+                                                         "values": {"transfer_windows": WINDOWS}}).json()
+    second = ctx.client.post(DRAFTS, headers=admin, json={"device_id": DEV_A_SENSOR,
+                                                          "values": {"transfer_windows": weekend}}).json()
+    assert first["preview"]["current_policy_version"] is None and second["preview"]["current_policy_version"] is None
+    r = ctx.client.post(f"{DRAFTS}/{first['policy_draft_id']}/apply", headers=op,
+                        json={"revision": 1, "expected_policy_version": None})
+    assert r.status_code == 200, r.text
+
+    # 두 번째 초안을 그 전에 본 미리보기 기준으로 적용하면 거부, 아무것도 바뀌지 않는다
+    before = _state(ctx)
+    r = ctx.client.post(f"{DRAFTS}/{second['policy_draft_id']}/apply", headers=op,
+                        json={"revision": 1, "expected_policy_version": None})
+    check(r, "POST", f"{ONE}/apply")
+    assert r.status_code == 409 and r.json()["code"] == "CONFLICT" and "v1" in r.json()["detail"]
+    assert _state(ctx) == before
+    pol = ctx.client.get(f"/v1/devices/{DEV_A_COLLECTOR}/policy", headers=admin).json()
+    assert pol["transfer_windows"] == WINDOWS
+
+    # 다시 보면 지금 정책(v1, 첫 초안의 시간대)과 비교되고, 그 버전으로 적용하면 된다
+    again = ctx.client.get(f"{DRAFTS}/{second['policy_draft_id']}", headers=op).json()
+    assert again["preview"]["current_policy_version"] == 1
+    assert again["preview"]["current"]["transfer_windows"] == WINDOWS
+    r = ctx.client.post(f"{DRAFTS}/{second['policy_draft_id']}/apply", headers=op,
+                        json={"revision": 1, "expected_policy_version": 1})
+    assert r.status_code == 200, r.text
+    pol = ctx.client.get(f"/v1/devices/{DEV_A_COLLECTOR}/policy", headers=admin).json()
+    assert pol["policy_version"] == "pv-2" and pol["transfer_windows"] == weekend

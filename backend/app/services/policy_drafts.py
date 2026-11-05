@@ -140,14 +140,17 @@ def preview(db: Session, d: PolicyDraft) -> dict[str, Any]:
             "changes": p.changes, "blockers": [{"condition": u.condition, "actual": u.actual} for u in blockers]}
 
 
-def apply(db: Session, d: PolicyDraft, *, revision: int, reason: str | None, by: str,
-          now: datetime) -> dict[str, Any]:
+def apply(db: Session, d: PolicyDraft, *, revision: int, expected_policy_version: int | None, reason: str | None,
+          by: str, now: datetime) -> dict[str, Any]:
     """수집기 정책 새 버전 저장 + 장비 기록 반영. 호출자가 초안 행을 잠근다. 감사용 전후 값을 돌려준다."""
     _require_open(d, revision)
     # 잠금 순서: 초안(호출자) → 장비 → 수집기 (store_policy가 수집기를 다시 잠가도 같은 트랜잭션이다)
     db.execute(select(Device.device_id).where(Device.device_id == d.device_id).with_for_update())
     db.execute(select(Device.device_id).where(Device.device_id == d.collector_device_id).with_for_update())
     p, stored_version, device = _plan(db, d)
+    if stored_version != expected_policy_version:  # 수집기 전체 항목(transfer_windows)을 보지 못한 값으로 덮지 않는다
+        now_label = f"v{stored_version}" if stored_version is not None else "저장본 없음"
+        raise DraftConflict(f"수집기 정책이 미리보기 뒤 바뀌었습니다 (지금 {now_label}). 다시 확인하세요")
     doc = {**p.policy, "policy_version": f"pv-{device_policy.next_version(db, d.collector_device_id)}"}
     row = device_policy.store_policy(db, d.collector_device_id, doc, integration_card_id=d.integration_card_id,
                                      by=by, now=now)

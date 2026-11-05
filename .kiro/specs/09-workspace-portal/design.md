@@ -33,7 +33,7 @@ React 18 + TS + Vite, Ant Design 5(ko_KR, 대비 강화 테마), TanStack Query,
 local_retention_days, expected_interval_s, transfer_windows=수집기 전체, source_timezone)마다 FROM_CARD(카드 위치 함께)·ENTERED·
 NEEDS_CONFIRMATION. `GET/POST /v1/policy-drafts`(ORG_ADMIN 자기 기관·운영자, 카드의 구조화된 값 세 개만 미리 채움, 자유 기록은
 쓰지 않음, 수집기 매핑 없는 장비·다른 장비의 카드 422), `GET/PATCH /v1/policy-drafts/{id}`(revision 일치할 때만, 바뀐 항목 전후
-감사), `POST …/apply`(운영자 + 다중 인증 `device_policy:write`, 검토한 revision, 지금 정책에서 그 장비 항목만 바꾸고 확인 필요
+감사), `POST …/apply`(운영자 + 다중 인증 `device_policy:write`, 검토한 revision과 미리보기에서 본 수집기 정책 버전 `expected_policy_version` — 둘 중 하나라도 바뀌었으면 409, 지금 정책에서 그 장비 항목만 바꾸고 확인 필요
 항목은 유지 → `services/device_policy.store_policy`(관리 명령 set-policy와 같은 계약·매핑·같은 기관 카드 검사, 수집기 행 잠금)로
 새 버전 `pv-<버전>` + 장비 기록 반영, 실패 시 422·아무것도 안 씀, 감사 POLICY_CHANGED 전후·POLICY_DRAFT_APPLIED),
 `POST …/reject`(운영자 + 다중 인증, 사유 필수). 상세 응답 `preview`는 지금 정책·적용 후 값·바뀌는 항목·막는 조건을 조회 때 계산.
