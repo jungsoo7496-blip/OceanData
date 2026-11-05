@@ -360,7 +360,13 @@ export function PolicyDraftList({ mode, canEdit }: { mode: 'org' | 'operator'; c
       refresh(d)
       void qc.invalidateQueries({ queryKey: ['devices'] })
     },
-    onError: (e) => message.error(failText(e)),
+    onError: (e, { d, kind }) => {
+      message.error(failText(e))
+      // 미리보기 뒤 초안이나 수집기 정책이 바뀌었으면(409) 지금 기준 미리보기를 다시 불러 보여 준다
+      if (kind === 'apply' && e instanceof ApiError && e.problem.status === 409) {
+        void api<Draft>(`/v1/policy-drafts/${d.policy_draft_id}`).then(setOpened, () => undefined) // 적은 사유는 둔다
+      }
+    },
   })
   return (
     <Card className="policy-draft-list" title={mode === 'operator' ? '장비 정책 초안 검토 (온보딩)' : '장비 정책 초안'}
