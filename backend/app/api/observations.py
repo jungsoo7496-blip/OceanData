@@ -47,11 +47,11 @@ def _problems_to_400(problems: list[Any], rejected: bool) -> None:
 
 
 def _source_device(db: Session, c: Container, request: Request, p: Principal, device_id: str) -> Device:
-    device: Device = load_scoped(db, c, request, Device, device_id, p)
-    if p.kind == "DEVICE" and device.device_id not in p.mapped_source_ids:
+    if p.kind == "DEVICE" and device_id not in p.mapped_source_ids:  # 범위 조회보다 먼저 (위반을 감사에 남긴다)
         c.audit.record("DEVICE_SCOPE_VIOLATION", result="DENIED", principal=p, organization_id=p.organization_id,
                        target_type="Device", target_id=device_id)
         raise ProblemError("NOT_FOUND", detail="원천 장비를 찾을 수 없습니다")
+    device: Device = load_scoped(db, c, request, Device, device_id, p)
     if device.status == "REVOKED":
         raise ProblemError("RULE_VIOLATION", detail="폐기된 장비입니다",
                            unmet_conditions=[{"condition": "device.status=ACTIVE", "actual": device.status}])

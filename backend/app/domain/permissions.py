@@ -2,6 +2,9 @@
 
 - roles: 이 동작을 할 수 있는 사용자 역할 (domain.md 2장)
 - scope: 기기·API 키 주체가 이 동작을 하려면 가져야 하는 범위 (없으면 기기·API 키 불가)
+- device: 수집기(DEVICE) 토큰도 할 수 있는 동작인가. 기기 자격증명은 매핑된 원천 장비의 업로드·관측값·이벤트와
+  자기 수집기의 하트비트·정책·상태 조회만 한다 (02번 요구사항 5.5, domain.md 2장). 범위(scope)가 있어도 이 표시가
+  없으면 기기는 거부한다 — status:read·upload:write 범위가 보고서·실증 기록·관측값 조회까지 넓어지지 않게.
 - mfa: 고위험 동작 — 다중 인증으로 발급된 사용자 토큰만 (02번 요구사항 4.2)
 """
 
@@ -21,12 +24,13 @@ class Rule:
     roles: frozenset[str]
     scope: str | None = None
     mfa: bool = False
+    device: bool = False
 
 
 PERMISSIONS: dict[str, Rule] = {
     # 01 시스템
     "system:capabilities": Rule(ALL_USER_ROLES, scope="status:read"),
-    "me:read": Rule(ALL_USER_ROLES, scope="status:read"),
+    "me:read": Rule(ALL_USER_ROLES, scope="status:read", device=True),  # 에이전트 진단(자기 확인)
     # 02 인증·자격증명·감사
     "enrollment_code:create": Rule(frozenset({"ORG_ADMIN"}), mfa=True),
     "device_credential:revoke": Rule(frozenset({"ORG_ADMIN"}), mfa=True),
@@ -40,7 +44,7 @@ PERMISSIONS: dict[str, Rule] = {
     "session:write": Rule(PROVIDER),
     "device:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}),
     "device:write": Rule(frozenset({"ORG_ADMIN", "PLATFORM_OPERATOR"})),
-    "device_policy:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="agent:policy"),
+    "device_policy:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="agent:policy", device=True),  # 자기 수집기만
     "device_policy:write": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),
     # 03번 약정·연계 카드 (요구사항 1.4·1.5)
     "agreement:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}),
@@ -50,18 +54,18 @@ PERMISSIONS: dict[str, Rule] = {
     # 09번 장비 정책 초안 (요구사항 3.2): 초안은 아무것도 바꾸지 않는다. 적용·반려는 device_policy:write (운영자·MFA)
     "policy_draft:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}),
     "policy_draft:write": Rule(frozenset({"ORG_ADMIN", "PLATFORM_OPERATOR"})),
-    "agent:heartbeat": Rule(frozenset(), scope="agent:heartbeat"),
-    "agent_health:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
+    "agent:heartbeat": Rule(frozenset(), scope="agent:heartbeat", device=True),
+    "agent_health:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read", device=True),  # 자기 수집기만
     "schema:read": Rule(ALL_USER_ROLES, scope="status:read"),
     "code:read": Rule(ALL_USER_ROLES, scope="status:read"),
     "org_event_code:create": Rule(frozenset({"ORG_ADMIN"})),
     "contract:validate": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="upload:write"),
     "quality_report:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),  # 03번 요구사항 10.1
     # 04 수집
-    "upload:write": Rule(PROVIDER, scope="upload:write"),
-    "upload:read": Rule(PROVIDER, scope="upload:write"),
+    "upload:write": Rule(PROVIDER, scope="upload:write", device=True),  # 기기는 매핑된 원천 장비만
+    "upload:read": Rule(PROVIDER, scope="upload:write", device=True),
     "asset:read": Rule(PROVIDER | {"PROGRAM_VIEWER", "PLATFORM_OPERATOR"}, scope="asset:read"),
-    "asset:receipt": Rule(PROVIDER, scope="upload:write"),
+    "asset:receipt": Rule(PROVIDER, scope="upload:write", device=True),
     "asset:write": Rule(PROVIDER),
     # 운영자는 유효한 긴급 열람 승인이 있을 때만 (판단은 download-url 처리기, 02번 요구사항 8). 관리기관 열람자는 불가
     "asset:download": Rule(PROVIDER | {"PLATFORM_OPERATOR"}),
@@ -85,12 +89,12 @@ PERMISSIONS: dict[str, Rule] = {
     "asset:delete": Rule(frozenset({"ORG_ADMIN"}), mfa=True),
     "deletion_certificate:read": Rule(frozenset({"ORG_ADMIN", "PLATFORM_OPERATOR"})),
     # 07 센서·이벤트
-    "observation:write": Rule(PROVIDER, scope="observation:write"),
+    "observation:write": Rule(PROVIDER, scope="observation:write", device=True),
     "observation:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
     "observation:correct": Rule(frozenset({"ORG_ADMIN"})),
-    "mapping:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="agent:policy"),
+    "mapping:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="agent:policy", device=True),
     "mapping:write": Rule(frozenset({"ORG_ADMIN", "PLATFORM_OPERATOR"})),
-    "event:write": Rule(PROVIDER, scope="event:write"),
+    "event:write": Rule(PROVIDER, scope="event:write", device=True),
     "event:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
     # 10 실증 기록·증빙·보고서
     "record:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
@@ -159,6 +163,8 @@ def check(principal: Principal, action: str) -> None:
         raise PermissionDenied(action)
     if principal.is_machine:
         if rule.scope is None or rule.scope not in principal.scopes:
+            raise PermissionDenied(action)
+        if principal.kind == "DEVICE" and not rule.device:  # 기기는 요구사항 5.5의 동작만
             raise PermissionDenied(action)
         return
     if not principal.roles & rule.roles:
