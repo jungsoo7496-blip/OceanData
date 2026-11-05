@@ -52,3 +52,23 @@ func TestMP4CreationTime(t *testing.T) {
 		t.Fatalf("넘친 시각 %v를 근거로 썼다", got)
 	}
 }
+
+func TestMP4CreationTimeRejectsShortExtendedMvhd(t *testing.T) {
+	const creationSeconds = 0xd0000000
+	payload := mvhdV1(creationSeconds)[8:]
+	want := mp4Epoch.Add(creationSeconds * time.Second)
+	ftyp := box("ftyp", []byte("isom"))
+
+	valid := append(ftyp, box("moov", largeBox("mvhd", payload))...)
+	if got, ok := MP4CreationTime(write(t, valid)); !ok || !got.Equal(want) {
+		t.Fatalf("완전한 확장 mvhd: got %v %v, want %v", got, ok, want)
+	}
+
+	// 64비트 시각의 마지막 바이트가 빠진 mvhd 뒤에 free를 붙인다. free 크기의 첫 0 바이트를
+	// 상자 경계 너머에서 읽으면 그럴듯한 시각이 완성된다.
+	short := largeBox("mvhd", payload[:11])
+	malformed := append(ftyp, box("moov", append(short, box("free", nil)...))...)
+	if got, ok := MP4CreationTime(write(t, malformed)); ok {
+		t.Fatalf("짧은 확장 mvhd 뒤 상자의 바이트를 촬영시각 %v로 썼다", got)
+	}
+}
