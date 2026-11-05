@@ -30,6 +30,8 @@ dev = [
   "pytest>=8",
   "hypothesis>=6.100",
   "moto[s3,server]>=5",
+  # contracts/openapi.yaml 기준 자동 계약 시험 (04번 요구사항 10.2, OSS-CANDIDATES 채택, MIT). 정확한 버전으로 고정
+  "schemathesis==4.31.1",
   "ruff>=0.6",
   "mypy>=1.11",
   "bandit>=1.7",
