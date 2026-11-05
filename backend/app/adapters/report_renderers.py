@@ -132,9 +132,26 @@ def render_xlsx(doc: dict[str, Any]) -> bytes:
         for r in s.get("records", []):
             rws.append([r["record_id"], r["version"], r["title"], r["test_item"], r["conditions"], r["result"],
                         r["evidence_count"]])
+    _neutralize_formulas(wb)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# 수식으로 해석될 수 있는 첫 글자 (OWASP CSV/수식 주입 안내). 보고서 제목·입력 항목·회차 기록은 사람·장비가 쓴 글이라
+# openpyxl이 '='로 시작하는 문자열을 수식 셀로 저장하면 스프레드시트에서 계산된다 (HYPERLINK·DDE 등).
+FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _neutralize_formulas(wb: Any) -> None:
+    """위험한 첫 글자로 시작하는 문자열은 값을 바꾸지 않고 문자열 셀로 고정하고 quotePrefix를 켠다
+    (열어도 계산하지 않고, 셀을 고쳐 써도 수식이 되지 않는다)."""
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                if isinstance(cell.value, str) and cell.value.startswith(FORMULA_LEAD):
+                    cell.data_type = "s"
+                    cell.quotePrefix = True
 
 
 # ------------------------------------------------------------------ HWPX (양식 XML 치환)
