@@ -12,7 +12,7 @@ TEST_DATABASE_URL ?= postgresql+pg8000://marine_owner:change-me-owner@127.0.0.1:
         lint typecheck security license-check secrets-check web-check contracts-check traceability \
         traceability-write ci agent-build agent-test bench verify-integrity sample-observations \
         release-gate release-notes sbom vuln-scan loadtest backup restore-test test-web-e2e agent-generate agent-generate-check \
-        agent-lint web-a11y runtime-venv
+        agent-lint agent-fuzz web-a11y runtime-venv
 
 # --allow-existing: 다시 실행하면 기존 venv에 의존성만 갱신한다 (uv는 이 옵션 없이 기존 venv가 있으면 실패한다)
 venv:
@@ -129,6 +129,17 @@ agent-generate-check:
 # MQTT 시험은 MQTT_TEST_BROKER가 있을 때만 (docker compose --profile sensor up mosquitto)
 agent-test:
 	cd agent && go vet ./... && go test -race ./...
+
+# 퍼즈 시험: 신뢰할 수 없는 입력(카메라 파일·서버 응답·업데이트 파일)을 읽는 파서의 Fuzz* 대상을 모두 찾아 대상마다
+# FUZZTIME 동안 돌린다 (공유 장비에서도 돌도록 작업자 2개). 찾은 실패 입력은 testdata/fuzz/<대상>/에 남겨 agent-test의
+# 회귀 시험으로 쓴다. CI에는 넣지 않는다: make agent-fuzz FUZZTIME=90s
+FUZZTIME ?= 15s
+agent-fuzz:
+	cd agent && for f in $$(grep -rl --include='*_test.go' '^func Fuzz' . | sort); do \
+		for t in $$(sed -n 's/^func \(Fuzz[A-Za-z0-9_]*\)(.*/\1/p' $$f); do \
+			go test -run='^$$' -fuzz="^$$t$$" -fuzztime=$(FUZZTIME) -parallel=2 $$(dirname $$f) || exit 1; \
+		done; \
+	done
 
 # golangci-lint v2.15.0 (설정 agent/.golangci.yml). go.mod에 넣지 않고 go run으로 실행한다.
 # 두 번째 실행은 린터를 이 컴퓨터용으로 빌드하고 분석만 GOOS=windows로 한다 (*_windows.go 포함).

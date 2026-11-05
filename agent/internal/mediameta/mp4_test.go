@@ -47,4 +47,8 @@ func TestMP4CreationTime(t *testing.T) {
 	if _, ok := MP4CreationTime(write(t, []byte("not an mp4 file at all"))); ok {
 		t.Fatal("mp4가 아니면 ok=false")
 	}
+	// version 1 creation_time 21946744073초(2599년경)가 time.Duration 곱셈에서 넘쳐 2014년으로 통과하던 문제
+	if got, ok := MP4CreationTime(write(t, append(box("ftyp", []byte("isom")), box("moov", mvhdV1(21946744073))...))); ok {
+		t.Fatalf("넘친 시각 %v를 근거로 썼다", got)
+	}
 }

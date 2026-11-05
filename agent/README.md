@@ -90,6 +90,11 @@ go test -race ./...     # 가짜 API로 T02(자동 등록)·T03(끊긴 뒤 남�
 이는 실제 72시간 대기·PC 전원 차단·15번 엣지 장비 시험을 대신하지 않는다.
 실제 스택 확인 절차는 `.kiro/specs/06-sync-agent/design.md`의 "실제 스택 확인".
 
+퍼즈 시험(표준 `testing.F`)은 신뢰할 수 없는 입력을 읽는 파서를 대상으로 한다: MP4 mvhd 촬영시각(카메라 파일),
+감시 규칙 경로·`{session}`(디스크 경로·서버 정책), MQTT 페이로드·매핑, 업데이트 서명 파일, 서버 오류 응답·`Retry-After`.
+저장소 루트에서 `make agent-fuzz`(대상마다 `FUZZTIME`, 기본 15s)로 돌린다. CI에는 넣지 않았다. 찾은 실패 입력은
+`internal/<패키지>/testdata/fuzz/<대상>/`에 남기며, 시드와 함께 `go test`(CI 포함)에서 회귀 시험으로 실행된다.
+
 린트는 저장소 루트에서 `make agent-lint`로 실행한다. golangci-lint v2.15.0을 `go run`으로 받아 쓰며(GPL-3.0 개발 도구라
 go.mod에 넣지 않는다) 설정은 `.golangci.yml`이다. Linux 대상과 `GOOS=windows` 대상을 각각 검사한다.
 제외 규칙은 두지 않는다. 닫기·삭제 오류를 버릴 때는 코드에서 `_ =`로 드러내고, 쓰기 파일의 닫기 오류는 확인한다.

@@ -5,6 +5,7 @@ package mediameta
 import (
 	"encoding/binary"
 	"io"
+	"math"
 	"os"
 	"time"
 )
@@ -73,10 +74,12 @@ func findMvhd(r io.ReaderAt, start, end int64, depth int) (time.Time, bool) {
 			} else {
 				secs = uint64(binary.BigEndian.Uint32(b[4:8]))
 			}
-			if secs == 0 || secs > 1<<40 {
+			// time.Duration은 약 292년(2196년)까지만 나타낸다. 그보다 큰 값은 곱셈이 넘쳐 그럴듯한 과거 시각이
+			// 되므로(퍼즈 시험으로 찾음) 계산 전에 거부한다. 넘치지 않게 계산해도 아래 미래 시각 검사에 걸리는 값이다
+			if secs == 0 || secs > uint64(math.MaxInt64/time.Second) {
 				return time.Time{}, false
 			}
-			t := mp4Epoch.Add(time.Duration(secs) * time.Second) // #nosec G115 -- 2^40초 이하로 제한했다
+			t := mp4Epoch.Add(time.Duration(secs) * time.Second) // #nosec G115 -- 위에서 넘치지 않는 범위로 제한했다
 			if t.Year() < 2000 || t.After(time.Now().Add(48*time.Hour)) {
 				return time.Time{}, false // 기본값·잘못된 시계로 보이는 값은 근거로 쓰지 않는다
 			}
