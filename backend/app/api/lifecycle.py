@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -9,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import client_ip, container, get_db, load_scoped, require
 from app.container import Container
-from app.db.models import Asset, BackupRun, DeletionCertificate, OrgQuota, TrialSession
+from app.db.models import Asset, BackupRun, DeletionCertificate, Device, OrgQuota, TrialSession
 from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services import backup, retention
@@ -46,6 +48,39 @@ def start_backup_run(request: Request, db: Session = Depends(get_db), c: Contain
     job_id = c.queue.enqueue("backup", {"requested_by": p.principal_id}, dedupe_key="backup")
     c.audit.record("BACKUP_REQUESTED", principal=p, target_type="Job", target_id=job_id, source_ip=client_ip(request))
     return {"job_id": job_id}
+
+
+class BackupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    device_id: str = Field(pattern=r"^dev_[0-9A-HJKMNP-TV-Z]{26}$")
+    session_id: str | None = Field(default=None, pattern=r"^ses_[0-9A-HJKMNP-TV-Z]{26}$")
+    captured_from: datetime | None = None
+    captured_to: datetime | None = None
+    dry_run: bool = True
+
+
+@router.post("/v1/backup-requests", tags=["status"])
+def request_backup(body: BackupRequest, request: Request, db: Session = Depends(get_db),
+                   c: Container = Depends(container), p: Principal = Depends(require("backup:request"))) -> dict:
+    """현장 사본이 없을 수 있는 장비의 자산 백업 신청 (08번 요구사항 6.4). 먼저 dry_run으로 예상 용량을 본다."""
+    for field, value in (("captured_from", body.captured_from), ("captured_to", body.captured_to)):
+        if value is not None and value.tzinfo is None:
+            raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": f"/{field}", "code": "timezone",
+                                                            "message": "시간대가 있는 RFC 3339 시각이어야 합니다"}])
+    device = load_scoped(db, c, request, Device, body.device_id, p)
+    try:
+        out = backup.request_backup(db, organization_id=p.organization_id, device=device, session_id=body.session_id,
+                                    captured_from=body.captured_from, captured_to=body.captured_to,
+                                    dry_run=body.dry_run, now=c.clock.now())
+    except backup.RequestRefused as exc:
+        raise ProblemError("RULE_VIOLATION", detail=exc.detail,
+                           unmet_conditions=[{"condition": k, "actual": v} for k, v in exc.unmet]) from None
+    if out["applied"]:
+        c.audit.record("BACKUP_REQUESTED_BY_ORG", principal=p, organization_id=p.organization_id,
+                       target_type="Device", target_id=device.device_id, source_ip=client_ip(request),
+                       details={"asset_count": out["asset_count"], "total_bytes": out["total_bytes"],
+                                "session_id": body.session_id})
+    return out
 
 
 @router.post("/v1/retention/dry-run", tags=["status"])

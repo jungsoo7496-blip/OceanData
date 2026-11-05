@@ -167,6 +167,8 @@ def delete_assets(c: Container, db: Session, *, organization_id: str, assets: li
                     q.quarantine_bytes = max(0, q.quarantine_bytes - a.byte_size)
                 else:
                     q.used_bytes = max(0, q.used_bytes - a.byte_size)
+                if a.backup_requested_at is not None:  # 신청 백업 용량도 뺀다 (백업 사본은 보존 주기 뒤 사라짐)
+                    q.backup_bytes = max(0, q.backup_bytes - a.byte_size)
         if is_backup_target(a):
             backed_up = True
         a.deleted_at, a.deletion_certificate_id, a.storage_key, a.updated_at = now, cert_id, None, now

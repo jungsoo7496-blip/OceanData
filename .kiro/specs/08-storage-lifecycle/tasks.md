@@ -15,7 +15,7 @@
 - [x] 13. 계층형 백업 작업(DB 스냅샷 pg_dump·EVIDENCE·DEID·DATASET·PROTECTED → 별도 S3 증분·해시 확인, 결과 기록·실패 알림·D_BACKUP) — 요구사항 6.1~6.3, 6.5 · ADR-0021 · 시험 `test_t10_tiered_backup_and_restore`. 운영 도구(pgBackRest·rclone·restic)는 PoC 후 교체, PITR·암호화·오래된 회차 정리 없음
 - [x] 13b. `make restore-test`: 임시 DB·임시 위치 복원 → 행 수·감사 체인·sha256 대조 — 요구사항 7.1 (T10-a)
 - [x] 13c. 공용 이미지 PG16 도구·Compose 백업 설정·소유자 연결 전달·주버전 불일치 거부 — 요구사항 6.1, 6.3, 7.1 · ADR-0022 · 단위 `test_backup_tools.py`·T10·비루트 이미지 CLI 백업/복원 확인. API·DB 구조 변경 없음(새 마이그레이션·down 해당 없음)
-- [ ] 14. ROTATING 등 원천 장비 자산 백업 신청 → PROTECTED·예상 용량·사용량 반영 — 요구사항 6.4 (org_quotas.backup_bytes 항목은 있음)
+- [x] 14. ROTATING·NONE·UNKNOWN 원천 장비 자산 백업 신청 → 예상 용량(dry_run)·쿼터 확인·PROTECTED·backup_bytes 반영·삭제 시 차감 — 요구사항 6.4 · `POST /v1/backup-requests`, `assets.backup_requested_at`(0017) · 시험 `tests/integration/test_backup_request.py`
 - [x] 15. `make restore-test`·복원 Runbook — 요구사항 7.1, 7.2 · `docs/runbook/03-backup-restore.md` · PG16 이미지에서 CLI 복원 `ok: true`, T10 통과(2026-11-04). 스테이징 운영 인수 기록(T14)은 별도
 - [ ] 16. 용량 예측(일별 추세·70% 도달 예상일·리드타임 알림) — 요구사항 8.1, 8.2
 - [ ] 17. Hot/Warm 계층 설정·Tier_Mover(복사→sha256 확인→원본 삭제·위치 갱신, 이동 중 조회 유지) — 요구사항 9.1~9.4

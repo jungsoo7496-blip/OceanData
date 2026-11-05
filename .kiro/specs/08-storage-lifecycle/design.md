@@ -22,3 +22,10 @@
 - Compose가 백업 설정을 전달한다. 백업용 소유자 연결은 `migrate`·`worker`에만 전달하고 개발 기본값은 `MIGRATION_DATABASE_URL`이다.
 - 계약·도메인 코드값·DB 모델 변경 없음. 새 마이그레이션(down 포함)은 해당 없음이다.
 - 검증: 버전 호환성 단위시험 12개, T10 응답 계약·증분 백업·손상 검사·복원, 실제 비루트 이미지 CLI 백업·복원.
+
+## 기관 백업 신청 (요구사항 6.4)
+`POST /v1/backup-requests`(ORG_ADMIN, 기본 dry_run=true): local_copy_policy가 ROTATING·NONE·UNKNOWN인 자기 기관 장비의 RAW 자산 중 아직 NONE인 것
+(회차·촬영 구간으로 좁힐 수 있음)의 개수·용량과 신청 뒤 사용량을 보여준다. dry_run=false면 쿼터 안에서만 PROTECTED + `backup_requested_at`(0017),
+용량을 `org_quotas.backup_bytes`에 더하고 감사(BACKUP_REQUESTED_BY_ORG). 다음 백업 회차 대상(ADR-0021 술어). 자산을 지우면 신청 용량도 뺀다.
+장비의 local_copy_policy는 연계 카드(03번 작업 17)에서 들어온다.
+

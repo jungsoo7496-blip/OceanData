@@ -2634,6 +2634,57 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
 
+  /v1/backup-requests:
+    post:
+      tags: [status]
+      operationId: requestAssetBackup
+      summary: 현장 사본이 없을 수 있는 장비의 자산 백업 신청 (ORG_ADMIN, 자기 기관). dry_run으로 예상 용량 먼저
+      description: |
+        08번 요구사항 6.4, domain.md 9장. local_copy_policy가 ROTATING·NONE·UNKNOWN인 원천 장비의 RAW 자산(아직 PROTECTED가 아닌 것)을
+        PROTECTED로 올리고 그 용량을 기관 사용량의 백업 항목(backup_bytes)에 더한다. 쿼터를 넘으면 거부한다. 다음 백업 회차부터 포함된다.
+      x-freeze: G1
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [device_id]
+              properties:
+                device_id: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+                session_id: {$ref: './schemas/common.schema.json#/$defs/session_id'}
+                captured_from: {type: string, format: date-time}
+                captured_to: {type: string, format: date-time}
+                dry_run: {type: boolean, default: true, description: true면 예상만 보여주고 바꾸지 않는다}
+      responses:
+        '200':
+          description: 예상 또는 적용 결과
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [device_id, local_copy_policy, asset_count, total_bytes, applied, usage]
+                properties:
+                  device_id: {$ref: './schemas/common.schema.json#/$defs/device_id'}
+                  local_copy_policy: {$ref: './schemas/common.schema.json#/$defs/local_copy_policy'}
+                  asset_count: {type: integer, minimum: 0}
+                  total_bytes: {type: integer, minimum: 0}
+                  applied: {type: boolean}
+                  usage:
+                    type: object
+                    required: [quota_bytes, used_total_bytes, after_bytes]
+                    properties:
+                      quota_bytes: {type: integer}
+                      used_total_bytes: {type: integer, description: 지금 기관 사용량 합계(백업 항목 포함)}
+                      after_bytes: {type: integer, description: 신청 뒤 사용량 합계}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+
   /v1/retention/dry-run:
     post:
       tags: [status]

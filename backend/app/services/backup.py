@@ -377,3 +377,53 @@ def run_view(r: BackupRun) -> dict[str, Any]:
             "copied_count": r.copied_count, "skipped_count": r.skipped_count, "total_bytes": r.total_bytes,
             "copied_bytes": r.copied_bytes, "table_count": r.table_count, "db_dump_sha256": r.db_dump_sha256,
             "failed_objects": r.failed_objects or [], "error": r.error, "restore_test": r.restore_test}
+
+
+# ------------------------------------------------------------------ 기관 백업 신청 (요구사항 6.4)
+
+ONLY_COPY_POLICIES = ("ROTATING", "NONE", "UNKNOWN")  # 센터 원본이 유일본일 수 있는 장비 (domain.md 9장)
+
+
+class RequestRefused(Exception):
+    def __init__(self, detail: str, unmet: list[tuple[str, str | None]]) -> None:
+        super().__init__(detail)
+        self.detail, self.unmet = detail, unmet
+
+
+def request_backup(db: Session, *, organization_id: str, device: Any, session_id: str | None,
+                   captured_from: Any, captured_to: Any, dry_run: bool, now: Any) -> dict[str, Any]:
+    """대상 RAW 자산을 PROTECTED로 올리고 용량을 기관 백업 항목에 더한다. dry_run이면 예상만."""
+    from app.db.models import OrgQuota
+
+    if device.local_copy_policy not in ONLY_COPY_POLICIES:
+        raise RequestRefused("현장에 원본이 보관되는 장비는 백업 신청 대상이 아닙니다",
+                             [("local_copy_policy ∈ {ROTATING, NONE, UNKNOWN}", device.local_copy_policy)])
+    q = select(Asset).where(Asset.organization_id == organization_id, Asset.source_system_id == device.device_id,
+                            Asset.deleted_at.is_(None), Asset.has_binary.is_(True), Asset.storage_zone == "RAW",
+                            Asset.backup_class == "NONE",
+                            Asset.ingest_status.in_(("REGISTERED", "PROXIED", "READY_PRIVATE")))
+    if session_id:
+        q = q.where(Asset.session_id == session_id)
+    if captured_from is not None:
+        q = q.where(Asset.capture_start_at >= captured_from)
+    if captured_to is not None:
+        q = q.where(Asset.capture_start_at < captured_to)
+    assets = list(db.execute(q.with_for_update()).scalars())
+    total = sum(int(a.byte_size or 0) for a in assets)
+    quota = db.execute(select(OrgQuota).where(OrgQuota.organization_id == organization_id).with_for_update()) \
+        .scalar_one_or_none()
+    used = (quota.used_bytes + quota.quarantine_bytes + quota.reserved_bytes + quota.backup_bytes) if quota else 0
+    limit = quota.quota_bytes if quota else 0
+    usage = {"quota_bytes": int(limit), "used_total_bytes": int(used), "after_bytes": int(used + total)}
+    out = {"device_id": device.device_id, "local_copy_policy": device.local_copy_policy, "asset_count": len(assets),
+           "total_bytes": total, "applied": False, "usage": usage}
+    if dry_run or not assets:
+        return out
+    if quota is None or used + total > limit:
+        raise RequestRefused("기관 쿼터를 넘어 백업을 신청할 수 없습니다",
+                             [("사용량 + 백업 신청 ≤ 쿼터", f"{used + total} > {limit}")])
+    for a in assets:
+        a.backup_class, a.backup_requested_at, a.updated_at = "PROTECTED", now, now
+    quota.backup_bytes += total
+    quota.updated_at = now
+    return {**out, "applied": True}

@@ -296,6 +296,8 @@ class Asset(Base):
     share_status: Mapped[str] = mapped_column(String(20))
     review_result: Mapped[str | None] = mapped_column(String(10))
     backup_class: Mapped[str] = mapped_column(String(20))
+    # 기관이 신청한 백업 (domain.md 9장 2번). 이 자산의 용량은 org_quotas.backup_bytes에 들어 있다 (08번 요구사항 6.4)
+    backup_requested_at: Mapped[datetime | None] = mapped_column(TS)
     provenance: Mapped[dict[str, Any]] = mapped_column(JSONB)
     env_context: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     tags: Mapped[list[Any] | None] = mapped_column(JSONB)
