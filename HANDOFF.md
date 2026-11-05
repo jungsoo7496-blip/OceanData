@@ -4,7 +4,7 @@
 최종 갱신: 2026-11-05 17시(UTC) (클라우드 Claude 자율 작업 — 아래 요약과 -1~-1r 상세. 작업 브랜치 `fix/backup-runtime-pg16`, main은 아직 d65a259. 그 전: 로컬 Codex 03·06·08·17번 보완)
 
 ## 요약 — 로컬에서 이어 갈 때 먼저 읽기 (2026-11-05 클라우드 세션 끝)
-**검증 상태 (이 브랜치 마지막 커밋 기준, 로컬 컨테이너에서 실행):** 백엔드 전체 298건 통과(선택 실행 탐색 2건 제외), 마이그레이션 0023까지 임시 DB
+**검증 상태 (이 브랜치 마지막 커밋 기준, 로컬 컨테이너에서 실행):** 백엔드 전체 301건 통과(선택 실행 탐색 `SCHEMATHESIS_ALL=1` 5건 제외), 마이그레이션 0023까지 임시 DB
 head→base→head→base 왕복, 계약 검사(158개 작업·중복 키 검사)·Go SDK·웹 타입 재생성 일치, 에이전트 `go test -race`·Linux/Windows golangci-lint 0건,
 웹 lint·typecheck·build·`npm run test:a11y`(역할 6개 × 데스크톱·휴대폰 92개 상태, axe serious·critical 0), 전체 작업 Schemathesis 탐색(작업당 25개, 구성원·운영자)
 불일치 0건. 수용시험 표(docs/ACCEPTANCE-STATUS.md) PASS 74 — 이번에 T01-e(실제 SeaweedFS로 사전 서명 URL 변조 거부)·T15-f(회차 미상 격리 자동 삭제 안 함)를 더했고, 남은 NOT_IMPLEMENTED 4건은 모두 조건부 15·16번이다. **원격 GitHub Actions는 아직 돌려 보지 못했다** (토큰 없음) — 로컬에서 push 뒤 CI 결과부터 확인할 것.
@@ -111,18 +111,24 @@ head→base→head→base 왕복, 계약 검사(158개 작업·중복 키 검사
 **클라우드의 과거 개발 환경 확인 기록:** `make up` 7개 서비스 healthy. 실제 Keycloak 로그인 → 업로드 생성 → localhost:8333 사전 서명 URL로 파트 전송 → 워커 무결성 검증 → READY_PRIVATE → 영수증까지 확인. 이번 로컬 검증은 독립 PostgreSQL·모의 S3·MQTT와 공용 API 이미지로 수행했다.
 
 ## 2. 로컬에서 시작하기
-필요한 것: Docker(Compose v2), Python 3.12+, [uv](https://docs.astral.sh/uv/), Node 22, (06번부터) Go
+필요한 것: Docker(Compose v2), Python 3.12+, [uv](https://docs.astral.sh/uv/), Node 22, (06번부터) Go.
+백엔드 시험을 호스트에서 돌리면 FFmpeg(`ffmpeg`·`ffprobe`)와 PostgreSQL 16 클라이언트(`pg_dump`·`pg_restore`, PATH의 것이 다른 주버전이면 `PG_DUMP_BIN`·`PG_RESTORE_BIN`)도 필요하다.
+없으면 해당 시험이 실패가 아니라 건너뜀(skip)으로 끝나 통과 수만 줄어든다.
 
 ```bash
 git clone https://github.com/jungsoo7496-blip/OceanData.git
 cd OceanData
+git switch fix/backup-runtime-pg16   # 아직 main에 합치지 않았다면 작업 브랜치로 (맨 위 '최종 갱신' 줄)
 cp .env.example .env          # 값은 개발용 자리표시자. 필요하면 바꾼다
-make venv                     # backend/.venv에 개발 의존성 설치
+make venv                     # backend/.venv에 개발 의존성 설치 (다시 실행하면 갱신)
+(cd web && npm ci)            # 웹 의존성 — make lint·typecheck·web-check·web-a11y·ci와 수용시험 웹(T02-g)에 필요
+make ci                       # 계약·추적성·lint·타입·단위·보안·라이선스·비밀값 (스택 불필요)
+make agent-test agent-lint agent-generate-check   # Go 에이전트 시험·린트·계약 SDK 일치 (Go는 make ci에 없다)
 make up                       # 전체 개발 환경 기동 (처음엔 이미지 빌드로 몇 분 걸림)
 make seed                     # 시험 기관 5·사용자 9·사업 2·장비 5·회차 2
 make test-integration         # 통합 시험 (make up의 PostgreSQL 사용)
-make test-acceptance          # 수용시험 → var/acceptance.{json,md} (세부 ID별)
-make release-gate MILESTONE=M1   # 계약·추적성·비밀값·라이선스·시험·마일스톤 케이스
+make test-acceptance          # 수용시험 → var/acceptance.{json,md} (세부 ID별). 웹 T02-g는 Chromium 준비 필요 (web/e2e/README.md)
+make release-gate MILESTONE=M1   # 계약·추적성·비밀값·라이선스·시험·마일스톤 케이스. 지금은 실패로 끝난다: strict 라이선스 승인 대기(0장 4번), DAST 대상 주소(RELEASE_DAST_URL·RELEASE_DAST_WEB_URL) 필요
 make backup && make restore-test # 계층형 백업·복원 시험 (pg_dump 16 필요)
 ```
 

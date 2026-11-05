@@ -27,6 +27,7 @@ python tools/web_acceptance.py --out var/acceptance-results.jsonl
 Linux CI에서 브라우저 시스템 라이브러리도 설치하려면 `install --with-deps chromium`을 쓴다.
 설치된 Chrome을 사용하려면 `E2E_BROWSER_CHANNEL=chrome`을 지정한다.
 브라우저 저장 위치는 `PLAYWRIGHT_BROWSERS_PATH`로 지정할 수 있다.
+미리 받아 둔 다른 Chromium 실행 파일은 `E2E_BROWSER_EXECUTABLE`로 지정한다 (아래 접근성 검사의 `E2E_CHROMIUM_PATH`와 이름이 다르다).
 기존 개발 환경의 Python 가상환경을 쓰는 경우 `make test-web-e2e`로 같은 시험을 실행한다.
 
 `tools/web_acceptance.py`는 고유한 Docker Compose 프로젝트와 사용하지 않는 루프백 포트를 선택한다.
@@ -57,7 +58,7 @@ npm run test:a11y                                           # 저장소 루트�
   합성 응답이 없는 `/v1` 호출, 다른 출처로 나가는 요청, 페이지 예외·콘솔 오류도 실패로 센다.
 - 화면: 로그인 전과 역할 6개(ORG_ADMIN·ORG_MEMBER·PLATFORM_OPERATOR·PROGRAM_VIEWER·REVIEWER·CONSUMER)가 메뉴로 가는 화면,
   상세 화면(자산 상세·구간 클립, 회차 타임라인, 회차 기록, 보고서 상세), 열린 상태(대화상자·서랍·프록시 재생·보존 dry-run 결과)
-  42개를 데스크톱 1280×800과 휴대폰 390×844에서 본다 (84개). 화면마다 확인 문구가 보여야 검사한다 (빈 화면 통과 방지).
+  46개를 데스크톱 1280×800과 휴대폰 390×844에서 본다 (92개). 화면마다 확인 문구가 보여야 검사한다 (빈 화면 통과 방지).
 - 실패 기준 (하나라도 있으면 종료 코드 1):
   1. axe-core(`@axe-core/playwright`) `wcag2a`·`wcag2aa`·`wcag21a`·`wcag21aa` 규칙의 영향도 serious·critical 위반.
      moderate·minor는 '참고'로만 출력한다.

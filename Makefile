@@ -1,7 +1,9 @@
 # 개발 명령 (tech.md 4장). Python 명령은 backend/.venv를 쓴다: make venv
-PYTHON ?= python3
 VENV := backend/.venv
 VPY := $(VENV)/bin/python
+# 계약·추적 검사도 venv(tools/requirements.txt 포함)가 있으면 그것을 쓴다. 시스템 python3에 openapi-spec-validator가
+# 없으면 계약 검사가 경고만 내고 구조 검사로 줄어든다. venv가 없으면 python3 (CI contracts 작업)
+PYTHON ?= $(if $(wildcard $(VPY)),$(VPY),python3)
 COMPOSE := docker compose --env-file .env -f deploy/compose/docker-compose.yml
 # 통합 시험은 이 DB 서버에 임시 DB를 만들었다 지운다 (소유자 계정)
 TEST_DATABASE_URL ?= postgresql+pg8000://marine_owner:change-me-owner@127.0.0.1:5432/marine
@@ -12,8 +14,9 @@ TEST_DATABASE_URL ?= postgresql+pg8000://marine_owner:change-me-owner@127.0.0.1:
         release-gate release-notes sbom vuln-scan loadtest backup restore-test test-web-e2e agent-generate agent-generate-check \
         agent-lint web-a11y
 
+# --allow-existing: 다시 실행하면 기존 venv에 의존성만 갱신한다 (uv는 이 옵션 없이 기존 venv가 있으면 실패한다)
 venv:
-	cd backend && uv venv -q .venv && uv pip install -q -p .venv -e ".[dev]" -r ../tools/requirements.txt
+	cd backend && uv venv -q --allow-existing .venv && uv pip install -q -p .venv -e ".[dev]" -r ../tools/requirements.txt
 
 up:
 	tools/compose_up.sh
@@ -79,8 +82,11 @@ security:
 	cd backend && .venv/bin/bandit -q -ll -r app -x app/db/migrations
 	cd backend && .venv/bin/pip-audit --skip-editable
 
+# CI와 같이 런타임 의존성만 설치한 환경(var/runtime-venv, 매번 새로)을 검사한다.
+# backend/.venv에는 개발 도구(moto·pip-audit 등)가 끌고 온 납품 밖 의존성이 있어 허용 목록 검사가 실패한다
 license-check:
-	$(VPY) tools/check_licenses.py
+	rm -rf var/runtime-venv && uv venv -q -p $(VPY) var/runtime-venv && uv pip install -q -p var/runtime-venv ./backend
+	$(VPY) tools/check_licenses.py --python var/runtime-venv/bin/python
 
 secrets-check:
 	$(VPY) tools/check_secrets.py
