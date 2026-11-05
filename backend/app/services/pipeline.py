@@ -59,11 +59,53 @@ def tool_version(binary: str) -> str:
         return binary
 
 
+class WorkSpaceShortage(Exception):
+    """임시 디스크 여유가 모자라다 — 작업 큐가 백오프 뒤 다시 시도한다 (05번 작업 13)."""
+
+
+def work_dir(c: Container) -> str:
+    d = c.settings.work_dir or tempfile.gettempdir()
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def ensure_work_space(c: Container, need_bytes: int) -> None:
+    """받아 둘 크기 × 배수 + 최소 여유가 남는지 (대용량 영상이 디스크를 가득 채워 다른 작업을 죽이지 않게)."""
+    free = shutil.disk_usage(work_dir(c)).free
+    want = int(need_bytes * c.settings.work_size_factor) + c.settings.work_min_free_bytes
+    if free < want:
+        log.warning("work_space_shortage", extra={"free": free, "want": want})
+        raise WorkSpaceShortage(f"임시 디스크 여유 부족: {free} < {want}")
+
+
+def sweep_stale_work(c: Container, now_ts: float | None = None) -> int:
+    """비정상 종료로 남은 marine-* 임시 파일·폴더를 지운다 (워커 시작·주기 정리)."""
+    now_ts = now_ts if now_ts is not None else time.time()
+    d, n = work_dir(c), 0
+    for name in os.listdir(d):
+        if not name.startswith("marine-"):
+            continue
+        p = os.path.join(d, name)
+        try:
+            if now_ts - os.path.getmtime(p) < c.settings.work_stale_after_s:
+                continue
+            if os.path.isdir(p):
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                os.unlink(p)
+            n += 1
+        except OSError:
+            continue
+    return n
+
+
 @contextmanager
 def local_copy(c: Container, asset: Asset) -> Iterator[str]:
-    """객체를 임시 파일로 스트리밍해 받아 둔다 (메모리에 올리지 않는다)."""
+    """객체를 임시 파일로 스트리밍해 받아 둔다 (메모리에 올리지 않는다). 여유 공간을 먼저 확인한다."""
     bucket = c.settings.buckets[asset.storage_zone or zone_for(asset.variant)]
-    fd, path = tempfile.mkstemp(prefix="marine-", suffix="." + (asset.mime_type.split("/")[-1] or "bin"))
+    ensure_work_space(c, int(asset.byte_size or 0))
+    fd, path = tempfile.mkstemp(prefix="marine-", suffix="." + (asset.mime_type.split("/")[-1] or "bin"),
+                                dir=work_dir(c))
     try:
         with os.fdopen(fd, "wb") as f:
             for chunk in c.storage.iter_object(bucket, asset.storage_key or ""):
@@ -284,7 +326,7 @@ def make_proxy(c: Container, asset_id: str, job_id: str | None = None) -> str:
             return "SKIPPED"
         db.expunge(parent)
     encoder = s.proxy_hw_encoder if (s.gpu_enabled and s.proxy_hw_encoder) else "libx264"
-    with local_copy(c, parent) as src, tempfile.TemporaryDirectory(prefix="marine-proxy-") as tmp:
+    with local_copy(c, parent) as src, tempfile.TemporaryDirectory(prefix="marine-proxy-", dir=work_dir(c)) as tmp:
         out = os.path.join(tmp, "proxy.mp4")
         args = proxy_args(s, src, out, encoder)
         started = time.perf_counter()
@@ -316,7 +358,7 @@ def make_thumbnail(c: Container, asset_id: str, job_id: str | None = None) -> st
             return "SKIPPED"
         db.expunge(parent)
     duration = float(((parent.ext or {}).get("video_ext") or {}).get("duration_s") or 0)
-    with local_copy(c, parent) as src, tempfile.TemporaryDirectory(prefix="marine-thumb-") as tmp:
+    with local_copy(c, parent) as src, tempfile.TemporaryDirectory(prefix="marine-thumb-", dir=work_dir(c)) as tmp:
         out = os.path.join(tmp, "thumb.jpg")
         r = _run(thumbnail_args(s, src, out, duration), s.ffmpeg_timeout_s)
         if r.returncode != 0 or not os.path.exists(out):

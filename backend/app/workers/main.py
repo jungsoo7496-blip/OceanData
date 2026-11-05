@@ -152,6 +152,25 @@ def _backup(c: Container, job: Job) -> Any:
 
 
 register("backup", _backup)  # 08번 계층형 백업 (ADR-0021)
+
+
+def _dataset_build(c: Container, job: Job) -> Any:
+    from app.services import datasets
+
+    return datasets.finish_build(c, job.payload["dataset_version_id"])
+
+
+def _dataset_build_failed(c: Container, job: Job, error: str) -> None:
+    """재시도가 다 떨어지면 BUILDING에 남지 않게 FAILED로 (운영자가 새 버전으로 다시)."""
+    from app.db.models import DatasetVersion
+
+    with c.sessionmaker.begin() as db:
+        v = db.get(DatasetVersion, job.payload["dataset_version_id"], with_for_update=True)
+        if v is not None and v.status == "BUILDING":
+            v.status, v.build_error = "FAILED", f"작업 실패: {error}"[:500]
+
+
+register("dataset_build", _dataset_build, _dataset_build_failed)  # 13번 작업 32
 register("collect_source", _collect_source)  # 12번 (실패는 큐의 지수 백오프)
 register("env_join", _env_join)  # 12번  # 14번 (PROCESSING_STEPS에 TAG가 있을 때 영상 처리 뒤)
 
@@ -194,6 +213,11 @@ def sweep(c: Container) -> int:
         n = IngestService(c, db).sweep_expired()
     if n:
         log.info("expired_uploads_swept", extra={"count": n})
+    from app.services.pipeline import sweep_stale_work
+
+    stale = sweep_stale_work(c)  # 비정상 종료로 남은 임시 파일 (05번 작업 13)
+    if stale:
+        log.info("stale_work_files_removed", extra={"count": stale})
     return n
 
 

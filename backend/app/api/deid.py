@@ -59,14 +59,14 @@ def review_frame(review_id: str, request: Request, t: float = Query(ge=0), which
                  db: Session = Depends(get_db), c: Container = Depends(container),
                  p: Principal = Depends(require("deid_review:read"))) -> Response:
     """표본 프레임 (원본 대비, 요구사항 4.2). 원본 열람은 감사 로그에 남는다."""
-    from app.services.pipeline import _run, local_copy
+    from app.services.pipeline import _run, local_copy, work_dir
 
     rv = _review(db, p, review_id)
     a = db.get(Asset, rv.original_asset_id if which == "ORIGINAL" else rv.deid_asset_id)
     if a is None or not a.storage_key:
         raise ProblemError("NOT_FOUND")
     db.expunge(a)
-    with local_copy(c, a) as src, tempfile.TemporaryDirectory(prefix="marine-frame-") as tmp:
+    with local_copy(c, a) as src, tempfile.TemporaryDirectory(prefix="marine-frame-", dir=work_dir(c)) as tmp:
         out = os.path.join(tmp, "f.jpg")
         r = _run([c.settings.ffmpeg_path, "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{t:.3f}", "-i", src,
                   "-frames:v", "1", "-q:v", "4", out], 120)

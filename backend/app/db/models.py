@@ -915,6 +915,10 @@ class DatasetVersion(Base):
     manifest_sha256: Mapped[str] = mapped_column(String(64))
     created_by: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(TS)
+    # 큰 버전은 작업 큐에서 만든다 (13번 작업 32): BUILDING → READY | FAILED. 이용기관·이용 신청은 READY만
+    status: Mapped[str] = mapped_column(String(12), server_default="READY")
+    build_error: Mapped[str | None] = mapped_column(String(500))
+    pending_asset_ids: Mapped[list[str] | None] = mapped_column(ARRAY(String(30)))
 
 
 class DatasetVersionItem(Base):

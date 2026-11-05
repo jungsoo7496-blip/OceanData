@@ -13,7 +13,7 @@ interface Review {
   derived: { asset_id: string; variant: string; share_status: string; review_result: string | null; privacy_status: string; sharing_scope: string }[]
   events: { from_status: string; to_status: string; actor: string; reason: string | null; at: string }[]
 }
-interface DatasetT { dataset_id: string; title: string; published: boolean; versions: { dataset_version_id: string; version: string; scope: string; item_count: number; total_bytes: number; created_at: string }[]; data_card?: Record<string, unknown> }
+interface DatasetT { dataset_id: string; title: string; published: boolean; versions: { dataset_version_id: string; version: string; scope: string; item_count: number; total_bytes: number; created_at: string; status?: string; build_error?: string | null }[]; data_card?: Record<string, unknown> }
 interface AccessReq { access_request_id: string; dataset_version_id: string; purpose: string; status: string; pending_provider_approvals: number; deadline_at: string; grant_id?: string; grant_status?: string; grant_expires_at?: string }
 interface LineageT {
   dataset_version_id: string; version: string; manifest_sha256: string; hidden_item_count: number
@@ -96,6 +96,7 @@ export function ShareCard({ asset, me }: { asset: Asset & { share_status?: strin
 
 // 운영자: 심사 대기 원본, 데이터셋 구성·게시, 이용 신청 최종 승인
 export function SharingConsole() {
+  const { message } = App.useApp()
   const qc = useQueryClient()
   const fail = useFail()
   const statuses = ['CANDIDATE', 'LEGAL_REVIEW', 'QUALITY_REVIEW']
@@ -117,7 +118,10 @@ export function SharingConsole() {
     mutationFn: (v: { version: string; items: string; card: string }) => post(`/v1/datasets/${versionFor?.dataset_id}/versions`, {
       version: v.version, item_asset_ids: v.items.split(/[\s,]+/).filter(Boolean), data_card: JSON.parse(v.card),
     }),
-    onSuccess: () => { setVersionFor(null); refresh() }, onError: fail,
+    onSuccess: (r) => {
+      setVersionFor(null); refresh()
+      if ((r as { status?: string }).status === 'BUILDING') message.info('항목이 많아 작업 큐에서 만듭니다. 목록에서 상태를 확인하세요')
+    }, onError: fail,
   })
   const publish = useMutation({ mutationFn: (id: string) => post(`/v1/datasets/${id}/publish`, {}), onSuccess: refresh, onError: fail })
   const decide = useMutation({
@@ -149,9 +153,11 @@ export function SharingConsole() {
           columns={[
             { title: '이름', dataIndex: 'title' },
             { title: '버전 (눌러서 계보)', key: 'v', render: (_, d) => d.versions.map((v) => (
-              <Button key={v.dataset_version_id} size="small" type="link" aria-label={`${v.version} 계보 보기`} onClick={() => setLineageOf({ ds: d.dataset_id, vid: v.dataset_version_id })}>
-                {v.version} · {SCOPE_LABEL[v.scope]} · {v.item_count}개
-              </Button>)) },
+              v.status && v.status !== 'READY'
+                ? <Tag key={v.dataset_version_id} color={v.status === 'FAILED' ? 'red' : 'blue'} title={v.build_error ?? ''}>{v.version} · {v.status === 'FAILED' ? '만들기 실패' : '만드는 중'} · {v.item_count}개</Tag>
+                : <Button key={v.dataset_version_id} size="small" type="link" aria-label={`${v.version} 계보 보기`} onClick={() => setLineageOf({ ds: d.dataset_id, vid: v.dataset_version_id })}>
+                    {v.version} · {SCOPE_LABEL[v.scope]} · {v.item_count}개
+                  </Button>)) },
             { title: '게시', dataIndex: 'published', render: (p: boolean) => (p ? <Tag color="green">게시</Tag> : '-') },
             { title: '', key: 'a', render: (_, d) => (
               <Space>

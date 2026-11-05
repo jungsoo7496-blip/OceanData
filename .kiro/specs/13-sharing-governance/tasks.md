@@ -31,5 +31,5 @@
 - [x] 29. DCAT 3 JSON-LD (모든 항목 L4) — 요구사항 12.1 (광역 허브 프로파일 확인 필요)
 - [x] 30. 화면: 공유 후보·등급 변경(미충족 조건)·이용 신청 승인·이용 이력, 운영 심사·데이터셋·데이터 카드·최종 승인, 이용기관 카탈로그·신청·다운로드 — 요구사항 13.1~13.3
 - [x] 31. 약정 등록 API — 03번 작업 17로 구현 (`/v1/agreements`, 종료는 valid_until, ADR-0028). 관리 명령도 남겨 둠
-- [ ] 32. 대용량 데이터셋 버전 작업 큐 처리 (1000개 초과) — 요구사항 5.1 확장
+- [x] 32. 대용량 데이터셋 버전 작업 큐 처리 — 요구사항 5.1 확장 · `DATASET_SYNC_MAX_ITEMS`(200) 초과면 조건을 먼저 모두 검사 → BUILDING 버전 + `dataset_build` 작업(202) → 워커가 다시 검사·사본·매니페스트 → READY, 바뀌었으면 FAILED(build_error), 재시도 소진 시 FAILED. 이용기관·이용 신청·계보·게시는 READY만. 항목 최대 20000. `dataset_versions.status·build_error·pending_asset_ids`(0019) · 시험 `tests/integration/test_dataset_build.py`
 - [x] 33. 데이터셋 버전 계보 조회 API(항목 → 원본 사슬·비식별 모델 버전·검수자, 제공기관은 자기 항목만, 이용기관 불가) — 요구사항 5.3 · 14번 요구사항 3.1 · 시험 `test_t06d_three_providers_full_journey` (T06-b). 화면: 운영 콘솔 데이터셋 버전 → 계보 창

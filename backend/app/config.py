@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     ffmpeg_path: str = "ffmpeg"
     ffprobe_path: str = "ffprobe"
     ffmpeg_timeout_s: int = 3600
+    # 처리 작업 임시 디스크 (05번 작업 13): 받아 둘 원본 크기 × 배수 + 최소 여유가 없으면 작업을 미룬다
+    work_dir: str | None = None  # 비우면 시스템 임시 폴더
+    work_min_free_bytes: int = 2 * 1024**3
+    work_size_factor: float = 2.5  # 원본 + 프록시·썸네일·비식별 출력
+    work_stale_after_s: int = 6 * 3600  # 이보다 오래된 marine-* 임시 파일은 비정상 종료 잔여물로 보고 지운다
     proxy_short_side: int = 480
     proxy_max_bitrate: str = "1M"
     proxy_hw_encoder: str = "h264_nvenc"
@@ -91,6 +96,7 @@ class Settings(BaseSettings):
 
     # 저장·보존 (08번)
     backup_retention_days: int = 90
+    dataset_sync_max_items: int = 200  # 이보다 많은 항목의 데이터셋 버전은 작업 큐에서 만든다 (13번 작업 32)
     # 용량 예측 (08번 요구사항 8). 전체 용량은 하드웨어 확정 후 — 비우면 예측일 없이 '확인 필요'
     storage_capacity_bytes: int | None = None
     capacity_threshold_ratio: float = 0.7

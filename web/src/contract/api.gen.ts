@@ -2018,7 +2018,8 @@ export interface paths {
         put?: never;
         /**
          * 승인 자산으로 데이터셋 버전 생성 (PLATFORM_OPERATOR, 수정 불가). DATASET 존 사본·매니페스트(sha256)
-         * @description 항목 1000개까지 요청 안에서 만든다. 더 큰 묶음은 작업 큐로 옮길 예정 (13번 design.md).
+         * @description 항목이 DATASET_SYNC_MAX_ITEMS(기본 200)개 이하면 요청 안에서 만들고 201. 더 많으면 조건을 먼저 모두 검사한 뒤 BUILDING 버전을 만들고
+         *     작업 큐에서 사본·매니페스트를 만든다(202). 끝나면 READY, 그사이 조건이 바뀌면 FAILED(build_error). 항목은 최대 20000개 (13번 작업 32).
          */
         post: operations["createDatasetVersion"];
         delete?: never;
@@ -3486,6 +3487,12 @@ export interface components {
                 dataset_version_id: components["schemas"]["dataset_version_id"];
                 version: string;
                 created_at: components["schemas"]["utc_datetime"];
+                /**
+                 * @description 이용기관에게는 READY만 보인다
+                 * @enum {unknown}
+                 */
+                status?: "READY" | "BUILDING" | "FAILED";
+                build_error?: string | null;
             }[];
             data_card?: components["schemas"]["data_card"];
         };
@@ -8397,10 +8404,27 @@ export interface operations {
                     };
                 };
             };
+            /** @description 큰 버전 — 작업 큐에서 만드는 중 (GET /v1/datasets/{dataset_id}의 versions[].status로 확인) */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        dataset_version_id: components["schemas"]["dataset_version_id"];
+                        version: string;
+                        /** @enum {unknown} */
+                        status: "BUILDING";
+                        item_count: number;
+                        job_id?: string;
+                    };
+                };
+            };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             422: components["responses"]["Unprocessable"];
         };
     };

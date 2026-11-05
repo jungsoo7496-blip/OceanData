@@ -105,7 +105,7 @@ def get_dataset(dataset_id: str, db: Session = Depends(get_db),
 class VersionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
-    item_asset_ids: list[str] = Field(min_length=1, max_length=1000)
+    item_asset_ids: list[str] = Field(min_length=1, max_length=20000)
     data_card: dict[str, Any]
 
 
@@ -120,8 +120,15 @@ def create_version(dataset_id: str, body: VersionCreate, request: Request, db: S
         if db.execute(select(DatasetVersion).where(DatasetVersion.dataset_id == ds.dataset_id,
                                                    DatasetVersion.version == body.version)).scalar() is not None:
             raise ProblemError("CONFLICT", detail="같은 버전이 이미 있습니다 (버전은 바꿀 수 없고 새 번호로 만든다)")
-        v = datasets.build_version(c, db, ds, body.version, sorted(set(body.item_asset_ids)), body.data_card,
-                                   p.principal_id)
+        ids = sorted(set(body.item_asset_ids))
+        if len(ids) > c.settings.dataset_sync_max_items:  # 큰 버전은 작업 큐에서 (13번 작업 32)
+            bv, job_id = datasets.start_build(c, db, ds, body.version, ids, body.data_card, p.principal_id)
+            c.audit.record("DATASET_VERSION_BUILD_STARTED", principal=p, target_type="DatasetVersion",
+                           target_id=bv.dataset_version_id, source_ip=client_ip(request),
+                           details={"items": bv.item_count, "job_id": job_id})
+            return 202, {"dataset_version_id": bv.dataset_version_id, "version": bv.version, "status": "BUILDING",
+                         "item_count": bv.item_count, "job_id": job_id}
+        v = datasets.build_version(c, db, ds, body.version, ids, body.data_card, p.principal_id)
         c.audit.record("DATASET_VERSION_CREATED", principal=p, target_type="DatasetVersion",
                        target_id=v.dataset_version_id, source_ip=client_ip(request),
                        details={"items": v.item_count, "manifest_sha256": v.manifest_sha256})
@@ -144,6 +151,8 @@ def get_version_lineage(dataset_id: str, dataset_version_id: str, db: Session = 
     org = None if _operator(p) else p.organization_id
     if v is None or v.dataset_id != ds.dataset_id or (org is not None and org not in v.provider_organization_ids):
         raise ProblemError("NOT_FOUND")
+    if v.status != "READY":
+        raise ProblemError("CONFLICT", detail=f"아직 다 만들지 못한 버전입니다 ({v.status})")
     return datasets.version_lineage(db, v, org)
 
 
@@ -154,10 +163,11 @@ def publish_dataset(dataset_id: str, request: Request, db: Session = Depends(get
     if ds is None:
         raise ProblemError("NOT_FOUND")
     vs = datasets.visible_versions(db, ds, consumer=False)
-    if not vs:
-        raise ProblemError("RULE_VIOLATION", detail="버전이 없는 데이터셋은 게시할 수 없습니다",
-                           unmet_conditions=[{"condition": "데이터셋 버전 1개 이상", "actual": "0"}])
-    problems = contracts.schema_problems("dataset-version-manifest", vs[-1].manifest)
+    ready = [v for v in vs if v.status == "READY"]  # 다 만든 버전 기준 (13번 작업 32)
+    if not ready:
+        raise ProblemError("RULE_VIOLATION", detail="다 만든 버전이 없는 데이터셋은 게시할 수 없습니다",
+                           unmet_conditions=[{"condition": "READY 데이터셋 버전 1개 이상", "actual": "0"}])
+    problems = contracts.schema_problems("dataset-version-manifest", ready[-1].manifest)
     if problems:  # 데이터 카드 필수 항목 (요구사항 6.2)
         raise ProblemError("RULE_VIOLATION", detail="데이터 카드 필수 항목이 비어 있습니다",
                            unmet_conditions=[{"condition": x.pointer, "actual": x.message} for x in problems[:20]])

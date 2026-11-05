@@ -3403,7 +3403,9 @@ paths:
       tags: [datasets]
       operationId: createDatasetVersion
       summary: 승인 자산으로 데이터셋 버전 생성 (PLATFORM_OPERATOR, 수정 불가). DATASET 존 사본·매니페스트(sha256)
-      description: 항목 1000개까지 요청 안에서 만든다. 더 큰 묶음은 작업 큐로 옮길 예정 (13번 design.md).
+      description: |
+        항목이 DATASET_SYNC_MAX_ITEMS(기본 200)개 이하면 요청 안에서 만들고 201. 더 많으면 조건을 먼저 모두 검사한 뒤 BUILDING 버전을 만들고
+        작업 큐에서 사본·매니페스트를 만든다(202). 끝나면 READY, 그사이 조건이 바뀌면 FAILED(build_error). 항목은 최대 20000개 (13번 작업 32).
       x-freeze: G4
       parameters:
         - {$ref: '#/components/parameters/IdempotencyKey'}
@@ -3426,10 +3428,24 @@ paths:
                   scope: {$ref: './schemas/common.schema.json#/$defs/sharing_scope'}
                   manifest_sha256: {$ref: './schemas/common.schema.json#/$defs/sha256'}
                   manifest: {$ref: './schemas/dataset-version-manifest.schema.json'}
+        '202':
+          description: 큰 버전 — 작업 큐에서 만드는 중 (GET /v1/datasets/{dataset_id}의 versions[].status로 확인)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [dataset_version_id, version, status, item_count]
+                properties:
+                  dataset_version_id: {$ref: './schemas/common.schema.json#/$defs/dataset_version_id'}
+                  version: {type: string}
+                  status: {enum: [BUILDING]}
+                  item_count: {type: integer}
+                  job_id: {type: string}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
         '422': {$ref: '#/components/responses/Unprocessable'}
 
   /v1/datasets/{dataset_id}/versions/{dataset_version_id}/lineage:
@@ -5477,6 +5493,8 @@ components:
               dataset_version_id: {$ref: './schemas/common.schema.json#/$defs/dataset_version_id'}
               version: {type: string}
               created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
+              status: {enum: [READY, BUILDING, FAILED], description: 이용기관에게는 READY만 보인다}
+              build_error: {type: [string, 'null']}
         data_card: {$ref: './schemas/dataset-version-manifest.schema.json#/properties/data_card'}
 
     DatasetVersionCreate:
@@ -5485,7 +5503,7 @@ components:
       required: [version, item_asset_ids, data_card]
       properties:
         version: {type: string, pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'}
-        item_asset_ids: {type: array, minItems: 1, maxItems: 1000, uniqueItems: true, items: {$ref: './schemas/common.schema.json#/$defs/asset_id'}}
+        item_asset_ids: {type: array, minItems: 1, maxItems: 20000, uniqueItems: true, items: {$ref: './schemas/common.schema.json#/$defs/asset_id'}}
         data_card: {$ref: './schemas/dataset-version-manifest.schema.json#/properties/data_card'}
 
     JobAccepted:
