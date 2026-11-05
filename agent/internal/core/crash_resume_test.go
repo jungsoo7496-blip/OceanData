@@ -112,7 +112,7 @@ func waitCrashChildSignal(t *testing.T, p *crashChild, ready func() bool) {
 func TestT03ForcedKillAnd72HourOfflineResume(t *testing.T) {
 	e := newEnv(t)
 	e.fake.policy.MaxParallelParts = 1
-	e.fake.policy.HeartbeatIntervalS = 1
+	e.fake.policy.HeartbeatIntervalS = minHeartbeatIntervalS
 	data := bytes.Repeat([]byte("synthetic-sensor\n"), (4<<20)/17+1)
 	e.write(t, crashRelPath, data)
 	sum := sha256.Sum256(data)

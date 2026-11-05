@@ -587,7 +587,11 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** 장비 정책 (에이전트가 주기적으로 받아 적용) */
+        /**
+         * 장비 정책 (에이전트가 주기적으로 받아 적용)
+         * @description 현재 계약을 통과한 정책만 배포한다. 상한 도입 전에 저장한 정책이나 기본 정책에 범위 밖 값이 있으면 422 RULE_VIOLATION과
+         *     어긋난 필드 위치를 돌려준다. 에이전트는 이전에 적용한 유효 정책을 유지하고, 운영자가 값을 정정해 새 정책을 배포한다 (ADR-0040).
+         */
         get: operations["getDevicePolicy"];
         put?: never;
         post?: never;
@@ -3569,15 +3573,30 @@ export interface components {
             transfer_windows?: components["schemas"]["transfer_windows"];
             source_timezone?: components["schemas"]["source_timezone"];
         };
-        /** @description 비교용 값 묶음 (지금 정책·적용 후). 일곱 항목이 모두 있다. transfer_windows가 없는 정책은 빈 목록으로 보인다 */
-        PolicySettings: WithRequired<components["schemas"]["PolicyDraftValues"], "collection_mode" | "allowed_data_roles" | "local_copy_policy" | "local_retention_days" | "expected_interval_s" | "transfer_windows" | "source_timezone">;
+        /** @description 이전 기록을 표시한다. 적용·배포할 때는 현행 device-policy의 상한을 검사한다 */
+        RecordedTransferWindows: {
+            days: components["schemas"]["days"];
+            start_local: components["schemas"]["start_local"];
+            end_local: components["schemas"]["end_local"];
+            max_kbps?: number | null;
+        }[];
+        /** @description 지금 값과 제안 값을 비교한다. 이전 범위 밖 값도 표시하되 적용 전 blockers에 기록한다. transfer_windows가 없으면 빈 목록이다 */
+        PolicySettings: {
+            collection_mode: components["schemas"]["collection_mode"];
+            allowed_data_roles: components["schemas"]["allowed_data_roles"];
+            local_copy_policy: components["schemas"]["local_copy_policy"];
+            local_retention_days: number | null;
+            expected_interval_s: number | null;
+            transfer_windows: components["schemas"]["RecordedTransferWindows"];
+            source_timezone: components["schemas"]["source_timezone"];
+        };
         PolicyDraftField: {
             /**
              * @description FROM_CARD=연계 카드의 구조화된 값으로 채움. ENTERED=사람이 넣음. NEEDS_CONFIRMATION=확인 필요 — 적용해도 지금 값을 그대로 둔다
              * @enum {unknown}
              */
             status: "FROM_CARD" | "ENTERED" | "NEEDS_CONFIRMATION";
-            /** @description NEEDS_CONFIRMATION이면 없다. 형식은 PolicyDraftValues의 같은 항목 */
+            /** @description NEEDS_CONFIRMATION이면 없다. 이전 초안에 저장된 값은 새 입력 상한을 넘을 수 있다 */
             value?: unknown;
             /** @description FROM_CARD일 때 값을 가져온 카드 내용 위치 (JSON Pointer) */
             card_pointer?: string;
@@ -3593,18 +3612,19 @@ export interface components {
                 value?: components["schemas"]["local_copy_policy"];
             } & components["schemas"]["PolicyDraftField"];
             local_retention_days: {
-                value?: components["schemas"]["local_retention_days"];
+                value?: number | null;
             } & components["schemas"]["PolicyDraftField"];
             expected_interval_s: {
-                value?: components["schemas"]["expected_interval_s"];
+                value?: number | null;
             } & components["schemas"]["PolicyDraftField"];
             transfer_windows: {
-                value?: components["schemas"]["transfer_windows"];
+                value?: components["schemas"]["RecordedTransferWindows"];
             } & components["schemas"]["PolicyDraftField"];
             source_timezone: {
                 value?: components["schemas"]["source_timezone"];
             } & components["schemas"]["PolicyDraftField"];
         };
+        /** @description 현재 장비 정책 계약 범위에 맞는 구조화 카드 값만 미리 채운다. 범위 밖 값은 확인 필요로 둔다 */
         PolicyDraftCreate: {
             device_id: components["schemas"]["device_id"];
             integration_card_id?: components["schemas"]["integration_card_id"];
@@ -4478,6 +4498,19 @@ export interface components {
         /** @description 장비 정책 초안 (09번 요구사항 3.2·3.3, ADR-0037) */
         policy_draft_id: string;
         allowed_data_roles: components["schemas"]["data_role"][];
+        days: ("MON" | "TUE" | "WED" | "THU" | "FRI" | "SAT" | "SUN")[];
+        start_local: string;
+        /** @description start보다 이르면 다음 날까지 이어진다 */
+        end_local: string;
+        source_timezone: components["schemas"]["iana_timezone"] | null;
+        unmet_conditions: {
+            /**
+             * @example review_result=PASSED
+             * @example 제공기관 2단 약정 유효
+             */
+            condition: string;
+            actual?: string | null;
+        }[];
         /** @description 현장 보존 기간(일). 상한 24855일은 제품 한도가 아니라 기술 한도다 — 초로 바꿔도(×86400) 다른 시간 항목과 같은 2147483647초(32비트 정수, 약 68년) 안에 들어 에이전트·서버가 기간으로 계산할 때 넘치지 않는다 (ADR-0040) */
         local_retention_days: number | null;
         /** @description 기대 수집 주기. 수집 정상성 판정에 쓴다 (11번). 상한 2147483647초(32비트 정수, 약 68년)는 기술 한도다 — 장비 표 열(PostgreSQL integer)에 들어가고 수집 정상성 판정이 지금 시각에 더해도 넘치지 않는다 (ADR-0040) */
@@ -4489,15 +4522,6 @@ export interface components {
             end_local: string;
             /** @description 이 시간대의 최대 전송 속도(kbps), null이면 제한 없음. 상한 2147483647(32비트 정수)은 기술 한도다 — 에이전트가 바이트/초로 바꿔도 넘치지 않는다 (ADR-0040) */
             max_kbps?: number | null;
-        }[];
-        source_timezone: components["schemas"]["iana_timezone"] | null;
-        unmet_conditions: {
-            /**
-             * @example review_result=PASSED
-             * @example 제공기관 2단 약정 유효
-             */
-            condition: string;
-            actual?: string | null;
         }[];
         /** @enum {unknown} */
         timestamp_source: "GPS" | "NTP" | "DEVICE" | "MANIFEST" | "MANUAL" | "UNKNOWN";
@@ -6373,6 +6397,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
             429: components["responses"]["TooManyRequests"];
         };
     };
@@ -10344,6 +10369,3 @@ export interface operations {
         };
     };
 }
-type WithRequired<T, K extends keyof T> = T & {
-    [P in K]-?: T[P];
-};

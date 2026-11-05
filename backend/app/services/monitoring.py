@@ -170,10 +170,13 @@ def latest_policies(db: Session, device_ids: list[str]) -> dict[str, dict[str, A
 
 
 def policy_heartbeat_interval_s(policy: dict[str, Any]) -> int:
-    """저장된 정책의 하트비트 주기(초). 계약 상한(device-policy.schema.json maximum, ADR-0040)이 생기기 전에 저장된
-    더 큰 값도 상한으로 잘라, 마지막 하트비트에 더하는 시각 계산(timedelta·datetime)이 넘쳐 500이 되지 않게 한다."""
-    limit = int(schema_files()["device-policy"]["properties"]["heartbeat_interval_s"]["maximum"])
-    return min(int(policy.get("heartbeat_interval_s", 60)), limit)
+    """범위 밖인 이전 주기는 기본 정책의 60초를 사용한다 (ADR-0040)."""
+    bounds = schema_files()["device-policy"]["properties"]["heartbeat_interval_s"]
+    interval = policy.get("heartbeat_interval_s", 60)
+    if isinstance(interval, (int, float)) and bounds["minimum"] <= interval <= bounds["maximum"]:
+        if interval == int(interval):
+            return int(interval)
+    return 60
 
 
 def rule_params(db: Session, code: str) -> dict[str, Any]:

@@ -1251,6 +1251,9 @@ type ClientInterface interface {
 
 	// GetDevicePolicy 장비 정책 (에이전트가 주기적으로 받아 적용)
 	//
+	// 현재 계약을 통과한 정책만 배포한다. 상한 도입 전에 저장한 정책이나 기본 정책에 범위 밖 값이 있으면 422 RULE_VIOLATION과
+	// 어긋난 필드 위치를 돌려준다. 에이전트는 이전에 적용한 유효 정책을 유지하고, 운영자가 값을 정정해 새 정책을 배포한다 (ADR-0040).
+	//
 	// Corresponds with GET /v1/devices/{device_id}/policy (the `GetDevicePolicy` operationId).
 	GetDevicePolicy(ctx context.Context, deviceId DeviceId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1477,6 +1480,9 @@ func (c *Client) GetObservationMapping(ctx context.Context, deviceId DeviceId, r
 }
 
 // GetDevicePolicy 장비 정책 (에이전트가 주기적으로 받아 적용)
+//
+// 현재 계약을 통과한 정책만 배포한다. 상한 도입 전에 저장한 정책이나 기본 정책에 범위 밖 값이 있으면 422 RULE_VIOLATION과
+// 어긋난 필드 위치를 돌려준다. 에이전트는 이전에 적용한 유효 정책을 유지하고, 운영자가 값을 정정해 새 정책을 배포한다 (ADR-0040).
 //
 // Corresponds with GET /v1/devices/{device_id}/policy (the `GetDevicePolicy` operationId).
 func (c *Client) GetDevicePolicy(ctx context.Context, deviceId DeviceId, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -2268,6 +2274,9 @@ type ClientWithResponsesInterface interface {
 
 	// GetDevicePolicyWithResponse 장비 정책 (에이전트가 주기적으로 받아 적용)
 	//
+	// 현재 계약을 통과한 정책만 배포한다. 상한 도입 전에 저장한 정책이나 기본 정책에 범위 밖 값이 있으면 422 RULE_VIOLATION과
+	// 어긋난 필드 위치를 돌려준다. 에이전트는 이전에 적용한 유효 정책을 유지하고, 운영자가 값을 정정해 새 정책을 배포한다 (ADR-0040).
+	//
 	// Returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with GET /v1/devices/{device_id}/policy (the `GetDevicePolicy` operationId).
@@ -2837,6 +2846,11 @@ type GetDevicePolicyResponse404Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
+// GetDevicePolicyResponse422Headers the declared response headers of an HTTP 422 response for GetDevicePolicy
+type GetDevicePolicyResponse422Headers struct {
+	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
+}
+
 // GetDevicePolicyResponse429Headers the declared response headers of an HTTP 429 response for GetDevicePolicy
 type GetDevicePolicyResponse429Headers struct {
 	RetryAfter *int
@@ -2854,6 +2868,8 @@ type GetDevicePolicyResponse struct {
 	ApplicationproblemJSON403 *Forbidden
 	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
 	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
+	ApplicationproblemJSON422 *Unprocessable
 	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
 	ApplicationproblemJSON429 *TooManyRequests
 	// Headers401 the parsed response headers for an HTTP 401 response
@@ -2862,6 +2878,8 @@ type GetDevicePolicyResponse struct {
 	Headers403 *GetDevicePolicyResponse403Headers
 	// Headers404 the parsed response headers for an HTTP 404 response
 	Headers404 *GetDevicePolicyResponse404Headers
+	// Headers422 the parsed response headers for an HTTP 422 response
+	Headers422 *GetDevicePolicyResponse422Headers
 	// Headers429 the parsed response headers for an HTTP 429 response
 	Headers429 *GetDevicePolicyResponse429Headers
 }
@@ -2884,6 +2902,11 @@ func (r GetDevicePolicyResponse) GetApplicationproblemJSON403() *Forbidden {
 // GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
 func (r GetDevicePolicyResponse) GetApplicationproblemJSON404() *NotFound {
 	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
+func (r GetDevicePolicyResponse) GetApplicationproblemJSON422() *Unprocessable {
+	return r.ApplicationproblemJSON422
 }
 
 // GetApplicationproblemJSON429 returns the response for an HTTP 429 `application/problem+json` response
@@ -3813,6 +3836,9 @@ func (c *ClientWithResponses) GetObservationMappingWithResponse(ctx context.Cont
 
 // GetDevicePolicyWithResponse 장비 정책 (에이전트가 주기적으로 받아 적용)
 //
+// 현재 계약을 통과한 정책만 배포한다. 상한 도입 전에 저장한 정책이나 기본 정책에 범위 밖 값이 있으면 422 RULE_VIOLATION과
+// 어긋난 필드 위치를 돌려준다. 에이전트는 이전에 적용한 유효 정책을 유지하고, 운영자가 값을 정정해 새 정책을 배포한다 (ADR-0040).
+//
 // Returns a wrapper object for the known response body format(s).
 //
 // Corresponds with GET /v1/devices/{device_id}/policy (the `GetDevicePolicy` operationId).
@@ -4498,6 +4524,13 @@ func ParseGetDevicePolicyResponse(rsp *http.Response) (*GetDevicePolicyResponse,
 		}
 		response.ApplicationproblemJSON404 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest Unprocessable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
 		var dest TooManyRequests
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -4538,6 +4571,16 @@ func ParseGetDevicePolicyResponse(rsp *http.Response) (*GetDevicePolicyResponse,
 			headers.XRequestId = &value
 		}
 		response.Headers404 = &headers
+	case rsp.StatusCode == 422:
+		var headers GetDevicePolicyResponse422Headers
+		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
+			var value ExternalCommonSchemaDefsUlid3520d2d2
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XRequestId = &value
+		}
+		response.Headers422 = &headers
 	case rsp.StatusCode == 429:
 		var headers GetDevicePolicyResponse429Headers
 		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {

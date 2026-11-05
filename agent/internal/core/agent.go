@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -99,7 +100,8 @@ const (
 	minHeartbeatIntervalS = 30
 	maxPolicySeconds      = timex.MaxSeconds // heartbeat_interval_s·size_stable_s
 	maxParallelParts      = 10000            // 업로드 파트 번호 상한(openapi.yaml PartUrl.part_number)과 같다
-	maxPolicyInt32        = math.MaxInt32    // transfer_windows[].max_kbps·watch_rules[].priority
+	defaultParallelParts  = 4
+	maxPolicyInt32        = math.MaxInt32 // transfer_windows[].max_kbps·watch_rules[].priority
 )
 
 // CodePolicyInvalid는 계약 범위를 벗어난 정책을 거부했을 때 하트비트 last_error_code로 보고하는 코드다.
@@ -109,28 +111,26 @@ const CodePolicyInvalid = "POLICY_INVALID"
 var ErrPolicyInvalid = errors.New("정책 값이 계약 범위를 벗어났습니다")
 
 // checkPolicy는 에이전트가 시간·동시 전송 수·대역폭·규칙 순위로 쓰는 숫자가 계약 범위 안인지 본다.
-// heartbeat_interval_s·size_stable_s·max_parallel_parts의 0은 값이 없는 것과 구별할 수 없어 applyPolicy의 기본값을 쓴다.
 func checkPolicy(p *api.Policy) error {
 	type field struct {
 		path            string
 		value, low, max int
-		zeroIsDefault   bool
 	}
 	fields := []field{
-		{"/heartbeat_interval_s", p.HeartbeatIntervalS, minHeartbeatIntervalS, maxPolicySeconds, true},
-		{"/size_stable_s", p.SizeStableS, 1, maxPolicySeconds, true},
-		{"/max_parallel_parts", p.MaxParallelParts, 1, maxParallelParts, true},
+		{"/heartbeat_interval_s", p.HeartbeatIntervalS, minHeartbeatIntervalS, maxPolicySeconds},
+		{"/size_stable_s", p.SizeStableS, 1, maxPolicySeconds},
+		{"/max_parallel_parts", p.MaxParallelParts, 1, maxParallelParts},
 	}
 	for i, w := range p.TransferWindows {
 		if w.MaxKbps != nil { // null은 제한 없음
-			fields = append(fields, field{fmt.Sprintf("/transfer_windows/%d/max_kbps", i), *w.MaxKbps, 1, maxPolicyInt32, false})
+			fields = append(fields, field{fmt.Sprintf("/transfer_windows/%d/max_kbps", i), *w.MaxKbps, 1, maxPolicyInt32})
 		}
 	}
 	for i, r := range p.WatchRules {
-		fields = append(fields, field{fmt.Sprintf("/watch_rules/%d/priority", i), r.Priority, 0, maxPolicyInt32, false})
+		fields = append(fields, field{fmt.Sprintf("/watch_rules/%d/priority", i), r.Priority, 0, maxPolicyInt32})
 	}
 	for _, f := range fields {
-		if (f.value != 0 || !f.zeroIsDefault) && (f.value < f.low || f.value > f.max) {
+		if f.value < f.low || f.value > f.max {
 			return fmt.Errorf("%w: %s=%d (범위 %d~%d)", ErrPolicyInvalid, f.path, f.value, f.low, f.max)
 		}
 	}
@@ -141,14 +141,17 @@ func checkPolicy(p *api.Policy) error {
 // 숫자 값이 계약 범위를 벗어난 정책(Go 정수에 담기지 않는 수 포함)은 저장·적용하지 않고 이전 정책을 그대로 쓰며,
 // 하트비트 last_error_code로 POLICY_INVALID를 보고한다 (ADR-0040).
 func (a *Agent) RefreshPolicy(ctx context.Context) error {
-	var p api.Policy
+	p := api.Policy{MaxParallelParts: defaultParallelParts} // 선택 필드 생략과 명시적 0을 구분한다
 	status, err := a.Client.Do(ctx, "GET", "/v1/devices/"+a.Cfg.DeviceID+"/policy", nil, nil, &p)
 	var typeErr *json.UnmarshalTypeError
+	var problem *api.Problem
 	switch {
 	case err == nil:
 		err = checkPolicy(&p)
 	case status/100 == 2 && errors.As(err, &typeErr): // 응답은 받았지만 값이 Go 형에 담기지 않는다 (int64를 넘는 수 등)
 		err = fmt.Errorf("%w: %v", ErrPolicyInvalid, err)
+	case status == http.StatusUnprocessableEntity && errors.As(err, &problem) && problem.Code == "RULE_VIOLATION":
+		err = fmt.Errorf("%w: %v", ErrPolicyInvalid, problem)
 	}
 	if errors.Is(err, ErrPolicyInvalid) {
 		a.setErr(ctx, CodePolicyInvalid)
@@ -170,7 +173,7 @@ func (a *Agent) RefreshPolicy(ctx context.Context) error {
 // useCachedPolicy는 마지막으로 저장한 정책을 적용한다. 예전 버전이 범위 검사 없이 저장했을 수 있어 다시 검사한다.
 func (a *Agent) useCachedPolicy(ctx context.Context) {
 	cached, _ := a.Store.KV(ctx, KeyPolicy)
-	var p api.Policy
+	p := api.Policy{MaxParallelParts: defaultParallelParts}
 	if cached == "" || json.Unmarshal([]byte(cached), &p) != nil {
 		return
 	}
@@ -191,7 +194,7 @@ func (a *Agent) applyPolicy(ctx context.Context, p *api.Policy) {
 		p.HeartbeatIntervalS = 300
 	}
 	if p.MaxParallelParts <= 0 {
-		p.MaxParallelParts = 4
+		p.MaxParallelParts = defaultParallelParts
 	}
 	old := a.policy.Swap(p)
 	if old == nil || old.PolicyVersion != p.PolicyVersion {

@@ -148,6 +148,27 @@ func TestServerRejectedPolicyKeepsPreviousPolicy(t *testing.T) {
 	}
 }
 
+func TestPolicyWithoutParallelPartsUsesDefault(t *testing.T) {
+	e := newEnv(t)
+	e.fake.mu.Lock()
+	e.fake.override = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path != "/v1/devices/"+collector+"/policy" {
+			return false
+		}
+		e.fake.json(w, http.StatusOK, map[string]any{
+			"policy_version": "pv-0", "collector_device_id": collector,
+			"heartbeat_interval_s": 60, "size_stable_s": 30, "timezone": "UTC",
+			"sources": []any{}, "watch_rules": []any{},
+		})
+		return true
+	}
+	e.fake.mu.Unlock()
+	a := e.agent(t)
+	if got := a.Policy().MaxParallelParts; got != defaultParallelParts {
+		t.Fatalf("생략한 동시 전송 수 기본값: %d", got)
+	}
+}
+
 // Go 정수(int64)에 담기지 않는 수는 JSON 해석 단계에서 걸린다. 그것도 계약 범위 밖 정책으로 보고 이전 정책을 쓴다.
 func TestPolicyNumberBeyondInt64IsReportedAndIgnored(t *testing.T) {
 	e := newEnv(t)

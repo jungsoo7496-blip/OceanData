@@ -111,12 +111,15 @@ def get_device_policy(device_id: str, request: Request, db: Session = Depends(ge
     device = load_scoped(db, c, request, Device, device_id, p)
     if device.kind != "COLLECTOR":
         raise ProblemError("NOT_FOUND", detail="정책은 수집기 단위로 배포합니다")
-    stored = device_policy.latest_stored(db, device.device_id)
-    if stored is None:
-        return device_policy.default_policy(db, device)
-    policy = dict(stored.policy)  # 저장된 정책에도 현재 매핑 버전을 채운다
-    policy["sources"] = [{**src, "observation_mapping_version": device_policy.mapping_version(db, src["device_id"])
-                          or src.get("observation_mapping_version")} for src in policy.get("sources", [])]
+    policy, stored_version = device_policy.current_policy(db, device)
+    problems = contracts.schema_problems("device-policy", policy)
+    if problems:
+        raise ProblemError("RULE_VIOLATION", detail="현재 계약을 충족하는 장비 정책을 배포해야 합니다",
+                           unmet_conditions=[{"condition": f"장비 정책 계약 {p.pointer or '/'}", "actual": p.code}
+                                             for p in problems[:20]])
+    if stored_version is not None:  # 저장된 정책에도 현재 매핑 버전을 채운다
+        policy["sources"] = [{**src, "observation_mapping_version": device_policy.mapping_version(db, src["device_id"])
+                              or src.get("observation_mapping_version")} for src in policy["sources"]]
     return policy
 
 

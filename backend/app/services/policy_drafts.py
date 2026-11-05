@@ -89,6 +89,9 @@ def create(db: Session, *, device: Device, card: IntegrationCard | None, values:
     if open_id is not None:
         raise DraftConflict(f"이 장비에는 검토 중인 초안이 있습니다 ({open_id}). 그 초안을 고치세요")
     fields = rules.initial_fields(card.content if card else None, values, set(unset))
+    for name, field in fields.items():
+        if field["status"] == rules.FROM_CARD and input_errors({name: field["value"]}, []):
+            fields[name] = dict(rules.UNSET)
     d = PolicyDraft(policy_draft_id=new_id("policy_draft"), organization_id=device.organization_id,
                     device_id=device.device_id, collector_device_id=collector_id,
                     integration_card_id=card.integration_card_id if card else None,
