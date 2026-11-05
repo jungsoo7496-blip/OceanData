@@ -132,7 +132,10 @@ class DeletionRequest(BaseModel):
 
 def _delete(c: Container, db: Session, request: Request, p: Principal, assets: list[Asset], scope: str,
             target_id: str, body: DeletionRequest) -> dict:
-    roots = retention.with_descendants(db, assets)
+    # 원 자산 행을 잠근 뒤 파생본을 찾는다. 파생 작업(구간 클립)이 기록 중이면 끝난 뒤 그 결과까지 지운다 (ADR-0033)
+    roots = retention.with_descendants(db, assets, lock=True)
+    if scope == "ASSET" and not roots:  # 기다리는 사이 다른 요청이 지웠다 (삭제된 자산은 보이지 않는다)
+        raise ProblemError("NOT_FOUND")
     try:
         cert = retention.delete_assets(c, db, organization_id=p.organization_id, assets=roots, scope=scope,
                                        target_id=target_id, reason=body.reason, requested_by=p.principal_id,

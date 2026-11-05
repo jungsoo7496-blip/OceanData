@@ -4,9 +4,9 @@
 | 구성 | 구현 |
 |---|---|
 | 보존 정책 | `retention_policies`(대상 RAW·PROXY·THUMBNAIL·CLIP·DEID·SENSOR_EXPORT·EVIDENCE·DATASET·QUARANTINE:<사유> → 기간·DELETE/KEEP·예고 일수). 등록·파생·격리 때 `apply_retention()`이 retention_policy_id·retention_until 계산. 무기한은 9999-12-31. **기간 값은 초안(10년·격리 30일) — 운영기관 확정 필요** |
-| 만료 실행 | `dry_run()`(대상·용량·법적 보류 제외 수·인용 경고), `execute_expired()`(기관별 삭제 증명, 인용 중 자산 건너뜀). 워커가 하루 한 번 예고 알림 + dry-run 기록. `RETENTION_AUTO_EXECUTE=true`면 자동 실행, 기본은 운영자가 `python -m app.cli retention --execute` |
+| 만료 실행 | `dry_run()`(대상·용량·법적 보류 제외 수·인용 경고), `execute_expired()`(기관별 삭제 증명, 인용 중 자산 건너뜀, 대상 행을 먼저 잠금). 워커가 하루 한 번 예고 알림 + dry-run 기록. `RETENTION_AUTO_EXECUTE=true`면 자동 실행, 기본은 운영자가 `python -m app.cli retention --execute` |
 | 법적 보류 | `assets.legal_hold`·사유. `POST /v1/assets/{id}/legal-hold`(운영자·MFA·사유·감사). 보류 자산은 만료·삭제 요청 모두에서 제외 |
-| 삭제 | `POST /v1/assets/{id}/deletion`·`/v1/sessions/{id}/deletion`(ORG_ADMIN·MFA). 계보로 파생본까지, 활성 객체 삭제, 사용량 차감, 자산 기록은 `deleted_at`으로 남기고 모든 조회에서 숨김. `deletion_certificates`(dlc_): 객체 키·sha256·크기, 백업 사본 소멸 예정일(`BACKUP_RETENTION_DAYS`) |
+| 삭제 | `POST /v1/assets/{id}/deletion`·`/v1/sessions/{id}/deletion`(ORG_ADMIN·MFA). 계보로 파생본까지, 활성 객체 삭제, 사용량 차감, 자산 기록은 `deleted_at`으로 남기고 모든 조회에서 숨김. `deletion_certificates`(dlc_): 객체 키·sha256·크기, 백업 사본 소멸 예정일(`BACKUP_RETENTION_DAYS`). 원 자산 행을 잠근(asset_id 순, 계보 단계마다) 뒤 파생본을 찾는다 — 기록 중인 파생 작업(구간 클립)의 결과도 함께 지운다 (ADR-0033 갱신) |
 | 재수신 | 멱등 키 유일 제약을 `deleted_at IS NULL` 부분 인덱스로 바꿔 삭제 뒤 같은 파일을 다시 받을 수 있다 |
 | 쿼터 알림 | 예약·확정·격리 때 사용률이 80·90·100%를 처음 넘으면 ORG_ADMIN 알림 (`org_quotas.last_alert_pct`) |
 | 사용량 | `GET /v1/usage`: 등록 객체·격리·예약·백업 항목별. 제공기관은 자기 기관, 운영자는 전체 |

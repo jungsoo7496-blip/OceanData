@@ -97,21 +97,37 @@ class DeletionRefused(Exception):
         self.code, self.detail, self.affected = code, detail, affected or []
 
 
-def with_descendants(db: Session, roots: list[Asset]) -> list[Asset]:
-    """원 자산을 지우면 그 파생본도 함께 지운다 (계보로 찾음)."""
+def with_descendants(db: Session, roots: list[Asset], *, lock: bool = False) -> list[Asset]:
+    """원 자산을 지우면 그 파생본도 함께 지운다 (계보로 찾음).
+
+    lock이면(삭제) 단계마다 자산 행을 잠그고 최신 값으로 다시 읽은 뒤 그 파생본을 찾는다.
+    파생본을 만드는 작업(구간 클립)은 원 자산 행을 잠그고 살아 있는지 확인한 뒤 기록하므로, 그사이 확정된
+    파생본이 삭제·삭제 증명에서 빠지지 않는다 (ADR-0033). 기다리는 동안 다른 요청이 지운 자산은 뺀다.
+    잠금 순서는 자산 행 → 기관 쿼터 행 (delete_assets)."""
+    if lock:
+        roots = lock_live(db, [a.asset_id for a in roots])
     seen = {a.asset_id: a for a in roots}
     frontier = list(seen)
     while frontier:
         kids = db.execute(select(AssetLineage.child_asset_id).where(AssetLineage.parent_asset_id.in_(frontier))) \
             .scalars().all()
-        frontier = []
-        for k in kids:
-            if k not in seen:
-                a = db.get(Asset, k)
-                if a is not None and a.deleted_at is None:
-                    seen[k] = a
-                    frontier.append(k)
+        new = sorted(set(kids) - set(seen))
+        if lock:
+            found = lock_live(db, new)
+        else:
+            found = [a for a in (db.get(Asset, k) for k in new) if a is not None and a.deleted_at is None]
+        seen.update((a.asset_id, a) for a in found)
+        frontier = [a.asset_id for a in found]
     return list(seen.values())
+
+
+def lock_live(db: Session, asset_ids: list[str]) -> list[Asset]:
+    """자산 행을 asset_id 순으로 잠그고(FOR UPDATE) 최신 값으로 다시 읽는다. 이미 삭제된 자산은 뺀다."""
+    if not asset_ids:
+        return []
+    rows = db.execute(select(Asset).where(Asset.asset_id.in_(asset_ids)).order_by(Asset.asset_id).with_for_update()
+                      .execution_options(populate_existing=True)).scalars().all()
+    return [a for a in rows if a.deleted_at is None]
 
 
 def affected_by(db: Session, assets: list[Asset]) -> list[dict[str, Any]]:
@@ -224,8 +240,14 @@ def dry_run(db: Session, now: datetime) -> dict[str, Any]:
 
 
 def execute_expired(c: Container, db: Session, now: datetime) -> list[DeletionCertificate]:
-    """만료 동작 실행 (요구사항 3.4). 기관별 삭제 증명 하나씩. 인용 중인 자산은 건너뛴다."""
-    rows = [a for a in db.execute(_expired(db, now)).scalars().all() if not a.legal_hold]
+    """만료 동작 실행 (요구사항 3.4). 기관별 삭제 증명 하나씩. 인용 중인 자산은 건너뛴다.
+
+    대상 자산 행을 asset_id 순으로 먼저 잠근다 — API 삭제·파생 작업(구간 클립)과 같은 '자산 행 → 기관 쿼터 행'
+    순서이고, 파생 작업이 원 자산을 잠그고 기록하는 중이면 끝날 때까지 기다린다.
+    기다리는 동안 바뀐 행(이미 삭제됨 등)은 다시 판단한다."""
+    stmt = _expired(db, now).order_by(Asset.asset_id).with_for_update(of=Asset) \
+        .execution_options(populate_existing=True)
+    rows = [a for a in db.execute(stmt).scalars().all() if not a.legal_hold]
     cited = {w["asset_id"] for w in affected_by(db, rows)}
     by_org: dict[str, list[Asset]] = {}
     for a in rows:

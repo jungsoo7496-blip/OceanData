@@ -8,11 +8,12 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 from app.domain.ids import new_id
 from app.ports.clock import ClockPort
@@ -33,10 +34,12 @@ class PgQueue:
         return dict(row) if row else {**DEFAULT_POLICY, "max_attempts": self.max_attempts}
 
     def enqueue(self, job_type: str, payload: dict[str, Any], *, priority: int | None = None,
-                organization_id: str | None = None, dedupe_key: str | None = None) -> str:
+                organization_id: str | None = None, dedupe_key: str | None = None,
+                connection: Connection | None = None) -> str:
+        """작업을 넣는다. connection이 없으면 따로 커밋하고, 있으면 호출자 트랜잭션을 따른다 (같이 확정·취소)."""
         job_id = new_id("job")
         now = self.clock.now()
-        with self.engine.begin() as conn:
+        with (self.engine.begin() if connection is None else nullcontext(connection)) as conn:
             pol = self._policy(conn, job_type)
             row = conn.execute(
                 text("""
@@ -128,6 +131,14 @@ class PgQueue:
                                        last_error_code='LEASE_EXPIRED', run_after=:now, updated_at=:now
                                        WHERE status='RUNNING' AND lease_expires_at < :now"""), {"now": now})
             return int(res.rowcount or 0)
+
+    def count_active(self, job_type: str, organization_id: str, *, connection: Connection | None = None) -> int:
+        """기관의 대기·실행 중(QUEUED·RUNNING, 재시도 대기 포함) 작업 수 (예: 구간 클립 기관별 한도)."""
+        with (self.engine.connect() if connection is None else nullcontext(connection)) as conn:
+            n = conn.execute(text("""SELECT count(*) FROM jobs WHERE job_type = :t AND organization_id = :o
+                                     AND status IN ('QUEUED', 'RUNNING')"""),
+                             {"t": job_type, "o": organization_id}).scalar_one()
+        return int(n)
 
     def depth_by_type(self) -> dict[str, int]:
         with self.engine.connect() as conn:

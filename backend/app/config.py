@@ -103,6 +103,8 @@ class Settings(BaseSettings):
     # 구간 클립 내보내기 (09번 요구사항 7.2): 프레임 단위로 정확히 자르려고 libx264로 다시 인코딩한다
     clip_max_s: float = 3600.0
     clip_crf: int = 18  # 낮을수록 고화질·큰 파일 (18 ≈ 눈으로 구별하기 어려운 수준)
+    # 기관별 대기·실행 중 클립 작업 한도 — 넘으면 429 (긴 재인코딩으로 한 기관이 공용 작업 큐를 채우지 않게)
+    clip_max_pending_per_org: int = Field(default=3, ge=1)
     worker_resource_classes: CsvList = Field(default_factory=lambda: ["CPU"])
     job_lease_reap_interval_s: int = 60
     integrity_sample_size: int = 20

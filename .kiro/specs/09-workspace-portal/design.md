@@ -27,6 +27,10 @@ React 18 + TS + Vite, Ant Design 5(ko_KR, 대비 강화 테마), TanStack Query,
 `POST·GET /v1/assets/{id}/clips`(계약 추가, ADR-0033): 자기 기관 ORG 역할만. 요청은 원 영상·구간을 검사하고 작업 `clip_export`를
 등록(202)하며, 작업은 입력 앞 -ss + libx264 재인코딩으로 프레임 단위로 잘라 파생 자산(CLIP, 계보 relation=CLIP,
 `provenance.clip_range_s`, 옮긴 촬영 시각)을 만든다. 원 영상 격리·삭제와 인코딩 실패는 재시도하지 않고 바로 FAILED(코드 표시).
+새 작업은 기관 쿼터에 여유가 있어야 하고(409 QUOTA_EXCEEDED, 업로드와 같은 규칙) 기관의 대기·실행 중 클립 작업이
+`CLIP_MAX_PENDING_PER_ORG` 미만이어야 한다(429 RATE_LIMITED + Retry-After). 작업 행과 감사(CLIP_EXPORT_REQUESTED)는 요청 트랜잭션
+하나로 202 전에 커밋한다. 작업은 클립을 올린 뒤 원 영상 행을 잠그고 살아 있는지·쿼터를 다시 확인해 기록하고(아니면 FAILED
+`SOURCE_UNAVAILABLE`·`QUOTA_EXCEEDED`, 올린 객체 삭제), 삭제는 원 자산 행을 잠근 뒤 파생본을 찾는다(ADR-0033 갱신).
 
 장비 정책 초안(계약 추가, ADR-0037, 요구사항 3.2~3.4): 표 `policy_drafts`(마이그레이션 0022, ID `pdr_`, 장비마다 DRAFT 하나 —
 부분 고유 색인), 상태 DRAFT → APPLIED | REJECTED, 항목 일곱 개(collection_mode, allowed_data_roles, local_copy_policy,

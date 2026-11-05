@@ -257,15 +257,34 @@ def create_derived(c: Container, db: Session, parent: Asset, path: str, *, varia
     파생본은 원 자산의 data_role·sensitivity_class를 물려받고 PRIVATE으로 시작한다 (domain.md 3·4장).
     provenance_extra는 출처 정보에 더하고(예: 구간 클립의 clip_range_s), overrides는 물려받은 값을 바꾼다
     (예: 구간 클립의 촬영 시각·video_ext). 같은 결과가 이미 있으면 둘 다 적용하지 않고 기존 자산을 돌려준다.
+    단계(same_result → new_derived → 객체 저장 → record_derived)를 따로 부르면 객체를 먼저 올리고
+    다른 트랜잭션에서 기록할 수 있다 (구간 클립, clips.store_clip).
     """
     sha, size = _sha256_file(path)
     now = c.clock.now()
-    existing = db.execute(select(Asset).where(Asset.organization_id == parent.organization_id,
-                                              Asset.source_system_id == parent.source_system_id,
-                                              Asset.checksum_sha256 == sha, Asset.deleted_at.is_(None))) \
-        .scalar_one_or_none()
+    existing = same_result(db, parent, sha)
     if existing is not None:  # 같은 결과가 이미 있으면 계보만 확인한다 (재실행 멱등)
         return existing
+    child = new_derived(c, db, parent, sha=sha, size=size, variant=variant, mime=mime, relation=relation, tool=tool,
+                        job_id=job_id, now=now, provenance_extra=provenance_extra, overrides=overrides)
+    assert child.storage_zone is not None and child.storage_key is not None  # new_derived가 정한다
+    c.storage.upload_file(c.settings.buckets[child.storage_zone], child.storage_key, path, mime)
+    record_derived(c, db, parent, child, relation=relation, tool=tool, now=now)
+    return child
+
+
+def same_result(db: Session, parent: Asset, sha: str) -> Asset | None:
+    """같은 기관·장비에 같은 체크섬의 살아 있는 자산 (파생 작업을 다시 해도 새 자산을 만들지 않는다)."""
+    return db.execute(select(Asset).where(Asset.organization_id == parent.organization_id,
+                                          Asset.source_system_id == parent.source_system_id,
+                                          Asset.checksum_sha256 == sha, Asset.deleted_at.is_(None))) \
+        .scalar_one_or_none()
+
+
+def new_derived(c: Container, db: Session, parent: Asset, *, sha: str, size: int, variant: str, mime: str,
+                relation: str, tool: str, job_id: str | None, now: datetime,
+                provenance_extra: dict[str, Any] | None = None, overrides: dict[str, Any] | None = None) -> Asset:
+    """아직 저장하지 않은 파생 자산 (ID·객체 키·보존 정책까지 정한다, 세션에는 넣지 않는다)."""
     child = Asset(
         asset_id=new_id("asset"), schema_version=parent.schema_version, organization_id=parent.organization_id,
         project_id=parent.project_id, session_id=parent.session_id, source_system_id=parent.source_system_id,
@@ -290,15 +309,25 @@ def create_derived(c: Container, db: Session, parent: Asset, path: str, *, varia
 
     apply_retention(db, child, now)  # 파생본 보존 정책 (08번)
     child.storage_tier = "HOT"  # 새 객체는 언제나 HOT에 쓴다 (08번 요구사항 9, 옮기는 것은 Tier_Mover)
-    c.storage.upload_file(c.settings.buckets[child.storage_zone], child.storage_key, path, mime)
+    return child
+
+
+def record_derived(c: Container, db: Session, parent: Asset, child: Asset, *, relation: str, tool: str,
+                   now: datetime, enforce_quota: bool = False) -> None:
+    """저장한 객체의 파생 자산·계보·무결성 로그·기관 사용량을 기록한다.
+
+    enforce_quota면 쿼터 행을 잠근 뒤 업로드와 같은 규칙으로 여유를 확인한다 — 넘으면 ProblemError(QUOTA_EXCEEDED)로
+    트랜잭션을 되돌리고, 올린 객체는 호출자가 지운다. 잠금 순서는 무결성 로그 → 쿼터 행 (다른 파생 작업과 같다).
+    """
     db.add(child)
     db.flush()
     db.add(AssetLineage(child_asset_id=child.asset_id, parent_asset_id=parent.asset_id, relation=relation,
                         tool_version=tool, run_by="SERVICE", created_at=now))
     append_integrity(db, child, c.clock.now())
-    q = Quota(c, db)._row(parent.organization_id)
-    q.used_bytes += size  # PROCESSED 존도 기관 사용량에 들어간다 (domain.md 9장)
-    return child
+    quota = Quota(c, db)
+    q = quota.require_room(parent.organization_id, child.byte_size) if enforce_quota \
+        else quota._row(parent.organization_id)
+    q.used_bytes += child.byte_size  # PROCESSED 존도 기관 사용량에 들어간다 (domain.md 9장)
 
 
 def _short_side_scale(short: int) -> str:

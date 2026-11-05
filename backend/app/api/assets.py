@@ -220,7 +220,8 @@ class ClipRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     start_s: float = Field(ge=0, allow_inf_nan=False)
     end_s: float = Field(gt=0, allow_inf_nan=False)
-    reason: str | None = Field(default=None, min_length=2, max_length=500)
+    # 감사 로그에 남는 글 — 제어 문자(NUL 등)는 계약대로 400 (security.md 입력 검증)
+    reason: str | None = Field(default=None, min_length=2, max_length=500, pattern=r"^[^\x00-\x1f\x7f]*$")
 
 
 def _own_binary(a: Asset, p: Principal) -> None:
@@ -242,18 +243,23 @@ def list_asset_clips(asset_id: str, request: Request, db: Session = Depends(get_
 @router.post("/v1/assets/{asset_id}/clips", status_code=202)
 def create_asset_clip(asset_id: str, body: ClipRequest, request: Request, db: Session = Depends(get_db),
                       c: Container = Depends(container), p: Principal = Depends(require("asset:clip"))) -> dict:
-    """구간 클립 작업 등록 (09번 요구사항 7.2). 결과는 작업 큐가 파생 자산(CLIP)으로 계보에 연결한다."""
+    """구간 클립 작업 등록 (09번 요구사항 7.2). 결과는 작업 큐가 파생 자산(CLIP)으로 계보에 연결한다.
+
+    작업 행·감사·마지막 조회 시각은 요청 트랜잭션 하나로 확정한다.
+    202를 돌려주기 전에 커밋해 응답과 기록이 어긋나지 않게 한다."""
     from app.services import clips
     from app.services.tiers import touch_accessed
 
     a = load_scoped(db, c, request, Asset, asset_id, p)
     _own_binary(a, p)
-    out, created = clips.request_clip(c, a, p.principal_id, body.start_s, body.end_s)
+    out, created = clips.request_clip(c, db, a, p.principal_id, body.start_s, body.end_s)
     touch_accessed(db, a.asset_id, c.clock.now())  # 사용자가 원 영상을 쓴다 (계층 규칙의 '마지막 조회')
     if created:
         c.audit.record("CLIP_EXPORT_REQUESTED", principal=p, organization_id=a.organization_id, target_type="Asset",
                        target_id=a.asset_id, reason=body.reason, source_ip=client_ip(request),
-                       details={"job_id": out["job_id"], "start_s": out["start_s"], "end_s": out["end_s"]})
+                       details={"job_id": out["job_id"], "start_s": out["start_s"], "end_s": out["end_s"]},
+                       connection=db.connection())
+    db.commit()  # get_db는 응답을 보낸 뒤 커밋한다 — 실패가 202 뒤에 숨지 않게 여기서 확정한다
     return out
 
 

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import Connection
 
 
 @dataclass
@@ -41,8 +44,11 @@ class PermanentJobError(Exception):
 
 
 class QueuePort(Protocol):
+    # connection을 주면 호출자 트랜잭션 안에서 넣는다 (같이 쓰는 감사·상태 변경과 함께 확정·취소, 예: 구간 클립 등록)
     def enqueue(self, job_type: str, payload: dict[str, Any], *, priority: int | None = None,
-                organization_id: str | None = None, dedupe_key: str | None = None) -> str: ...
+                organization_id: str | None = None, dedupe_key: str | None = None,
+                connection: Connection | None = None) -> str: ...
+    def count_active(self, job_type: str, organization_id: str, *, connection: Connection | None = None) -> int: ...
     def claim(self, job_types: list[str] | None = None, worker_id: str = "",
               resource_classes: tuple[str, ...] = ("CPU",)) -> Job | None: ...
     def complete(self, job_id: str) -> None: ...

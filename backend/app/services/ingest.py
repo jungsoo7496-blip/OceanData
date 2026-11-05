@@ -77,12 +77,22 @@ class Quota:
         return self.db.execute(select(OrgQuota).where(OrgQuota.organization_id == org).with_for_update()) \
             .scalar_one()
 
-    def reserve(self, org: str, nbytes: int) -> None:
+    def require_room(self, org: str, nbytes: int | None = None) -> OrgQuota:
+        """행을 잠그고 쿼터 여유를 확인한다 — 업로드 예약과 구간 클립(09번 7.2)이 같은 규칙을 쓴다.
+
+        사용량(저장 + 격리 + 예약 + 신청 백업)에 nbytes를 더해 쿼터를 넘으면 409 QUOTA_EXCEEDED.
+        크기를 아직 모르면(None) 여유가 1바이트도 없을 때만 거절한다."""
         q = self._row(org)
         total = q.used_bytes + q.quarantine_bytes + q.reserved_bytes + q.backup_bytes
-        if total + nbytes > q.quota_bytes:
-            raise ProblemError("QUOTA_EXCEEDED", detail="기관 저장 쿼터를 넘습니다",
-                               extra={"quota_bytes": q.quota_bytes, "usage_bytes": total, "requested_bytes": nbytes})
+        if total + (1 if nbytes is None else nbytes) > q.quota_bytes:
+            extra: dict[str, Any] = {"quota_bytes": q.quota_bytes, "usage_bytes": total}
+            if nbytes is not None:
+                extra["requested_bytes"] = nbytes
+            raise ProblemError("QUOTA_EXCEEDED", detail="기관 저장 쿼터를 넘습니다", extra=extra)
+        return q
+
+    def reserve(self, org: str, nbytes: int) -> None:
+        q = self.require_room(org, nbytes)
         q.reserved_bytes += nbytes
         q.updated_at = self.c.clock.now()
         from app.services.retention import check_quota_alerts

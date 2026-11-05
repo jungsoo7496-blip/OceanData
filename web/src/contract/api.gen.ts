@@ -1958,6 +1958,12 @@ export interface paths {
          *     촬영 시각은 원 영상 시작 + 구간으로 옮긴다(원 영상 촬영 시각이 미상이면 미상).
          *     영상 길이(video_ext.duration_s)를 아직 모르면 409, 구간이 길이를 넘거나 설정 최대 길이를 넘으면 400.
          *     같은 구간의 작업이 대기·실행 중이면 새로 만들지 않고 그 작업을 돌려준다. 바이너리는 자기 기관만 다룬다(운영자·관리기관 불가).
+         *     새 작업을 등록할 때만 더 검사한다 (ADR-0033 보완):
+         *     - 기관 저장 쿼터에 여유가 없으면 409 QUOTA_EXCEEDED (업로드 예약과 같은 규칙: 저장+격리+예약+신청 백업 사용량, 본문에
+         *       quota_bytes·usage_bytes). 클립 크기는 만들어 봐야 알므로 작업이 저장하기 전에 쿼터를 다시 확인하고, 그때 넘으면
+         *       클립을 남기지 않고 작업이 FAILED(error_code=QUOTA_EXCEEDED)가 된다.
+         *     - 기관의 대기·실행 중 클립 작업이 설정 한도(CLIP_MAX_PENDING_PER_ORG)에 닿으면 429 RATE_LIMITED와 Retry-After.
+         *     작업 등록과 감사(CLIP_EXPORT_REQUESTED)는 한 트랜잭션으로 확정된다 — 202면 둘 다 남고, 오류 응답이면 둘 다 없다.
          */
         post: operations["createAssetClip"];
         delete?: never;
@@ -3841,7 +3847,7 @@ export interface components {
             start_s: number;
             /** @description 원 영상 시작부터의 초. start_s보다 크고 영상 길이 이하 */
             end_s: number;
-            /** @description 선택. 감사 로그(CLIP_EXPORT_REQUESTED)에 남는다 */
+            /** @description 선택. 감사 로그(CLIP_EXPORT_REQUESTED)에 남는다. 제어 문자(NUL·줄바꿈 등)는 넣을 수 없다 */
             reason?: string;
         };
         ClipJob: {
@@ -3858,7 +3864,10 @@ export interface components {
             requested_at: components["schemas"]["utc_datetime"];
             /** @description DONE일 때 결과 파생 자산 (삭제됐으면 없음) */
             clip_asset_id?: components["schemas"]["asset_id"];
-            /** @description FAILED일 때 원인 코드 (예 SOURCE_UNAVAILABLE */
+            /**
+             * @description FAILED일 때 원인 코드 (예 SOURCE_UNAVAILABLE — 원 영상이 격리·삭제됨, CLIP_ENCODE_FAILED — 자르지 못함,
+             *     QUOTA_EXCEEDED — 저장 직전 쿼터 확인에서 기관 쿼터를 넘음)
+             */
             error_code?: string;
         };
         ShareRequestCreate: {
@@ -9049,8 +9058,33 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            429: components["responses"]["TooManyRequests"];
+            /**
+             * @description 원 영상을 자를 수 없는 상태(CONFLICT — 바이너리 없음·격리·삭제·처리 전·길이 미상) 또는
+             *     기관 저장 쿼터에 여유가 없음(QUOTA_EXCEEDED — 업로드와 같은 규칙, 본문에 quota_bytes·usage_bytes)
+             */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["problem.schema"];
+                };
+            };
+            /**
+             * @description 호출 제한, 또는 기관의 대기·실행 중 클립 작업이 설정 한도(CLIP_MAX_PENDING_PER_ORG)에 닿음
+             *     (RATE_LIMITED — Retry-After 뒤에 다시 요청한다)
+             */
+            429: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    "Retry-After": components["headers"]["RetryAfter"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["problem.schema"];
+                };
+            };
         };
     };
     setLegalHold: {

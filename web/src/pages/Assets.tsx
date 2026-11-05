@@ -84,6 +84,7 @@ const CLIP_STATUS: Record<ClipJob['status'], { label: string; color: string }> =
 const CLIP_ERROR: Record<string, string> = {
   SOURCE_UNAVAILABLE: '원 영상이 격리·삭제되어 만들지 못했습니다',
   CLIP_ENCODE_FAILED: '영상을 자르지 못했습니다 (파일 손상 가능 — 운영기관에 문의)',
+  QUOTA_EXCEEDED: '기관 저장 쿼터가 모자라 저장하지 못했습니다 (자료를 정리하거나 쿼터 증설을 문의한 뒤 다시 요청)',
 }
 const CLIP_SOURCE_STATUS = ['REGISTERED', 'PROXIED', 'READY_PRIVATE']
 const mmss = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`
