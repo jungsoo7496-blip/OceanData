@@ -44,3 +44,6 @@ body { margin: 0; }
 
 /* 표: 열이 많아 좁은 화면에 다 들어가지 않으면 문서 대신 표 안에서 가로로 스크롤한다 (자료표는 WCAG 1.4.10 예외) */
 .ant-table-wrapper .ant-table-content { overflow-x: auto; }
+
+/* 한국어는 어절 안에서 끊지 않는다 (좁은 표 칸에서 글자 단위로 끊기던 문제). ID처럼 띄어쓰기 없는 긴 값만 아무 곳에서나 끊는다 */
+.ant-table-cell, .ant-descriptions-item-content { word-break: keep-all; overflow-wrap: anywhere; }
