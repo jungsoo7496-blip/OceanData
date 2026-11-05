@@ -2,7 +2,7 @@
 
 ## 인증 흐름
 - 사용자: Keycloak 액세스 토큰(RS256) → `KeycloakIdentity`가 서명·iss·aud·exp 검증 → `users.idp_subject`로 사용자 조회. **기관·역할은 플랫폼 DB가 기준**이고 토큰의 `organization_id` 클레임이 있으면 DB와 같아야 한다.
-- MFA: `amr`에 otp/mfa 또는 `acr ∈ IDP_MFA_ACR_VALUES`. Keycloak 단계 인증 설정은 확인 필요 (`deploy/compose/keycloak/README.md`).
+- MFA: `amr`에 otp/mfa 또는 `acr ∈ IDP_MFA_ACR_VALUES`. 개발 realm은 ORG_ADMIN·PLATFORM_OPERATOR 역할이 표지 역할 `mfa-required`를 통해 로그인마다 OTP를 거치고 `marine-web`이 LoA 2(acr=2)를 기본 요청한다 (ADR-0034, 실제 Keycloak 26.0.7 확인 스크립트 `deploy/compose/keycloak/tests/verify-mfa.sh`). 플랫폼 DB 역할과 realm 역할이 어긋나면 OTP를 묻지 않으므로, 구성원 관리(작업 12)에서 둘을 함께 바꾼다. 고위험 동작은 백엔드가 계속 403 MFA_REQUIRED로 막는다.
 - 기기·API 키: `POST /v1/auth/token` → 자체 발급 HS256 JWT (ADR-0013). 매 요청 DB에서 자격증명 상태 확인 → 폐기 즉시 401.
 
 ## 구성요소
