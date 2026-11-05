@@ -3,13 +3,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, App, Button, Card, Form, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd'
 import { useState } from 'react'
 import { api, ApiError, post, type Device, type Me, type Page } from '../lib/api'
-import { kst } from '../lib/format'
+import { bytes, kst } from '../lib/format'
 import { explain } from '../lib/problems'
 
 const MODE_LABEL: Record<string, string> = {
   C0_METADATA_ONLY: 'C0 메타데이터만', C1_SAMPLE_PREVIEW: 'C1 샘플·미리보기', C2_EVENT_CLIPS: 'C2 이벤트 클립',
   C3_APPROVED_FULL: 'C3 원본 전체',
 }
+
+interface BackupEstimate { asset_count: number; total_bytes: number; applied: boolean; usage: { quota_bytes: number; used_total_bytes: number; after_bytes: number } }
 
 function errorText(e: unknown): string {
   if (e instanceof ApiError) {
@@ -42,6 +44,16 @@ export function Devices({ me }: { me: Me }) {
     onSuccess: () => { setCreating(false); void qc.invalidateQueries({ queryKey: ['devices'] }) },
     onError: (e) => message.error(errorText(e)),
   })
+  const [backupFor, setBackupFor] = useState<{ device: Device; est: BackupEstimate } | null>(null)
+  const estimate = useMutation({
+    mutationFn: (d: Device) => post<BackupEstimate>('/v1/backup-requests', { device_id: d.device_id, dry_run: true }).then((est) => ({ device: d, est })),
+    onSuccess: setBackupFor, onError: (e) => message.error(errorText(e)),
+  })
+  const applyBackup = useMutation({
+    mutationFn: (d: Device) => post<BackupEstimate>('/v1/backup-requests', { device_id: d.device_id, dry_run: false }),
+    onSuccess: (r) => { setBackupFor(null); message.success(`${r.asset_count}개 자산(${bytes(r.total_bytes)})을 백업 대상으로 올렸습니다`) },
+    onError: (e) => message.error(errorText(e)),
+  })
   const items = devices.data?.items ?? []
   const collectors = items.filter((d) => d.kind === 'COLLECTOR')
   return (
@@ -63,17 +75,19 @@ export function Devices({ me }: { me: Me }) {
             ) },
             { title: '상태', dataIndex: 'status' },
             { title: '마지막 하트비트', dataIndex: 'last_heartbeat_at', render: kst },
-            { title: '', key: 'act', render: (_, d) => isAdmin && d.kind === 'COLLECTOR' && (
+            { title: '', key: 'act', render: (_, d) => isAdmin && (d.kind === 'COLLECTOR' ? (
               <Space>
                 <Button size="small" onClick={() => issue.mutate(d)} loading={issue.isPending}>등록 코드</Button>
                 <Button size="small" danger onClick={() => revoke.mutate(d)}>자격증명 폐기</Button>
               </Space>
-            ) },
+            ) : d.center_copy_may_be_only_copy && (
+              <Button size="small" onClick={() => estimate.mutate(d)} loading={estimate.isPending}>원본 백업 신청</Button>
+            )) },
           ]} />
         {items.some((d) => d.center_copy_may_be_only_copy && d.kind === 'SOURCE') && (
           <Alert style={{ marginTop: 16 }} type="warning" showIcon
             message="현장 사본이 순환 삭제되거나 확인되지 않은 장비가 있습니다"
-            description="센터에 올라온 원본이 유일본일 수 있습니다. 중요한 자료는 원본 백업을 신청하세요 (08번 백업 신청 기능 — 준비 중)." />
+            description="센터에 올라온 원본이 유일본일 수 있습니다. 중요한 자료는 '원본 백업 신청'으로 독립 백업 대상에 올리세요 (백업 용량은 기관 사용량에 들어갑니다)." />
         )}
       </Card>
       <Card title="에이전트 설치 안내">
@@ -95,6 +109,18 @@ marine-agent status`}</pre>
             <Typography.Text>{code.device.name}</Typography.Text>
             <Typography.Text code copyable style={{ fontSize: 18 }}>{code.code}</Typography.Text>
             <Typography.Text type="secondary">만료 {kst(code.expires_at)} · 이 화면을 닫으면 다시 볼 수 없습니다</Typography.Text>
+          </Space>
+        )}
+      </Modal>
+      <Modal open={!!backupFor} title={`원본 백업 신청 — ${backupFor?.device.name ?? ''}`} onCancel={() => setBackupFor(null)}
+        okText="신청" okButtonProps={{ disabled: !backupFor?.est.asset_count || (backupFor?.est.usage.after_bytes ?? 0) > (backupFor?.est.usage.quota_bytes ?? 0) }}
+        onOk={() => backupFor && applyBackup.mutate(backupFor.device)} confirmLoading={applyBackup.isPending}>
+        {backupFor && (
+          <Space direction="vertical">
+            <Typography.Text>대상: 아직 백업되지 않은 원본 {backupFor.est.asset_count}개 · {bytes(backupFor.est.total_bytes)}</Typography.Text>
+            <Typography.Text>기관 사용량: {bytes(backupFor.est.usage.used_total_bytes)} → {bytes(backupFor.est.usage.after_bytes)} (쿼터 {bytes(backupFor.est.usage.quota_bytes)})</Typography.Text>
+            {backupFor.est.usage.after_bytes > backupFor.est.usage.quota_bytes && <Alert type="error" showIcon message="쿼터를 넘어 신청할 수 없습니다. 운영기관에 쿼터 조정을 요청하세요." />}
+            <Typography.Text type="secondary">다음 정기 백업부터 별도 저장소에 복사됩니다.</Typography.Text>
           </Space>
         )}
       </Modal>

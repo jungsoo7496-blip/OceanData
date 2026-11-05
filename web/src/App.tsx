@@ -16,6 +16,7 @@ import { Catalog, ProviderAccess, SharingConsole } from './pages/Sharing'
 import { OperatorConsole } from './pages/Operator'
 import { ProgramBoard } from './pages/Program'
 import { Sessions } from './pages/Sessions'
+import { OrgSettings } from './pages/Settings'
 import { Upload } from './pages/Upload'
 
 const ORG = ['ORG_ADMIN', 'ORG_MEMBER']
@@ -40,6 +41,7 @@ function menuFor(roles: string[]) {
     add('/reports', '보고서')
     add('/access', '이용 신청')
     add('/devices', '장비')
+    if (roles.includes('ORG_ADMIN')) add('/settings', '기관 설정')
   }
   if (roles.includes('CONSUMER')) add('/catalog', '데이터셋 카탈로그')
   if (roles.includes('REVIEWER') || roles.includes('PLATFORM_OPERATOR')) add('/review', '비식별 검수')
@@ -100,6 +102,7 @@ function Shell({ me }: { me: Me }) {
           <Route path="/assets/:assetId" element={<AssetDetail me={me} />} />
           <Route path="/sessions" element={<Sessions me={me} />} />
           <Route path="/devices" element={<Devices me={me} />} />
+          <Route path="/settings" element={<OrgSettings me={me} />} />
           <Route path="/program" element={<ProgramBoard />} />
           <Route path="/operator" element={<OperatorConsole />} />
           <Route path="/monitoring" element={<Monitoring />} />
