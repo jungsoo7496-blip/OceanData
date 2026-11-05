@@ -83,14 +83,19 @@ def _explore(env: ContractEnv, headers: dict[str, str], mode: GenerationMode, na
     return failures
 
 
-@pytest.mark.parametrize("who", ["member", "operator"])
+# 역할별 시드 사용자 (app/seed.py): 운영자는 다중 인증 토큰
+WHO = {"operator": (106, True), "viewer": (105, False), "reviewer": (108, False), "consumer": (109, False)}
+
+
+@pytest.mark.parametrize("who", ["member", "operator", "viewer", "reviewer", "consumer"])
 def test_schemathesis_all_operations(contract_env: ContractEnv, who: str) -> None:  # noqa: F811 - 가져온 픽스처
     env = contract_env
-    if who == "operator":
+    if who in WHO:
         from app.seed import sub
         from tests.conftest import user_token
 
-        headers = {"Authorization": f"Bearer {user_token(sub(106), mfa=True)}"}
+        n, mfa = WHO[who]
+        headers = {"Authorization": f"Bearer {user_token(sub(n), mfa=mfa)}"}
     else:
         headers = env.headers
     failures = _explore(env, headers, GenerationMode.POSITIVE, EXPLORE_POSITIVE)
