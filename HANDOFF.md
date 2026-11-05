@@ -32,8 +32,8 @@
 3. **Docker가 죽어 있으면** (이 클라우드 컨테이너처럼 세션이 재시작된 뒤): `dockerd`를 다시 띄우고 `docker start marine-postgres-1` 한 뒤 시험한다.
 
 ### 2. 끊긴 작업 — `wip/*` 브랜치 (원격에 있음, 모두 미완·검토 전)
-기반은 이 브랜치의 옛 커밋이다. 이어 하려면 `git switch -c <이름> origin/wip/<…>` → `git rebase fix/backup-runtime-pg16`
-(`contracts/openapi.yaml` 충돌은 손으로 풀어 양쪽을 살리고, 생성 파일 `web/src/contract/api.gen.ts`·`agent/internal/contractapi/client.gen.go`는 충돌 부분을 버리고 `npm run gen:api`·`tools/generate_agent_api.py`로 재생성 — 충돌이 없어도 rebase 뒤 `npm run check:api`를 돌린다) → 해당 시험 → 백엔드 전체 시험 → 검토. 상세한 단계는 `docs/GPT-HANDOFF-PROMPT.md` [3]. **번호:** 마이그레이션 0024는 `wip/hot-path-indexes` 몫. ADR-0040은 `wip/agent-policy-overflow`의 코드·계약 주석 41곳이 이미 인용하므로 그 결정(정책 숫자 기술 상한)의 ADR로 쓰고(ADR 파일은 아직 없다), `wip/hot-path-indexes`의 ADR은 0042로 옮긴다(9곳 수정).
+기반은 이 브랜치의 옛 커밋이다. 이어 하려면 `git switch -c gpt/<NN>-<이름> --no-track origin/wip/<…>` → `git rebase origin/fix/backup-runtime-pg16`
+(`contracts/openapi.yaml` 충돌은 손으로 풀어 양쪽을 살리고, 생성 파일 `web/src/contract/api.gen.ts`·`agent/internal/contractapi/client.gen.go`는 충돌 부분을 버리고 `npm run gen:api`·`tools/generate_agent_api.py`로 재생성 — 충돌이 없어도 rebase 뒤 `npm run check:api`를 돌린다) → 해당 시험 → 백엔드 전체 시험 → 검토. 상세한 단계는 `docs/GPT-HANDOFF-PROMPT.md` [3]. **번호:** 마이그레이션 0024는 `wip/hot-path-indexes` 몫. ADR-0040은 `wip/agent-policy-overflow`의 코드·계약 주석 41곳이 이미 인용하므로 그 결정(정책 숫자 기술 상한)의 ADR로 쓰고(ADR 파일은 아직 없다), `wip/hot-path-indexes`의 ADR은 0042로 옮긴다(인용 9곳 수정: 코드·시험 8곳 + ADR 파일 제목 1곳).
 
 | 브랜치 | 무엇 | 진행 | 남은 것 |
 |---|---|---|---|
@@ -41,8 +41,8 @@
 | `wip/commit-before-response-tests` | 검토 2 **#4** 커밋이 응답 뒤에 일어남 | **재현 시험 2개만**(구현은 첫 시도를 되돌림 — 이 브랜치는 rebase하지 않는다: 첫 커밋 `5220f6b`이 `webhooks.py`에서 충돌. 시험 파일만 `git checkout`으로 가져온다) | 방법 선택(`Depends(get_db, scope="function")` 또는 공용 commit 도우미), 스트리밍·SSE·내보내기 응답이 세션을 계속 쓰는지 확인, 멱등 키 선점(INSERT … ON CONFLICT) |
 | `wip/auth-enrollment-codes` | 장비 자격 폐기 뒤 쓰지 않은 등록 코드로 재등록 | **구현·시험 1개·계약 설명이 이미 있다**(폐기 때 쓰지 않은 등록 코드 만료 + 감사 `enrollment_codes_invalidated`) — 사람 결정(5장) 대기라 기본값으로 무효화 | rebase 뒤 웹 타입 재생성(지금 `check:api` 실패), 시험 실행, 5장 행에 '기본값 구현, 확인 대기' 기록 |
 | `wip/report-scope-leaks` | 보고서 지표 출처 PRIVATE 자산 ID·추적, 다른 기관에 원래 파일명 노출 | 보이는 것만 거르기(서비스·API, 계약) | 시험, `asset_view`의 `original_filename` 처리, 검토 |
-| `wip/agent-policy-overflow` | 06 서버 정책 값 시간 넘침 방어(`heartbeat_interval_s` 등이 매우 크면 `time.Duration` 곱셈이 넘쳐 하트비트가 쉬지 않고 돎) | 18개 파일: 스키마 최댓값·`timex`·에이전트 검사·Go/Python 시험·잘못된 예시 — `Retry-After`·`expires_in`·mvhd 상자 크기 방어도 포함. **'ADR-0040'을 41곳에서 인용하는데 ADR 파일이 없다** | 전체 검증(`make agent-test agent-lint`, `GOOS=windows go vet`), 기존 정책 호환 확인, 검토. mvhd 상자 크기 검사 포함 여부 확인 |
-| `wip/hot-path-indexes` | 08 DB 핫패스 인덱스(큐 폴링·보존 만료·계층 이동·테넌트 목록) | 마이그레이션 0024(down 포함)·시험·ADR 초안(파일명 `0040-…`, 상태 'accepted'와 전·후 표가 적혀 있으나 **측정 DB·스크립트가 남아 있지 않아 재현·검토되지 않은 값**) | **믿지 말고 새 임시 DB에 합성해 다시 잰다**(자산 50만·작업 109만·업로드 27만·관측값 177만·감사 150만, `marine`에는 넣지 않는다), 표를 새 값으로, 상태는 `proposed`, ADR을 `0042-…`로 옮기고 인용 9곳 수정, 쓰이는 색인만 남길 것, 마이그레이션 왕복 시험 |
+| `wip/agent-policy-overflow` | 06 서버 정책 값 시간 넘침 방어(`heartbeat_interval_s` 등이 매우 크면 `time.Duration` 곱셈이 넘쳐 하트비트가 쉬지 않고 돎) | 17개 파일: 스키마 최댓값·`timex`·에이전트 검사·Go/Python 시험·잘못된 예시 — `Retry-After`·`expires_in`·mvhd 상자 크기 방어도 포함(단 `expires_in`·mvhd는 전용 시험이 없다). **'ADR-0040'을 41곳에서 인용하는데 ADR 파일이 없다** | 전체 검증(`make agent-test agent-lint`, `GOOS=windows go vet`), 기존 정책 호환 확인, 검토. `expires_in`·mvhd 상자 크기 방어의 전용 시험 추가, ADR-0040 파일 작성 |
+| `wip/hot-path-indexes` | 08 DB 핫패스 인덱스(큐 폴링·보존 만료·계층 이동·테넌트 목록) | 마이그레이션 0024(down 포함)·시험·ADR 초안(파일명 `0040-…`, 상태 'accepted'와 전·후 표가 적혀 있으나 **측정 DB·스크립트가 남아 있지 않아 재현·검토되지 않은 값**) | **믿지 말고 새 임시 DB에 합성해 다시 잰다**(자산 50만·작업 109만·업로드 27만·관측값 177만·감사 150만, `marine`에는 넣지 않는다), 표를 새 값으로, 상태는 `proposed`, ADR을 `0042-…`로 옮기고 인용 9곳(코드·시험 8 + ADR 제목 1) 수정, 쓰이는 색인만 남길 것, 마이그레이션 왕복 시험 |
 
 ### 3. 아직 시작하지 않은 것
 - **검토 2 #5·#6·#7·#8** (`docs/review-2026-11-05/README.md`): 바이트 없는 파일에 `ALREADY_REGISTERED`(순환 녹화 원천 조용한 유실 가능 — **우선**),
