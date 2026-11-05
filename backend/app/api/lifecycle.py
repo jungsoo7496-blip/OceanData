@@ -83,6 +83,24 @@ def request_backup(body: BackupRequest, request: Request, db: Session = Depends(
     return out
 
 
+@router.get("/v1/capacity-forecast", tags=["status"])
+def capacity_forecast(db: Session = Depends(get_db), c: Container = Depends(container),
+                      _: Principal = Depends(require("capacity:read"))) -> dict:
+    from app.services import capacity
+
+    return capacity.forecast(c, db, c.clock.now().date())
+
+
+@router.get("/v1/usage-reports", tags=["status"])
+def usage_report(month: str = Query(pattern=r"^[0-9]{4}-(0[1-9]|1[0-2])$"), db: Session = Depends(get_db),
+                 p: Principal = Depends(require("usage_report:read"))) -> dict:
+    """기관별 월간 자원 사용량 (08번 요구사항 10). 기관 범위는 인증 정보로만: 운영자는 전체, ORG_ADMIN은 자기 기관."""
+    from app.services import capacity
+
+    org = None if p.has_role("PLATFORM_OPERATOR") else p.organization_id
+    return {"month": month, "items": capacity.monthly_report(db, month, org)}
+
+
 @router.post("/v1/retention/dry-run", tags=["status"])
 def retention_dry_run(db: Session = Depends(get_db), c: Container = Depends(container),
                       _: Principal = Depends(require("retention:run"))) -> dict:

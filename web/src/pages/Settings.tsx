@@ -4,7 +4,7 @@ import { Alert, App, Button, Card, Checkbox, Form, Input, Modal, Select, Space, 
 import { useState } from 'react'
 import type { components } from '../contract/api.gen'
 import { api, ApiError, post, type Device, type Me, type Page } from '../lib/api'
-import { kst } from '../lib/format'
+import { bytes, kst } from '../lib/format'
 import { explain } from '../lib/problems'
 
 interface CardContent {
@@ -22,6 +22,7 @@ type CardForm = Record<string, string | string[] | undefined>
 type Hook = components['schemas']['WebhookSubscription']
 type Agreement = components['schemas']['Agreement']
 type Grant = components['schemas']['BreakGlassGrant']
+type UsageReport = components['schemas']['UsageReport']
 
 const EVENTS = ['upload.registered', 'upload.quarantined', 'asset.processed', 'share.status_changed', 'grant.revoked']
 const COPY = ['RETAINED', 'ROTATING', 'NONE', 'UNKNOWN']
@@ -61,6 +62,25 @@ function fromContent(c: CardT | null): CardForm {
     integration_methods: x.integration_methods, desired_services: x.desired_services }
   for (const [k] of NOTES) v[k] = str((x[k] as { note?: string } | undefined)?.note)
   return v
+}
+
+// 월간 자원 사용량 (08번 요구사항 10): 금액 없이 사용량만
+function MonthlyUsage() {
+  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7))
+  const r = useQuery({ queryKey: ['usage-report', month], queryFn: () => api<{ items: UsageReport[] }>(`/v1/usage-reports?month=${month}`) })
+  const u = r.data?.items[0]
+  return (
+    <Card title="월간 자원 사용량" extra={<Input type="month" aria-label="월" value={month} onChange={(e) => e.target.value && setMonth(e.target.value)} style={{ width: 160 }} />} loading={r.isLoading}>
+      {u && (
+        <Space direction="vertical">
+          <Typography.Text>저장 ({u.snapshot_day ?? '스냅숏 없음'} 기준): {Object.entries(u.storage_by_zone).filter(([, v]) => v).map(([z, v]) => `${z} ${bytes(v)}`).join(' · ') || '0'}</Typography.Text>
+          <Typography.Text>독립 백업 대상 {bytes(u.backup_target_bytes)} · 신청 백업 {bytes(u.requested_backup_bytes)}</Typography.Text>
+          <Typography.Text>처리 시간 CPU {Math.round(u.processing_seconds.CPU / 60)}분 · GPU {Math.round(u.processing_seconds.GPU / 60)}분</Typography.Text>
+          <Typography.Text>다운로드 URL {u.downloads.url_count}건 ({bytes(u.downloads.url_bytes)}, 발급 기준) · 데이터셋 배포 {u.downloads.distribution_count}건</Typography.Text>
+        </Space>
+      )}
+    </Card>
+  )
 }
 
 export function OrgSettings({ me }: { me: Me }) {
@@ -126,6 +146,8 @@ export function OrgSettings({ me }: { me: Me }) {
           ]} />
         {hooks.data?.items.some((h) => !h.active) && <Alert type="warning" showIcon style={{ marginTop: 8 }} message="전송이 계속 실패해 중지된 구독이 있습니다. 수신 서버를 고친 뒤 새로 등록하세요." />}
       </Card>
+
+      <MonthlyUsage />
 
       <Card title="약정 (운영기관 기록)">
         <Table rowKey="agreement_id" size="small" pagination={false} dataSource={agreements.data?.items ?? []} locale={{ emptyText: '기록된 약정이 없습니다' }}

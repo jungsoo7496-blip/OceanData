@@ -12,6 +12,7 @@ interface Audit { audit_id: string; occurred_at: string; actor_kind: string; act
 type Agreement = components['schemas']['Agreement']
 type Grant = components['schemas']['BreakGlassGrant']
 type BackupRun = components['schemas']['BackupRun']
+type Forecast = components['schemas']['CapacityForecast']
 const PURPOSES = ['JOINT_RESEARCH', 'AI_TRAINING', 'MODEL_IMPROVEMENT', 'COMMERCIAL_SERVICE', 'EXTERNAL_SALE']
 
 function failText(e: unknown): string {
@@ -106,6 +107,25 @@ function BreakGlass() {
   )
 }
 
+// 용량 예측 (08번 요구사항 8): 일별 스냅숏 추세로 설정 사용률 도달 예상일
+function CapacityForecast() {
+  const f = useQuery({ queryKey: ['capacity'], queryFn: () => api<Forecast>('/v1/capacity-forecast') })
+  const d = f.data
+  return (
+    <Card title="용량 예측" loading={f.isLoading}>
+      {d && (
+        <Space direction="vertical">
+          <Typography.Text>현재 {bytes(d.current_bytes)}{d.capacity_bytes ? ` / 전체 ${bytes(d.capacity_bytes)} (${Math.round((d.current_ratio ?? 0) * 1000) / 10}%)` : ''}</Typography.Text>
+          <Typography.Text>추세 {d.slope_bytes_per_day != null ? `${bytes(Math.max(0, d.slope_bytes_per_day))}/일` : '-'} (최근 {d.window_days}일 스냅숏 {d.history.length}개)</Typography.Text>
+          {d.reach_date
+            ? <Tag color={d.within_lead_time ? 'red' : 'green'}>사용률 {Math.round(d.threshold_ratio * 100)}% 도달 예상 {d.reach_date}{d.within_lead_time ? ` · 리드타임 ${d.lead_time_days}일 안` : ''}</Tag>
+            : <Typography.Text type="secondary">{d.note}</Typography.Text>}
+        </Space>
+      )}
+    </Card>
+  )
+}
+
 // 백업 회차·복원 시험 결과 (08번 요구사항 6·7)
 function BackupRuns() {
   const { message } = App.useApp()
@@ -168,6 +188,7 @@ export function OperatorConsole() {
             { title: '사유', key: 'r', render: (_, a) => <Tag color="red">{QUARANTINE_LABEL[a.quarantine_reason ?? '']}</Tag> },
             { title: '받은 시각', dataIndex: 'ingested_at', render: kst }]} />
       </Card>
+      <CapacityForecast />
       <Agreements />
       <BreakGlass />
       <BackupRuns />

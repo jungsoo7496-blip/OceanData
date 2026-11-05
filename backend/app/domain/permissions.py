@@ -72,6 +72,8 @@ PERMISSIONS: dict[str, Rule] = {
     "backup:read": Rule(frozenset({"PLATFORM_OPERATOR"})),
     "backup:run": Rule(frozenset({"PLATFORM_OPERATOR"})),
     "backup:request": Rule(frozenset({"ORG_ADMIN"})),  # 기관 백업 신청 (요구사항 6.4, 사용량에 반영)
+    "capacity:read": Rule(frozenset({"PLATFORM_OPERATOR"})),  # 용량 예측 (요구사항 8)
+    "usage_report:read": Rule(frozenset({"ORG_ADMIN", "PLATFORM_OPERATOR"})),  # 월간 사용량 (요구사항 10)
     "legal_hold:set": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),
     "asset:delete": Rule(frozenset({"ORG_ADMIN"}), mfa=True),
     "deletion_certificate:read": Rule(frozenset({"ORG_ADMIN", "PLATFORM_OPERATOR"})),

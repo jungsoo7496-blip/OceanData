@@ -29,3 +29,10 @@
 용량을 `org_quotas.backup_bytes`에 더하고 감사(BACKUP_REQUESTED_BY_ORG). 다음 백업 회차 대상(ADR-0021 술어). 자산을 지우면 신청 용량도 뺀다.
 장비의 local_copy_policy는 연계 카드(03번 작업 17)에서 들어온다.
 
+## 용량 예측·월간 리포트 (요구사항 8, 10)
+- 워커가 하루 한 번 `usage_snapshots`(0018)에 기관별 쿼터 장부(등록·격리·예약·신청 백업)·존별 활성 자산 크기·독립 백업 대상 크기를 남긴다.
+- `GET /v1/capacity-forecast`(운영자): 최근 `CAPACITY_WINDOW_DAYS`(30) 스냅숏 합계의 최소제곱 기울기로 `CAPACITY_THRESHOLD_RATIO`(0.7) 도달 예상일.
+  전체 용량 `STORAGE_CAPACITY_BYTES`가 없으면 예측일 없이 '확인 필요'. 예상일이 `CAPACITY_LEAD_TIME_DAYS`(180) 안이면 하루 한 번 운영자 메일.
+- `GET /v1/usage-reports?month=YYYY-MM`(ORG_ADMIN 자기 기관, 운영자 전체): 그 달 마지막 스냅숏의 존별 저장량, 처리 시간(작업 마지막 시도의
+  locked_at~updated_at, CPU/GPU), 다운로드 URL 발급 수·대상 크기(실제 전송량 아님), 데이터셋 배포 수. 금액은 넣지 않는다.
+

@@ -17,6 +17,6 @@
 - [x] 13c. 공용 이미지 PG16 도구·Compose 백업 설정·소유자 연결 전달·주버전 불일치 거부 — 요구사항 6.1, 6.3, 7.1 · ADR-0022 · 단위 `test_backup_tools.py`·T10·비루트 이미지 CLI 백업/복원 확인. API·DB 구조 변경 없음(새 마이그레이션·down 해당 없음)
 - [x] 14. ROTATING·NONE·UNKNOWN 원천 장비 자산 백업 신청 → 예상 용량(dry_run)·쿼터 확인·PROTECTED·backup_bytes 반영·삭제 시 차감 — 요구사항 6.4 · `POST /v1/backup-requests`, `assets.backup_requested_at`(0017) · 시험 `tests/integration/test_backup_request.py`
 - [x] 15. `make restore-test`·복원 Runbook — 요구사항 7.1, 7.2 · `docs/runbook/03-backup-restore.md` · PG16 이미지에서 CLI 복원 `ok: true`, T10 통과(2026-11-04). 스테이징 운영 인수 기록(T14)은 별도
-- [ ] 16. 용량 예측(일별 추세·70% 도달 예상일·리드타임 알림) — 요구사항 8.1, 8.2
+- [x] 16. 용량 예측(일별 스냅숏 `usage_snapshots`(0018)·최소제곱 추세·70% 도달 예상일·리드타임 180일 알림) — 요구사항 8.1, 8.2 · `GET /v1/capacity-forecast` · 시험 `tests/integration/test_capacity.py`. **전체 용량(STORAGE_CAPACITY_BYTES)은 하드웨어 확정 후 입력**
 - [ ] 17. Hot/Warm 계층 설정·Tier_Mover(복사→sha256 확인→원본 삭제·위치 갱신, 이동 중 조회 유지) — 요구사항 9.1~9.4
-- [ ] 18. 기관별 월간 자원 사용 리포트(P1) — 요구사항 10.1, 10.2
+- [x] 18. 기관별 월간 자원 사용 리포트 — 요구사항 10.1, 10.2 · `GET /v1/usage-reports?month=`(존별 저장·백업 대상·신청 백업·처리 시간 CPU/GPU 근사·다운로드 URL 발급 기준·배포 수, 금액 없음). Hot/Warm 미구현이라 모두 HOT

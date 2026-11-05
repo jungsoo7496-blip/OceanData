@@ -1579,6 +1579,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/capacity-forecast": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 전체 스토리지 용량 예측 (PLATFORM_OPERATOR). 일별 사용량 추세로 설정 사용률 도달 예상일
+         * @description 08번 요구사항 8. 일별 스냅숏(최근 window_days)의 선형 추세. 전체 용량(STORAGE_CAPACITY_BYTES)이 설정되지 않으면
+         *     capacity_bytes=null, reach_date=null, note에 '확인 필요'. 예상일이 리드타임 안이면 워커가 하루 한 번 운영자에게 알린다.
+         */
+        get: operations["getCapacityForecast"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/usage-reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 기관별 월간 자원 사용량 (ORG_ADMIN은 자기 기관, 운영자는 전체). 금액 없이 사용량만
+         * @description 08번 요구사항 10. 존별 저장량(그 달 마지막 스냅숏), 백업 대상 용량, 처리 작업 시간(CPU·GPU, 작업 마지막 시도의 시작~끝 근사),
+         *     다운로드(발급한 URL 기준 — 실제 전송량이 아님). Hot/Warm 계층은 아직 없어 모두 HOT으로 센다.
+         */
+        get: operations["getUsageReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/retention/dry-run": {
         parameters: {
             query?: never;
@@ -2389,6 +2431,57 @@ export interface components {
                 reserved_bytes: number;
                 /** @description 기관이 신청한 백업 용량 */
                 backup_bytes: number;
+            };
+        };
+        CapacityForecast: {
+            capacity_bytes: number | null;
+            threshold_ratio: number;
+            lead_time_days: number;
+            window_days: number;
+            current_bytes: number;
+            current_ratio?: number | null;
+            /** @description 일별 증가량 추세 (스냅숏 2일 미만이면 null) */
+            slope_bytes_per_day: number | null;
+            /**
+             * Format: date
+             * @description 설정 사용률 도달 예상일 (이미 넘었으면 오늘
+             */
+            reach_date: string | null;
+            within_lead_time: boolean;
+            note?: string | null;
+            history: {
+                /** Format: date */
+                day: string;
+                total_bytes: number;
+            }[];
+        };
+        UsageReport: {
+            organization_id: components["schemas"]["organization_id"];
+            /**
+             * Format: date
+             * @description 저장량 기준 스냅숏 날짜 (그 달 마지막)
+             */
+            snapshot_day?: string | null;
+            storage_by_zone: {
+                [key: string]: number;
+            };
+            storage_by_tier: {
+                [key: string]: number;
+            };
+            /** @description 독립 백업 대상 용량 (PROTECTED·EVIDENCE·DATASET·DEID) */
+            backup_target_bytes: number;
+            /** @description 기관이 신청한 백업 용량 (사용량에 포함) */
+            requested_backup_bytes: number;
+            processing_seconds: {
+                CPU: number;
+                GPU: number;
+            };
+            downloads: {
+                url_count: number;
+                /** @description 발급한 다운로드 URL 대상 크기 합 (실제 전송량 아님) */
+                url_bytes: number;
+                /** @description 데이터셋 배포 발급 수 (이용기관이면 받은 것) */
+                distribution_count: number;
             };
         };
         BreakGlassGrant: {
@@ -7433,6 +7526,56 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             422: components["responses"]["Unprocessable"];
+        };
+    };
+    getCapacityForecast: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 예측 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapacityForecast"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getUsageReport: {
+        parameters: {
+            query: {
+                month: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 월간 사용량 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        month: string;
+                        items: components["schemas"]["UsageReport"][];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     retentionDryRun: {

@@ -234,6 +234,12 @@ def maintenance(c: Container) -> None:
     for g in ended:
         c.audit.record("BREAK_GLASS_EXPIRED", actor_kind="SYSTEM", actor_id="worker", organization_id=g.organization_id,
                        target_type="BreakGlassGrant", target_id=g.grant_id)
+    # 하루 한 번: 기관별 사용량 스냅숏 → 용량 예측·리드타임 알림 (08번 요구사항 8·10)
+    from app.services import capacity
+
+    today = c.clock.now().date()
+    retention.run_daily(c, "usage_snapshot", lambda db: {"orgs": capacity.snapshot(c, db, today)})
+    retention.run_daily(c, "capacity_forecast", lambda db: capacity.notify_if_near(c, db, today))
     # 정기 백업 (08번 요구사항 6.1): BACKUP_ENABLED일 때 BACKUP_INTERVAL_H마다
     from app.services import backup
 

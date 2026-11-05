@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -1151,3 +1152,18 @@ class WebhookDelivery(Base):
     last_error: Mapped[str | None] = mapped_column(String(300))
     created_at: Mapped[datetime] = mapped_column(TS)
     delivered_at: Mapped[datetime | None] = mapped_column(TS)
+
+
+class UsageSnapshot(Base):
+    """기관별 일별 사용량 스냅숏 (08번 요구사항 8 용량 예측, 10 월간 리포트). 워커가 하루 한 번 쓴다."""
+
+    __tablename__ = "usage_snapshots"
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    stored_bytes: Mapped[int] = mapped_column(BigInteger)
+    quarantine_bytes: Mapped[int] = mapped_column(BigInteger)
+    reserved_bytes: Mapped[int] = mapped_column(BigInteger)
+    backup_bytes: Mapped[int] = mapped_column(BigInteger)  # 기관이 신청한 백업 (사용량에 포함)
+    by_zone: Mapped[dict[str, Any]] = mapped_column(JSONB)  # 존별 활성 자산 크기 합
+    backup_target_bytes: Mapped[int] = mapped_column(BigInteger)  # 독립 백업 대상 (ADR-0021 술어)
+    created_at: Mapped[datetime] = mapped_column(TS)

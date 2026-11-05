@@ -82,6 +82,11 @@ class Settings(BaseSettings):
 
     # 저장·보존 (08번)
     backup_retention_days: int = 90
+    # 용량 예측 (08번 요구사항 8). 전체 용량은 하드웨어 확정 후 — 비우면 예측일 없이 '확인 필요'
+    storage_capacity_bytes: int | None = None
+    capacity_threshold_ratio: float = 0.7
+    capacity_lead_time_days: int = 180
+    capacity_window_days: int = 30
     # 계층형 백업 (08번 요구사항 6·7, ADR-0021). 대상 S3를 비우면 같은 S3의 backup_bucket (개발용)
     backup_enabled: bool = False  # 워커가 backup_interval_h마다 백업. 켜기 전에 pg_dump 주버전·대상 S3 확인
     backup_interval_h: int = 24

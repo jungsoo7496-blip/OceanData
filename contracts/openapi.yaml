@@ -2685,6 +2685,55 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '422': {$ref: '#/components/responses/Unprocessable'}
 
+  /v1/capacity-forecast:
+    get:
+      tags: [status]
+      operationId: getCapacityForecast
+      summary: 전체 스토리지 용량 예측 (PLATFORM_OPERATOR). 일별 사용량 추세로 설정 사용률 도달 예상일
+      description: |
+        08번 요구사항 8. 일별 스냅숏(최근 window_days)의 선형 추세. 전체 용량(STORAGE_CAPACITY_BYTES)이 설정되지 않으면
+        capacity_bytes=null, reach_date=null, note에 '확인 필요'. 예상일이 리드타임 안이면 워커가 하루 한 번 운영자에게 알린다.
+      x-freeze: G1
+      x-status: draft
+      responses:
+        '200':
+          description: 예측
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CapacityForecast'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /v1/usage-reports:
+    get:
+      tags: [status]
+      operationId: getUsageReport
+      summary: 기관별 월간 자원 사용량 (ORG_ADMIN은 자기 기관, 운영자는 전체). 금액 없이 사용량만
+      description: |
+        08번 요구사항 10. 존별 저장량(그 달 마지막 스냅숏), 백업 대상 용량, 처리 작업 시간(CPU·GPU, 작업 마지막 시도의 시작~끝 근사),
+        다운로드(발급한 URL 기준 — 실제 전송량이 아님). Hot/Warm 계층은 아직 없어 모두 HOT으로 센다.
+      x-freeze: G1
+      x-status: draft
+      parameters:
+        - name: month
+          in: query
+          required: true
+          schema: {type: string, pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'}
+      responses:
+        '200':
+          description: 월간 사용량
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [month, items]
+                properties:
+                  month: {type: string}
+                  items: {type: array, items: {$ref: '#/components/schemas/UsageReport'}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
   /v1/retention/dry-run:
     post:
       tags: [status]
@@ -4076,6 +4125,53 @@ components:
             quarantine_bytes: {type: integer, minimum: 0}
             reserved_bytes: {type: integer, minimum: 0, description: 진행 중 업로드 예약량}
             backup_bytes: {type: integer, minimum: 0, description: 기관이 신청한 백업 용량}
+
+    CapacityForecast:
+      type: object
+      required: [capacity_bytes, threshold_ratio, lead_time_days, window_days, current_bytes, slope_bytes_per_day, reach_date, within_lead_time, history]
+      properties:
+        capacity_bytes: {type: [integer, 'null']}
+        threshold_ratio: {type: number}
+        lead_time_days: {type: integer}
+        window_days: {type: integer}
+        current_bytes: {type: integer}
+        current_ratio: {type: [number, 'null']}
+        slope_bytes_per_day: {type: [number, 'null'], description: 일별 증가량 추세 (스냅숏 2일 미만이면 null)}
+        reach_date: {type: [string, 'null'], format: date, description: 설정 사용률 도달 예상일 (이미 넘었으면 오늘, 줄어들면 null)}
+        within_lead_time: {type: boolean}
+        note: {type: [string, 'null']}
+        history:
+          type: array
+          items:
+            type: object
+            required: [day, total_bytes]
+            properties:
+              day: {type: string, format: date}
+              total_bytes: {type: integer}
+
+    UsageReport:
+      type: object
+      required: [organization_id, storage_by_zone, storage_by_tier, backup_target_bytes, requested_backup_bytes, processing_seconds, downloads]
+      properties:
+        organization_id: {$ref: './schemas/common.schema.json#/$defs/organization_id'}
+        snapshot_day: {type: [string, 'null'], format: date, description: 저장량 기준 스냅숏 날짜 (그 달 마지막)}
+        storage_by_zone: {type: object, additionalProperties: {type: integer}}
+        storage_by_tier: {type: object, additionalProperties: {type: integer}}
+        backup_target_bytes: {type: integer, description: 독립 백업 대상 용량 (PROTECTED·EVIDENCE·DATASET·DEID)}
+        requested_backup_bytes: {type: integer, description: 기관이 신청한 백업 용량 (사용량에 포함)}
+        processing_seconds:
+          type: object
+          required: [CPU, GPU]
+          properties:
+            CPU: {type: number}
+            GPU: {type: number}
+        downloads:
+          type: object
+          required: [url_count, url_bytes, distribution_count]
+          properties:
+            url_count: {type: integer}
+            url_bytes: {type: integer, description: 발급한 다운로드 URL 대상 크기 합 (실제 전송량 아님)}
+            distribution_count: {type: integer, description: 데이터셋 배포 발급 수 (이용기관이면 받은 것)}
 
     BreakGlassGrant:
       type: object
