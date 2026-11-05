@@ -1,6 +1,6 @@
 # 수용시험 결과 (2026-11-05, 로컬 검증 누적)
 
-> 백엔드 기준선은 2026-11-04 결과다. 2026-11-05에 T01-h 로컬 보안 보고서·T02-g 실제 브라우저 재개와 Go 전체 50건(MQTT 포함)·T03-b 에이전트 결과를 추가했다.
+> 백엔드 기준선은 2026-11-04 결과다. 2026-11-05 클라우드: T01-e를 실제 SeaweedFS로 확인해 PASS로 바꿨다 (docker 필요, 없으면 건너뜀). 2026-11-05에 T01-h 로컬 보안 보고서·T02-g 실제 브라우저 재개와 Go 전체 50건(MQTT 포함)·T03-b 에이전트 결과를 추가했다.
 > T03-b는 실제 프로세스 강제 종료와 주입 시계 72시간 모의 단절 시험이며, 실제 72시간·PC 전원 차단·15번 엣지 장비 검증은 별도다.
 > 다시 만들기: `make test-acceptance`, 보안 보고서는 `tools/security_acceptance.py`로 연결한다. 원본은 `var/acceptance-results.jsonl`이다.
 > 이 표는 로컬 검증 범위이며 새 원격 GitHub Actions나 전체 릴리스 성공을 뜻하지 않는다. strict 라이선스 검사는 미상·승인 대기 항목 때문에 차단 중이다.
@@ -11,8 +11,8 @@
 |---|---|
 | NEEDS_HARDWARE | 2 |
 | NEEDS_INPUT | 4 |
-| NOT_IMPLEMENTED | 6 |
-| PASS | 72 |
+| NOT_IMPLEMENTED | 5 |
+| PASS | 73 |
 
 | ID | 케이스 | 상태 | 시험 / 사유 |
 |---|---|---|---|
@@ -20,7 +20,7 @@
 | T01-b | 목록·검색·자동완성 결과 건수와 응답으로 B 기관 데이터 존재 추정 | PASS | tests/acceptance/test_t01_tenant_isolation.py::test_T01_b_lists_do_not_reveal_other_org<br>tests/acceptance/test_t01_tenant_isolation.py::test_T01_b_pagination_stays_in_scope |
 | T01-c | 요청 본문·쿼리·헤더에 B 기관 organization_id를 넣음 | PASS | tests/acceptance/test_t01_tenant_isolation.py::test_T01_c_body_query_header_org_id_do_not_change_scope<br>tests/integration/test_identity.py::test_organization_id_in_query_or_header_is_rejected |
 | T01-d | 만료·변조·다른 대상(audience) 토큰 | PASS | tests/integration/test_identity.py::test_user_token_validation_and_audit |
-| T01-e | 사전 서명 URL의 객체 키·만료·서명 변조 | NOT_IMPLEMENTED |  |
+| T01-e | 사전 서명 URL의 객체 키·만료·서명 변조 | PASS | tests/acceptance/test_t01e_presigned_tamper.py::test_t01e_tampered_presigned_urls_are_rejected (일회용 SeaweedFS 3.80 컨테이너, 플랫폼 S3Storage.presign_get — 키·만료·서명·서명 시각·자격증명 변조와 만료 URL 모두 400/403, 원본 노출 0. 2026-11-05) |
 | T01-f | PROGRAM_VIEWER가 L1 자산의 원본·프록시·다운로드 URL 요청 | PASS | tests/acceptance/test_t01_tenant_isolation.py::test_T01_f_program_viewer_scope |
 | T01-g | 검수자·운영자 역할로 제공기관 승인을 대신하려 함 | PASS | tests/acceptance/test_t01_tenant_isolation.py::test_T01_g_operator_and_reviewer_cannot_act_as_provider_admin |
 | T01-h | 동적 보안 검사(ZAP)·의존성 취약점 검사 | PASS | tools/security_acceptance.py::T01_h_local_scan_reports |
