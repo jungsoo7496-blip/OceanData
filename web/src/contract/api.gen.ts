@@ -787,6 +787,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/policy-drafts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 장비 정책 초안 목록 (제공기관은 자기 기관, 운영자는 전체)
+         * @description 09번 요구사항 3.2·3.3 (ADR-0037). 초안은 운영자가 적용하기 전까지 장비 기록·장비 정책을 바꾸지 않는다.
+         *     목록에는 미리 보기(preview)를 넣지 않는다 — 상세 조회(getPolicyDraft)로 본다.
+         */
+        get: operations["listPolicyDrafts"];
+        put?: never;
+        /**
+         * 장비 정책 초안 만들기 (ORG_ADMIN 자기 기관, 또는 PLATFORM_OPERATOR). 아무것도 바꾸지 않는다
+         * @description 09번 요구사항 3.2. 원천 장비(또는 스스로 원천인 수집기) 하나의 정책 초안을 만든다. 정책은 수집기 단위로 배포되므로
+         *     초안은 그 장비가 매핑된 수집기 정책의 sources[] 항목(transfer_windows만 수집기 전체)을 바꾸는 제안이다.
+         *
+         *     연계 카드를 고르면 카드의 구조화된 값만 미리 채운다(status=FROM_CARD): collection_mode_requested → collection_mode,
+         *     current_storage.local_copy_policy → local_copy_policy, current_storage.local_retention_days → local_retention_days.
+         *     자유 기록(note 등)에서는 값을 뽑지 않는다. 그 밖의 항목(허용 data_role, 기대 수집 주기, 전송 허용 시간대, source_timezone)은
+         *     values로 직접 넣거나 '확인 필요'(NEEDS_CONFIRMATION)로 남는다. 카드의 장비가 이 장비나 그 수집기가 아니면 422.
+         *     장비마다 검토 중(DRAFT) 초안은 하나뿐이다 — 이미 있으면 409이고 그 초안을 고친다(updatePolicyDraft).
+         */
+        post: operations["createPolicyDraft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/policy-drafts/{policy_draft_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                policy_draft_id: components["schemas"]["policy_draft_id"];
+            };
+            cookie?: never;
+        };
+        /** 장비 정책 초안 (DRAFT이면 지금 정책과 비교한 미리 보기 포함) */
+        get: operations["getPolicyDraft"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * 초안 고치기 (ORG_ADMIN 자기 기관, 또는 PLATFORM_OPERATOR). DRAFT일 때만, revision이 맞을 때만
+         * @description values의 항목은 ENTERED(사람이 넣은 값)가 되고 needs_confirmation의 항목은 '확인 필요'로 돌아간다. 보내지 않은 항목은 그대로다.
+         *     revision이 지금 값과 다르면(그 사이 누가 고쳤으면) 409. 고칠 때마다 revision이 1 오른다. 바뀐 항목의 전후는 감사
+         *     POLICY_DRAFT_UPDATED(메모는 길이만).
+         */
+        patch: operations["updatePolicyDraft"];
+        trace?: never;
+    };
+    "/v1/policy-drafts/{policy_draft_id}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                policy_draft_id: components["schemas"]["policy_draft_id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 초안 적용 (PLATFORM_OPERATOR, 다중 인증). 수집기 정책 새 버전을 쓰고 장비 기록을 맞춘다
+         * @description 09번 요구사항 3.3 — 운영자가 확인한 초안만 적용한다. ORG_ADMIN은 자기 초안을 적용할 수 없다.
+         *     지금 수집기 정책(저장본, 없으면 장비 표로 만든 기본 정책)에서 이 장비 항목만 초안 값으로 바꾸고(transfer_windows는 수집기 전체),
+         *     '확인 필요' 항목은 지금 값을 그대로 둔다. 결과는 device-policy.schema.json·매핑·같은 기관 카드 검사를 통과해야 하며
+         *     (관리 명령 set-policy와 같은 검사), 새 버전으로 저장되고 policy_version은 'pv-<버전>'이다. 초안이 정한 항목은 장비 기록
+         *     (collection_mode·local_copy_policy·local_retention_days·expected_interval_s·source_timezone)에도 반영한다 — 수집 서버의
+         *     variant 허용·시각 변환·수집 정상성 판정이 그 값을 쓴다. 감사 POLICY_CHANGED(전후 값)·POLICY_DRAFT_APPLIED.
+         *     검토한 revision과 다르면 409, 검사에 걸리면 422(unmet_conditions).
+         */
+        post: operations["applyPolicyDraft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/policy-drafts/{policy_draft_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                policy_draft_id: components["schemas"]["policy_draft_id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 초안 반려 (PLATFORM_OPERATOR, 다중 인증). 사유 필수, 아무것도 바꾸지 않는다 */
+        post: operations["rejectPolicyDraft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/codes/{table}": {
         parameters: {
             query?: never;
@@ -3376,6 +3480,182 @@ export interface components {
             created_by: string;
             /** Format: date-time */
             created_at: string;
+            /** @description 09번 요구사항 3.4 — 이 버전에서 비어 있거나 '확인 필요'로 적힌 분야 (기준 문서 부록 A 순서) */
+            open_items: components["schemas"]["IntegrationCardOpenItem"][];
+            difficulty_grade: components["schemas"]["DifficultyGrade"];
+        };
+        IntegrationCardOpenItem: {
+            /**
+             * @description 부록 A 분야 (integration-card.schema.json의 최상위 항목)
+             * @enum {unknown}
+             */
+            section: "basic" | "equipment" | "data" | "volume" | "time_sync" | "network" | "current_storage" | "collection_mode_requested" | "core_byproduct" | "rights_privacy" | "integration_methods" | "desired_services" | "report_forms" | "samples" | "termination";
+            /** @description 화면 이름 (예 시각) */
+            label: string;
+            /**
+             * @description EMPTY=분야가 없거나 비어 있음. NEEDS_CONFIRMATION=값에 '확인 필요'가 적혀 있거나 현장 사본 정책이 UNKNOWN(모름)
+             * @enum {unknown}
+             */
+            state: "EMPTY" | "NEEDS_CONFIRMATION";
+            /** @description NEEDS_CONFIRMATION인 값의 위치 (JSON Pointer, 예 /equipment/0/model). EMPTY면 빈 목록 */
+            pointers: string[];
+        };
+        /** @description 연계 난이도 등급 (요구사항 3.4). 판정 기준이 아직 정해지지 않아 등급을 매기지 않는다 — ADR-0037 미결 사항 */
+        DifficultyGrade: {
+            /** @description 기준이 정해지기 전에는 항상 null */
+            grade: string | null;
+            /** @description 판정 기준 확정 여부 (지금은 false) */
+            criteria_defined: boolean;
+            /** @example 기준 미정 — 확인 필요 */
+            note: string;
+        };
+        /**
+         * @description DRAFT=운영자 확인 전(아무것도 바뀌지 않음). APPLIED=운영자가 적용함. REJECTED=운영자가 반려함. 끝난 초안은 다시 바뀌지 않는다
+         * @enum {unknown}
+         */
+        PolicyDraftStatus: "DRAFT" | "APPLIED" | "REJECTED";
+        /**
+         * @description transfer_windows만 수집기 정책 전체(최상위)에 적용되고 나머지는 이 장비의 sources[] 항목에 적용된다
+         * @enum {unknown}
+         */
+        PolicyDraftFieldName: "collection_mode" | "allowed_data_roles" | "local_copy_policy" | "local_retention_days" | "expected_interval_s" | "transfer_windows" | "source_timezone";
+        /** @description 사람이 넣는 값. 형식은 장비 정책 계약(device-policy.schema.json)의 같은 항목과 같다. null은 '없음'(예 source_timezone 없음)이고 '확인 필요'가 아니다. transfer_windows의 빈 목록은 '제한 없음(항상 전송)' */
+        PolicyDraftValues: {
+            collection_mode?: components["schemas"]["collection_mode"];
+            allowed_data_roles?: components["schemas"]["allowed_data_roles"];
+            local_copy_policy?: components["schemas"]["local_copy_policy"];
+            local_retention_days?: components["schemas"]["local_retention_days"];
+            expected_interval_s?: components["schemas"]["expected_interval_s"];
+            transfer_windows?: components["schemas"]["transfer_windows"];
+            source_timezone?: components["schemas"]["source_timezone"];
+        };
+        /** @description 비교용 값 묶음 (지금 정책·적용 후). 일곱 항목이 모두 있다. transfer_windows가 없는 정책은 빈 목록으로 보인다 */
+        PolicySettings: WithRequired<components["schemas"]["PolicyDraftValues"], "collection_mode" | "allowed_data_roles" | "local_copy_policy" | "local_retention_days" | "expected_interval_s" | "transfer_windows" | "source_timezone">;
+        PolicyDraftField: {
+            /**
+             * @description FROM_CARD=연계 카드의 구조화된 값으로 채움. ENTERED=사람이 넣음. NEEDS_CONFIRMATION=확인 필요 — 적용해도 지금 값을 그대로 둔다
+             * @enum {unknown}
+             */
+            status: "FROM_CARD" | "ENTERED" | "NEEDS_CONFIRMATION";
+            /** @description NEEDS_CONFIRMATION이면 없다. 형식은 PolicyDraftValues의 같은 항목 */
+            value?: unknown;
+            /** @description FROM_CARD일 때 값을 가져온 카드 내용 위치 (JSON Pointer) */
+            card_pointer?: string;
+        };
+        PolicyDraftFields: {
+            collection_mode: {
+                value?: components["schemas"]["collection_mode"];
+            } & components["schemas"]["PolicyDraftField"];
+            allowed_data_roles: {
+                value?: components["schemas"]["allowed_data_roles"];
+            } & components["schemas"]["PolicyDraftField"];
+            local_copy_policy: {
+                value?: components["schemas"]["local_copy_policy"];
+            } & components["schemas"]["PolicyDraftField"];
+            local_retention_days: {
+                value?: components["schemas"]["local_retention_days"];
+            } & components["schemas"]["PolicyDraftField"];
+            expected_interval_s: {
+                value?: components["schemas"]["expected_interval_s"];
+            } & components["schemas"]["PolicyDraftField"];
+            transfer_windows: {
+                value?: components["schemas"]["transfer_windows"];
+            } & components["schemas"]["PolicyDraftField"];
+            source_timezone: {
+                value?: components["schemas"]["source_timezone"];
+            } & components["schemas"]["PolicyDraftField"];
+        };
+        PolicyDraftCreate: {
+            device_id: components["schemas"]["device_id"];
+            integration_card_id?: components["schemas"]["integration_card_id"];
+            /** @description 비우면 최신 버전 (integration_card_id가 있어야 한다) */
+            integration_card_version?: number;
+            values?: components["schemas"]["PolicyDraftValues"];
+            /** @description 카드에 값이 있어도 '확인 필요'로 둘 항목. values와 겹치면 400 */
+            needs_confirmation?: components["schemas"]["PolicyDraftFieldName"][];
+            note?: string;
+        };
+        PolicyDraftPatch: {
+            /** @description 지금 보고 있는 초안의 revision (다르면 409) */
+            revision: number;
+            values?: components["schemas"]["PolicyDraftValues"];
+            /** @description 확인 필요(NEEDS_CONFIRMATION)로 되돌릴 항목. values와 겹치면 400 */
+            needs_confirmation?: components["schemas"]["PolicyDraftFieldName"][];
+            note?: string | null;
+        };
+        PolicyDraftApply: {
+            /** @description 검토한 초안의 revision. 그 뒤 고쳐졌으면 409 */
+            revision: number;
+            reason?: string;
+        };
+        PolicyDraftReject: {
+            reason: string;
+        };
+        PolicyChange: {
+            field: components["schemas"]["PolicyDraftFieldName"];
+            /**
+             * @description SOURCE=이 장비 항목, COLLECTOR=수집기 전체 (transfer_windows)
+             * @enum {unknown}
+             */
+            scope?: "SOURCE" | "COLLECTOR";
+            /** @description 바뀌기 전 값 (형식은 PolicyDraftValues의 같은 항목) */
+            before: unknown;
+            /** @description 바뀐 뒤 값 */
+            after: unknown;
+        };
+        /** @description 지금 상태에서 적용하면 어떻게 되는지 (조회할 때 계산). blockers가 있으면 적용은 422 */
+        PolicyDraftPreview: {
+            collector_device_id: components["schemas"]["device_id"];
+            /** @description 지금 저장된 수집기 정책 버전. null이면 저장본이 없어 장비 표로 만든 기본 정책 */
+            current_policy_version: number | null;
+            /** @description false면 적용할 때 이 장비 항목이 정책에 새로 들어간다 (지금 값은 장비 기록 기준) */
+            source_in_current_policy: boolean;
+            current: components["schemas"]["PolicySettings"];
+            proposed: components["schemas"]["PolicySettings"];
+            changes: components["schemas"]["PolicyChange"][];
+            blockers: components["schemas"]["unmet_conditions"];
+        };
+        PolicyDraftApplied: {
+            collector_device_id: components["schemas"]["device_id"];
+            /** @description 저장한 수집기 정책 버전 */
+            device_policy_version: number;
+            /** @description 에이전트가 받는 policy_version (pv-<버전>) */
+            policy_version: string;
+            /** @description 정책에서 바뀐 값 */
+            changes: components["schemas"]["PolicyChange"][];
+            /** @description 장비 기록에서 바뀐 값 */
+            device_changes: components["schemas"]["PolicyChange"][];
+        };
+        PolicyDraft: {
+            policy_draft_id: components["schemas"]["policy_draft_id"];
+            organization_id: components["schemas"]["organization_id"];
+            device_id: components["schemas"]["device_id"];
+            /** @description 이 장비가 매핑된 수집기 (정책은 수집기 단위) */
+            collector_device_id: components["schemas"]["device_id"];
+            integration_card_id: components["schemas"]["integration_card_id"] | null;
+            /** @description 미리 채울 때 쓴 카드 버전 */
+            integration_card_version: number | null;
+            status: components["schemas"]["PolicyDraftStatus"];
+            /** @description 고칠 때마다 1씩 오른다. 적용 요청에 검토한 값을 보낸다 */
+            revision: number;
+            fields: components["schemas"]["PolicyDraftFields"];
+            /** @description 아직 '확인 필요'인 항목 (요구사항 3.4) */
+            needs_confirmation: components["schemas"]["PolicyDraftFieldName"][];
+            note: string | null;
+            created_by: string;
+            /** Format: date-time */
+            created_at: string;
+            updated_by: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** @description 적용·반려한 운영자 */
+            decided_by: string | null;
+            /** Format: date-time */
+            decided_at: string | null;
+            decision_reason: string | null;
+            applied: components["schemas"]["PolicyDraftApplied"] | null;
+            /** @description DRAFT 상태의 상세 조회·생성·수정 응답에만 있다 */
+            preview?: components["schemas"]["PolicyDraftPreview"];
         };
         Device: {
             device_id: components["schemas"]["device_id"];
@@ -4143,6 +4423,28 @@ export interface components {
                 };
             };
         };
+        /** @description 장비 정책 초안 (09번 요구사항 3.2·3.3, ADR-0037) */
+        policy_draft_id: string;
+        allowed_data_roles: components["schemas"]["data_role"][];
+        local_retention_days: number | null;
+        /** @description 기대 수집 주기. 수집 정상성 판정에 쓴다 (11번) */
+        expected_interval_s: number | null;
+        transfer_windows: {
+            days: ("MON" | "TUE" | "WED" | "THU" | "FRI" | "SAT" | "SUN")[];
+            start_local: string;
+            /** @description start보다 이르면 다음 날까지 이어진다 */
+            end_local: string;
+            max_kbps?: number | null;
+        }[];
+        source_timezone: components["schemas"]["iana_timezone"] | null;
+        unmet_conditions: {
+            /**
+             * @example review_result=PASSED
+             * @example 제공기관 2단 약정 유효
+             */
+            condition: string;
+            actual?: string | null;
+        }[];
         /** @enum {unknown} */
         timestamp_source: "GPS" | "NTP" | "DEVICE" | "MANIFEST" | "MANUAL" | "UNKNOWN";
         timestamp_quality: {
@@ -6350,6 +6652,225 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    listPolicyDrafts: {
+        parameters: {
+            query?: {
+                status?: components["schemas"]["PolicyDraftStatus"];
+                device_id?: components["schemas"]["device_id"];
+                integration_card_id?: components["schemas"]["integration_card_id"];
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 초안 목록 (만든 순서) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["PolicyDraft"][];
+                        next_cursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    createPolicyDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "device_id": "dev_00000000000000000000000302",
+                 *       "integration_card_id": "icd_01JD0000000000000000000001",
+                 *       "values": {
+                 *         "allowed_data_roles": [
+                 *           "CORE"
+                 *         ],
+                 *         "expected_interval_s": 3600
+                 *       },
+                 *       "needs_confirmation": [
+                 *         "source_timezone"
+                 *       ]
+                 *     }
+                 */
+                "application/json": components["schemas"]["PolicyDraftCreate"];
+            };
+        };
+        responses: {
+            /** @description 만든 초안 (지금 정책과 비교한 미리 보기 포함) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyDraft"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    getPolicyDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                policy_draft_id: components["schemas"]["policy_draft_id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 초안 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyDraft"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    updatePolicyDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                policy_draft_id: components["schemas"]["policy_draft_id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "revision": 1,
+                 *       "values": {
+                 *         "source_timezone": "Asia/Seoul"
+                 *       },
+                 *       "needs_confirmation": [
+                 *         "expected_interval_s"
+                 *       ]
+                 *     }
+                 */
+                "application/json": components["schemas"]["PolicyDraftPatch"];
+            };
+        };
+        responses: {
+            /** @description 고친 초안 (미리 보기 포함) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyDraft"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    applyPolicyDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                policy_draft_id: components["schemas"]["policy_draft_id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "revision": 2,
+                 *       "reason": "연계 카드 v2와 현장 확인 결과 반영"
+                 *     }
+                 */
+                "application/json": components["schemas"]["PolicyDraftApply"];
+            };
+        };
+        responses: {
+            /** @description 적용된 초안 (applied에 저장한 정책 버전과 바뀐 값) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyDraft"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+        };
+    };
+    rejectPolicyDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                policy_draft_id: components["schemas"]["policy_draft_id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyDraftReject"];
+            };
+        };
+        responses: {
+            /** @description 반려된 초안 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyDraft"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             429: components["responses"]["TooManyRequests"];
         };
     };
@@ -9740,3 +10261,6 @@ export interface operations {
         };
     };
 }
+type WithRequired<T, K extends keyof T> = T & {
+    [P in K]-?: T[P];
+};

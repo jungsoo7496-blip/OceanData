@@ -21,6 +21,7 @@ from app.api import (
     monitoring,
     observations,
     onboarding,
+    policy_drafts,
     reports,
     sharing,
     system,
@@ -60,6 +61,7 @@ def create_app(c: Container | None = None) -> FastAPI:
     app.include_router(observations.router)
     app.include_router(lifecycle.router)
     app.include_router(onboarding.router)
+    app.include_router(policy_drafts.router)
     app.include_router(break_glass.router)
     app.include_router(webhooks.router)
     app.include_router(admin_policies.router)

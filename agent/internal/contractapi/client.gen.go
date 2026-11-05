@@ -247,6 +247,9 @@ type ExternalCommonSchemaDefsOffsetDatetime07be295a = time.Time
 // ExternalCommonSchemaDefsOrganizationId38fc02b6 defines model for External_common_schema_defs_organization_id_38fc02b6.
 type ExternalCommonSchemaDefsOrganizationId38fc02b6 = string
 
+// ExternalCommonSchemaDefsPolicyDraftId8569b209 장비 정책 초안 (09번 요구사항 3.2·3.3, ADR-0037)
+type ExternalCommonSchemaDefsPolicyDraftId8569b209 = string
+
 // ExternalCommonSchemaDefsPosition98dc010e [경도, 위도] 또는 [경도, 위도, 높이]. 위도 자리의 값이 ±90을 넘으면 순서가 뒤바뀐 것으로 보고 거부한다.
 type ExternalCommonSchemaDefsPosition98dc010e = []interface{}
 

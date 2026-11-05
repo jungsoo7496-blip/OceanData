@@ -47,6 +47,9 @@ PERMISSIONS: dict[str, Rule] = {
     "agreement:write": Rule(frozenset({"PLATFORM_OPERATOR"}), mfa=True),  # 공유 가능 여부(2단 약정)를 바꾼다
     "integration_card:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}),
     "integration_card:write": Rule(frozenset({"ORG_ADMIN"})),
+    # 09번 장비 정책 초안 (요구사항 3.2): 초안은 아무것도 바꾸지 않는다. 적용·반려는 device_policy:write (운영자·MFA)
+    "policy_draft:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}),
+    "policy_draft:write": Rule(frozenset({"ORG_ADMIN", "PLATFORM_OPERATOR"})),
     "agent:heartbeat": Rule(frozenset(), scope="agent:heartbeat"),
     "agent_health:read": Rule(PROVIDER | {"PLATFORM_OPERATOR"}, scope="status:read"),
     "schema:read": Rule(ALL_USER_ROLES, scope="status:read"),

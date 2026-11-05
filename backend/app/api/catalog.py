@@ -10,10 +10,10 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import client_ip, container, get_db, load_scoped, require
 from app.container import Container
-from app.db.models import Asset, Device, DevicePolicy, OrgEventCode
+from app.db.models import Asset, Device, OrgEventCode
 from app.domain.principal import Principal
 from app.errors import ProblemError
-from app.services import contracts
+from app.services import contracts, device_policy
 from app.services.idempotency import run_idempotent
 from app.services.org_event_codes import register_subcode
 from app.services.tenant import scope_filter
@@ -99,34 +99,7 @@ def validate_contract(body: ValidateRequest, _: Principal = Depends(require("con
             "problems": [p.as_dict() for p in problems]}
 
 
-# ---- 장비 정책 (에이전트가 주기적으로 받는다)
-def _mapping_version(db: Session, device_id: str) -> str | None:
-    from app.services.observations import current_mapping
-
-    m = current_mapping(db, device_id)
-    return f"m{m.version}" if m else None
-
-
-def default_policy(db: Session, collector: Device) -> dict:
-    sources = db.execute(select(Device).where(Device.collector_device_id == collector.device_id,
-                                              Device.organization_id == collector.organization_id,
-                                              Device.status != "REVOKED").order_by(Device.device_id)).scalars()
-    return {
-        "policy_version": "pv-0",
-        "collector_device_id": collector.device_id,
-        "sources": [{"device_id": d.device_id, "project_id": d.project_id, "collection_mode": d.collection_mode,
-                     "local_copy_policy": d.local_copy_policy, "local_retention_days": d.local_retention_days,
-                     "allowed_data_roles": ["CORE"], "expected_interval_s": d.expected_interval_s,
-                     "source_timezone": d.source_timezone,
-                     "observation_mapping_version": _mapping_version(db, d.device_id)}
-                    for d in sources if d.project_id],
-        "watch_rules": [],
-        "timezone": "UTC",
-        "heartbeat_interval_s": 60,
-        "size_stable_s": 30,
-    }
-
-
+# ---- 장비 정책 (에이전트가 주기적으로 받는다). 기본 정책·새 버전 저장은 services/device_policy (09번 초안 적용도)
 @router.get("/v1/devices/{device_id}/policy", tags=["agents"])
 def get_device_policy(device_id: str, request: Request, db: Session = Depends(get_db),
                       c: Container = Depends(container), p: Principal = Depends(require("device_policy:read"))) -> dict:
@@ -135,12 +108,11 @@ def get_device_policy(device_id: str, request: Request, db: Session = Depends(ge
     device = load_scoped(db, c, request, Device, device_id, p)
     if device.kind != "COLLECTOR":
         raise ProblemError("NOT_FOUND", detail="정책은 수집기 단위로 배포합니다")
-    stored = db.execute(select(DevicePolicy).where(DevicePolicy.device_id == device.device_id)
-                        .order_by(DevicePolicy.version.desc()).limit(1)).scalar_one_or_none()
+    stored = device_policy.latest_stored(db, device.device_id)
     if stored is None:
-        return default_policy(db, device)
+        return device_policy.default_policy(db, device)
     policy = dict(stored.policy)  # 저장된 정책에도 현재 매핑 버전을 채운다
-    policy["sources"] = [{**src, "observation_mapping_version": _mapping_version(db, src["device_id"])
+    policy["sources"] = [{**src, "observation_mapping_version": device_policy.mapping_version(db, src["device_id"])
                           or src.get("observation_mapping_version")} for src in policy.get("sources", [])]
     return policy
 

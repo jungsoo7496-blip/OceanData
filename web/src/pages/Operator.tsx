@@ -6,6 +6,7 @@ import type { components } from '../contract/api.gen'
 import { api, ApiError, post, type Asset, type OrgUsage, type Page } from '../lib/api'
 import { bytes, kst, QUARANTINE_LABEL } from '../lib/format'
 import { explain } from '../lib/problems'
+import { PolicyDraftList } from './Onboarding'
 import { PolicyEditor } from './OperatorPolicies'
 
 interface Audit { audit_id: string; occurred_at: string; actor_kind: string; actor_id: string | null; action: string; target_id: string | null; result: string }
@@ -231,6 +232,7 @@ export function OperatorConsole() {
             { title: '받은 시각', dataIndex: 'ingested_at', render: kst }]} />
       </Card>
       <CapacityForecast />
+      <PolicyDraftList mode="operator" canEdit />
       <Agreements />
       <BreakGlass />
       <BackupRuns />

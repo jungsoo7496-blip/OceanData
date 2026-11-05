@@ -1,23 +1,26 @@
-// 기관 설정 (ORG_ADMIN): 데이터 연계 카드(03번 요구사항 1.5), 웹훅 구독(04번 요구사항 8), 약정 확인(03번 1.4), 긴급 열람 기록(02번 8).
+// 기관 설정 (ORG_ADMIN): 데이터 연계 카드(03번 요구사항 1.5)와 온보딩 마법사(09번 요구사항 3: 확인 필요 항목·정책 초안),
+// 웹훅 구독(04번 요구사항 8), 약정 확인(03번 1.4), 긴급 열람 기록(02번 8).
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, App, Button, Card, Checkbox, Form, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd'
+import { Alert, App, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Typography } from 'antd'
 import { useState } from 'react'
 import type { components } from '../contract/api.gen'
 import { api, ApiError, post, type Device, type Me, type Page } from '../lib/api'
 import { bytes, kst } from '../lib/format'
 import { explain } from '../lib/problems'
+import { OnboardingWizard, PolicyDraftList } from './Onboarding'
 
 interface CardContent {
-  basic?: { project_name?: string; start_month?: string }
-  current_storage?: { local_copy_policy?: string; note?: string }
+  basic?: { project_name?: string; start_month?: string; [k: string]: unknown }
+  current_storage?: { local_copy_policy?: string; local_retention_days?: number; note?: string; [k: string]: unknown }
   collection_mode_requested?: string; integration_methods?: string[]; desired_services?: string[]
   [section: string]: unknown
 }
 interface CardT {
   integration_card_id: string; version: number; device_id: string | null; created_at: string; created_by: string
   content: CardContent; linked_policies?: { device_id: string; version: number }[]
+  open_items: components['schemas']['IntegrationCardOpenItem'][]; difficulty_grade: components['schemas']['DifficultyGrade']
 }
-type CardForm = Record<string, string | string[] | undefined>
+type CardForm = Record<string, string | string[] | number | undefined>
 // 계약에서 생성한 타입 (09번 작업 16)
 type Hook = components['schemas']['WebhookSubscription']
 type Agreement = components['schemas']['Agreement']
@@ -42,15 +45,25 @@ function fail(message: { error: (s: string) => void }) {
 const str = (x: unknown): string | undefined => (typeof x === 'string' && x ? x : undefined)
 const list = (x: unknown): string[] | undefined => (Array.isArray(x) && x.length ? x.map(String) : undefined)
 
-function toContent(v: CardForm): CardContent {
-  const out: CardContent = { basic: { project_name: str(v.project_name), ...(str(v.start_month) ? { start_month: str(v.start_month) } : {}) } }
-  const policy = str(v.local_copy_policy)
-  const storageNote = str(v.storage_note)
-  if (policy || storageNote) out.current_storage = { ...(policy ? { local_copy_policy: policy } : {}), ...(storageNote ? { note: storageNote } : {}) }
-  if (str(v.collection_mode_requested)) out.collection_mode_requested = str(v.collection_mode_requested)
-  if (list(v.integration_methods)) out.integration_methods = list(v.integration_methods)
-  if (list(v.desired_services)) out.desired_services = list(v.desired_services)?.slice(0, 3)
-  for (const [k] of NOTES) if (str(v[k])) out[k] = { note: str(v[k]) }
+// 이 양식이 다루지 않는 분야(장비·발생량·보고 양식 등)와 항목은 이전 버전 값을 그대로 둔다 (새 버전에서 사라지지 않게)
+function toContent(v: CardForm, prev?: CardContent): CardContent {
+  const out = JSON.parse(JSON.stringify(prev ?? {})) as CardContent
+  const put = (obj: Record<string, unknown>, key: string, val: unknown) => { if (val === undefined) delete obj[key]; else obj[key] = val }
+  const section = (key: string, fill: (s: Record<string, unknown>) => void) => {
+    const s = { ...((out[key] ?? {}) as Record<string, unknown>) }
+    fill(s)
+    if (Object.keys(s).length) out[key] = s
+    else delete out[key]
+  }
+  section('basic', (s) => { put(s, 'project_name', str(v.project_name)); put(s, 'start_month', str(v.start_month)) })
+  section('current_storage', (s) => {
+    put(s, 'local_copy_policy', str(v.local_copy_policy)); put(s, 'note', str(v.storage_note))
+    put(s, 'local_retention_days', typeof v.local_retention_days === 'number' ? v.local_retention_days : undefined)
+  })
+  put(out, 'collection_mode_requested', str(v.collection_mode_requested))
+  put(out, 'integration_methods', list(v.integration_methods))
+  put(out, 'desired_services', list(v.desired_services)?.slice(0, 3))
+  for (const [k] of NOTES) section(k, (s) => put(s, 'note', str(v[k])))
   return out
 }
 
@@ -58,7 +71,8 @@ function fromContent(c: CardT | null): CardForm {
   if (!c) return {}
   const x = c.content
   const v: CardForm = { device_id: c.device_id ?? undefined, project_name: x.basic?.project_name, start_month: x.basic?.start_month,
-    local_copy_policy: x.current_storage?.local_copy_policy, storage_note: x.current_storage?.note, collection_mode_requested: x.collection_mode_requested,
+    local_copy_policy: x.current_storage?.local_copy_policy, local_retention_days: x.current_storage?.local_retention_days,
+    storage_note: x.current_storage?.note, collection_mode_requested: x.collection_mode_requested,
     integration_methods: x.integration_methods, desired_services: x.desired_services }
   for (const [k] of NOTES) v[k] = str((x[k] as { note?: string } | undefined)?.note)
   return v
@@ -93,11 +107,12 @@ export function OrgSettings({ me }: { me: Me }) {
   const agreements = useQuery({ queryKey: ['agreements'], queryFn: () => api<{ items: Agreement[] }>('/v1/agreements') })
   const grants = useQuery({ queryKey: ['break-glass'], queryFn: () => api<{ items: Grant[] }>('/v1/break-glass-grants') })
   const [editing, setEditing] = useState<{ card: CardT | null } | null>(null)
+  const [wizard, setWizard] = useState<CardT | null>(null)
   const [addingHook, setAddingHook] = useState(false)
 
   const saveCard = useMutation({
     mutationFn: (v: CardForm) => {
-      const body = { ...(str(v.device_id) ? { device_id: str(v.device_id) } : {}), content: toContent(v) }
+      const body = { ...(str(v.device_id) ? { device_id: str(v.device_id) } : {}), content: toContent(v, editing?.card?.content) }
       return editing?.card ? post<CardT>(`/v1/integration-cards/${editing.card.integration_card_id}/versions`, body) : post<CardT>('/v1/integration-cards', body)
     },
     onSuccess: (c) => { message.success(`연계 카드 v${c.version} 저장`); setEditing(null); void qc.invalidateQueries({ queryKey: ['integration-cards'] }); void qc.invalidateQueries({ queryKey: ['devices'] }) },
@@ -123,18 +138,27 @@ export function OrgSettings({ me }: { me: Me }) {
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <Card title="데이터 연계 카드" extra={<Button type="primary" onClick={() => setEditing({ card: null })}>카드 등록</Button>}>
-        <Typography.Paragraph type="secondary">장비별 현장 저장 방식·희망 수집 수준 등을 기록합니다. 현장 사본 정책은 장비 기록에 바로 반영되고, 희망 수집 수준은 운영기관이 검토합니다. 실제 카드 양식은 확정 전입니다.</Typography.Paragraph>
-        <Table rowKey="integration_card_id" size="small" loading={cards.isLoading} dataSource={cards.data?.items ?? []} locale={{ emptyText: '등록된 카드가 없습니다' }}
+        <Typography.Paragraph type="secondary">장비별 현장 저장 방식·희망 수집 수준 등을 기록합니다. 현장 사본 정책은 장비 기록에 바로 반영되고, 희망 수집 수준은 운영기관이 검토합니다. '정책 초안'으로 장비 정책 초안을 만들면 운영기관이 확인한 뒤 적용합니다. 실제 카드 양식은 확정 전입니다.</Typography.Paragraph>
+        <Table rowKey="integration_card_id" size="small" loading={cards.isLoading} dataSource={cards.data?.items ?? []} locale={{ emptyText: '등록된 카드가 없습니다' }} scroll={{ x: 'max-content' }}
           columns={[
             { title: '실증명', key: 'p', render: (_, c) => c.content.basic?.project_name },
             { title: '장비', key: 'd', render: (_, c) => deviceName(c.device_id) },
             { title: '현장 사본', key: 'l', render: (_, c) => c.content.current_storage?.local_copy_policy ?? '-' },
             { title: '희망 수준', key: 'm', render: (_, c) => c.content.collection_mode_requested ?? '-' },
             { title: '버전', dataIndex: 'version', render: (v: number, c) => `v${v} · ${kst(c.created_at)}` },
+            { title: '확인 필요', key: 'o', render: (_, c) => (c.open_items.length
+              ? <Tag color="orange" title={c.open_items.map((i) => i.label).join(', ')}>{c.open_items.length}개</Tag> : <Tag color="green">없음</Tag>) },
             { title: '연결 정책', key: 'lp', render: (_, c) => (c.linked_policies ?? []).map((x) => <Tag key={`${x.device_id}-${x.version}`}>{deviceName(x.device_id)} v{x.version}</Tag>) },
-            { title: '', key: 'a', render: (_, c) => <Button size="small" onClick={() => setEditing({ card: c })}>새 버전</Button> },
+            { title: '', key: 'a', render: (_, c) => (
+              <Space>
+                <Button size="small" onClick={() => setEditing({ card: c })}>새 버전</Button>
+                <Button size="small" onClick={() => setWizard(c)}>정책 초안</Button>
+              </Space>) },
           ]} />
       </Card>
+
+      <PolicyDraftList mode="org" canEdit={me.roles.includes('ORG_ADMIN')} />
+      {wizard && <OnboardingWizard card={wizard} onClose={() => setWizard(null)} />}
 
       <Card title="웹훅 구독" extra={<Button onClick={() => setAddingHook(true)}>구독 추가</Button>}>
         <Table rowKey="webhook_id" size="small" dataSource={hooks.data?.items ?? []} locale={{ emptyText: '구독이 없습니다' }}
@@ -174,12 +198,13 @@ export function OrgSettings({ me }: { me: Me }) {
             <Form.Item name="device_id" label="장비"><Select allowClear style={{ width: 240 }} options={(devices.data?.items ?? []).map((d) => ({ value: d.device_id, label: d.name }))} /></Form.Item>
             <Form.Item name="local_copy_policy" label="현장 사본 정책"><Select allowClear style={{ width: 160 }} options={COPY.map((x) => ({ value: x, label: x }))} /></Form.Item>
             <Form.Item name="collection_mode_requested" label="희망 수집 수준"><Select allowClear style={{ width: 200 }} options={MODES.map((x) => ({ value: x, label: x }))} /></Form.Item>
+            <Form.Item name="local_retention_days" label="현장 보존 기간 (일)"><InputNumber min={0} style={{ width: 140 }} /></Form.Item>
           </Space>
           <Form.Item name="storage_note" label="현행 저장 (위치·기간·백업)"><Input /></Form.Item>
           <Form.Item name="integration_methods" label="연계 방식"><Select mode="tags" placeholder="예: 폴더 에이전트" /></Form.Item>
           <Form.Item name="desired_services" label="원하는 서비스 (최대 3개)" rules={[{ type: 'array', max: 3 }]}><Select mode="tags" /></Form.Item>
           {NOTES.map(([k, label]) => <Form.Item key={k} name={k} label={label}><Input.TextArea rows={2} /></Form.Item>)}
-          <Typography.Paragraph type="secondary">담당자 이름·연락처는 적지 않습니다. 필요하면 플랫폼 사용자 계정으로 연결합니다.</Typography.Paragraph>
+          <Typography.Paragraph type="secondary">담당자 이름·연락처는 적지 않습니다. 필요하면 플랫폼 사용자 계정으로 연결합니다. 아직 모르는 내용은 '확인 필요'라고 적으면 확인 필요 항목에 나옵니다. 이 양식에 없는 분야(장비·발생량 등)는 이전 버전 값을 그대로 둡니다.</Typography.Paragraph>
           <Button type="primary" htmlType="submit" loading={saveCard.isPending}>저장</Button>
         </Form>
       </Modal>

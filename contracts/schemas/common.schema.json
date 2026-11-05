@@ -119,6 +119,11 @@
       "type": "string",
       "pattern": "^rvw_[0-9A-HJKMNP-TV-Z]{26}$"
     },
+    "policy_draft_id": {
+      "description": "장비 정책 초안 (09번 요구사항 3.2·3.3, ADR-0037)",
+      "type": "string",
+      "pattern": "^pdr_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
     "sha256": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"

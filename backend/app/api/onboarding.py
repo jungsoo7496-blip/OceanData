@@ -108,8 +108,9 @@ class CardWrite(BaseModel):
     content: dict[str, Any]
 
 
-def _load_card(db: Session, c: Container, request: Request, p: Principal, card_id: str,
-               version: int | None = None) -> IntegrationCard:
+def load_card(db: Session, c: Container, request: Request, p: Principal, card_id: str,
+              version: int | None = None) -> IntegrationCard:
+    """범위 안의 카드 (version이 없으면 최신). 없거나 다른 기관이면 404 (교차 기관 시도는 감사). 09번 초안도 쓴다."""
     q = select(IntegrationCard).where(IntegrationCard.integration_card_id == card_id,
                                       scope_filter(IntegrationCard, p))
     q = q.where(IntegrationCard.version == version) if version else q.order_by(IntegrationCard.version.desc())
@@ -162,12 +163,12 @@ def get_card(integration_card_id: str, request: Request, version: int | None = N
     if version is not None and version < 1:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/query/version", "code": "range",
                                                         "message": "version은 1 이상입니다"}])
-    return onboarding.card_view(db, _load_card(db, c, request, p, integration_card_id, version))
+    return onboarding.card_view(db, load_card(db, c, request, p, integration_card_id, version))
 
 
 @router.post("/v1/integration-cards/{integration_card_id}/versions", status_code=201)
 def add_card_version(integration_card_id: str, body: CardWrite, request: Request, db: Session = Depends(get_db),
                      c: Container = Depends(container),
                      p: Principal = Depends(require("integration_card:write"))) -> dict:
-    _load_card(db, c, request, p, integration_card_id)
+    load_card(db, c, request, p, integration_card_id)
     return _write(db, c, request, p, body, integration_card_id)

@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Agreement, Device, DevicePolicy, IntegrationCard
+from app.domain import onboarding as rules
 from app.domain.errors import RuleViolation, UnmetCondition
 from app.domain.ids import new_id
 from app.services import contracts
@@ -91,10 +92,12 @@ def linked_policies(db: Session, card_id: str) -> list[dict[str, Any]]:
 
 
 def card_view(db: Session, card: IntegrationCard) -> dict[str, Any]:
+    # open_items·difficulty_grade: 09번 요구사항 3.4 — '확인 필요' 항목, 난이도 등급은 기준 미정 (ADR-0037)
     return {"integration_card_id": card.integration_card_id, "version": card.version,
             "organization_id": card.organization_id, "device_id": card.device_id, "content": card.content,
             "linked_policies": linked_policies(db, card.integration_card_id), "created_by": card.created_by,
-            "created_at": iso(card.created_at)}
+            "created_at": iso(card.created_at), "open_items": rules.open_items(card.content),
+            "difficulty_grade": dict(rules.DIFFICULTY_GRADE)}
 
 
 def latest_versions(db: Session, cond: Any) -> list[IntegrationCard]:

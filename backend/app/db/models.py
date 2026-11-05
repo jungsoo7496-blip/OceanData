@@ -377,6 +377,36 @@ class IntegrationCard(Base):
     created_at: Mapped[datetime] = mapped_column(TS)
 
 
+class PolicyDraft(Base):
+    """장비 정책 초안 (09번 요구사항 3.2·3.3, ADR-0037). DRAFT → APPLIED | REJECTED.
+
+    운영자가 적용하기 전까지 장비 기록·장비 정책을 바꾸지 않는다. 장비마다 DRAFT는 하나뿐이다.
+    fields: 항목별 {status: FROM_CARD | ENTERED | NEEDS_CONFIRMATION, value?, card_pointer?} (domain/onboarding.py)."""
+
+    __tablename__ = "policy_drafts"
+    __table_args__ = (
+        Index("uq_policy_drafts_open_device", "device_id", unique=True, postgresql_where=text("status = 'DRAFT'")),
+    )
+    policy_draft_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), index=True)
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"), index=True)
+    collector_device_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"))
+    integration_card_id: Mapped[str | None] = mapped_column(ID)
+    integration_card_version: Mapped[int | None] = mapped_column(Integer)
+    fields: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(12), server_default="DRAFT")
+    revision: Mapped[int] = mapped_column(Integer, server_default="1")
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+    updated_by: Mapped[str] = mapped_column(String(64))
+    updated_at: Mapped[datetime] = mapped_column(TS)
+    decided_by: Mapped[str | None] = mapped_column(String(64))
+    decided_at: Mapped[datetime | None] = mapped_column(TS)
+    decision_reason: Mapped[str | None] = mapped_column(String(500))
+    applied: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # 저장한 정책 버전·바뀐 값 (APPLIED일 때)
+
+
 class OrgEventCode(Base):
     """기관별 하위 이벤트 코드 (03번 요구사항 8.3). 공통 상위분류는 contracts/codes/event-categories.json."""
 

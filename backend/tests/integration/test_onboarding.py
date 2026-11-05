@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -80,8 +80,10 @@ def test_agreements_record_list_end_and_sharing_rule(ctx) -> None:
     r = ctx.client.post(path, json={"reason": "계약 종료"}, headers=op)
     check(r, "POST", "/v1/agreements/{agreement_id}/end")
     assert r.status_code == 200 and r.json()["in_effect"] is False
+    # 종료 시각은 요청을 처리한 '지금'이다 — 시험 시작 시각(now) 기준이면 느린 실행에서 1초를 넘겨 실패했다
+    ended_at = datetime.fromisoformat(r.json()["valid_until"].replace("Z", "+00:00"))
     with ctx.c.sessionmaker() as db:
-        assert tier2_valid(db, ORG_B, now + timedelta(seconds=1)) is None
+        assert tier2_valid(db, ORG_B, ended_at + timedelta(seconds=1)) is None
     assert ctx.client.post(path, json={"reason": "다시"}, headers=op).status_code == 409
     assert ctx.client.post("/v1/agreements/agr_0000000000000000000000ZZZZ/end", json={"reason": "없음"},
                            headers=op).status_code == 404

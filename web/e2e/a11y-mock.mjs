@@ -84,7 +84,8 @@ const SCENARIOS = [
     })] },
     { path: '/access', ready: '이용 이력' },
     { path: '/devices', ready: '에이전트 설치 안내', open: [dialog('장비 등록', button('장비 등록')), dialog('원본 백업 신청', button('원본 백업 신청'))] },
-    { path: '/settings', ready: '데이터 연계 카드', open: [dialog('연계 카드 등록', button('카드 등록'))] },
+    { path: '/settings', ready: '데이터 연계 카드', open: [dialog('연계 카드 등록', button('카드 등록')),
+      dialog('장비 정책 초안', button('정책 초안'))] },
   ] },
   { role: 'ORG_MEMBER', visits: [
     { path: '/workspace', ready: '장비별 수집 상태' },

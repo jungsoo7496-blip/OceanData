@@ -241,44 +241,23 @@ def main(argv: list[str] | None = None) -> int:
 
 def _set_policy(c, device_id: str, policy_file: str,  # type: ignore[no-untyped-def]
                 card_id: str | None = None) -> int:
+    """정책 파일을 새 버전으로 저장. 검사·저장은 09번 정책 초안 적용과 같은 services/device_policy.store_policy."""
     import json
     from pathlib import Path
 
-    from sqlalchemy import func, select
-
-    from app.db.models import Device, DevicePolicy
-    from app.services.contracts import schema_problems
+    from app.domain.errors import RuleViolation
+    from app.services.device_policy import store_policy
 
     doc = json.loads(Path(policy_file).read_text(encoding="utf-8"))
-    problems = schema_problems("device-policy", doc)
-    if problems:
-        for p in problems:
-            print(f"{p.pointer}: {p.message}", file=sys.stderr)
+    try:
+        with c.sessionmaker.begin() as db:
+            row = store_policy(db, device_id, doc, integration_card_id=card_id, by="cli", now=c.clock.now())
+            org, ver = row.organization_id, row.version
+    except RuleViolation as exc:  # 계약 스키마·수집기·매핑·같은 기관 카드 (아무것도 저장하지 않음)
+        for u in exc.unmet:
+            print(f"{u.condition}: {u.actual}", file=sys.stderr)
         return 1
-    with c.sessionmaker.begin() as db:
-        dev = db.get(Device, device_id)
-        if dev is None or dev.kind != "COLLECTOR" or doc["collector_device_id"] != device_id:
-            print("수집기 장비가 아니거나 collector_device_id가 다릅니다", file=sys.stderr)
-            return 1
-        for src in doc["sources"]:  # 정책의 원천 장비는 그 수집기에 매핑된 같은 기관 장비여야 한다
-            s_dev = db.get(Device, src["device_id"])
-            if s_dev is None or s_dev.organization_id != dev.organization_id or \
-                    (s_dev.collector_device_id != device_id and s_dev.device_id != device_id):
-                print(f"매핑되지 않은 원천 장비: {src['device_id']}", file=sys.stderr)
-                return 1
-        if card_id is not None:  # 연계 카드에서 만든 정책이면 같은 기관의 카드여야 한다 (03번 요구사항 1.5)
-            from app.db.models import IntegrationCard
-
-            owner = db.execute(select(IntegrationCard.organization_id).where(
-                IntegrationCard.integration_card_id == card_id).limit(1)).scalar_one_or_none()
-            if owner != dev.organization_id:
-                print(f"같은 기관의 연계 카드가 아닙니다: {card_id}", file=sys.stderr)
-                return 1
-        ver = (db.execute(select(func.max(DevicePolicy.version)).where(DevicePolicy.device_id == device_id))
-               .scalar() or 0) + 1
-        db.add(DevicePolicy(device_id=device_id, version=ver, organization_id=dev.organization_id, policy=doc,
-                            integration_card_id=card_id, created_by="cli", created_at=c.clock.now()))
-    c.audit.record("POLICY_CHANGED", actor_kind="SYSTEM", actor_id="cli", organization_id=dev.organization_id,
+    c.audit.record("POLICY_CHANGED", actor_kind="SYSTEM", actor_id="cli", organization_id=org,
                    target_type="Device", target_id=device_id, details={"version": ver, "integration_card_id": card_id,
                                                                        "policy_version": doc["policy_version"]})
     print(f"정책 저장: {device_id} v{ver} ({doc['policy_version']})")

@@ -511,7 +511,12 @@ const GET = {
   '/v1/integration-cards': () => ({ items: [{ integration_card_id: id('icd', 1), version: 2, organization_id: ORG_A, device_id: DEV_CAM,
     created_by: USR_ADMIN, created_at: '2026-10-20T00:00:00Z', linked_policies: [{ device_id: DEV_CAM, version: 1 }],
     content: cardContent({ basic: { project_name: '선박 영상 실증 (합성)', start_month: '2026-11' }, current_storage: { local_copy_policy: 'ROTATING', note: 'NVR 7일 순환 (합성)' },
-      collection_mode_requested: 'C2_EVENT_CLIPS', integration_methods: ['폴더 에이전트'], desired_services: ['영상 검색', '보고서 초안'] }) }] }),
+      collection_mode_requested: 'C2_EVENT_CLIPS', integration_methods: ['폴더 에이전트'], desired_services: ['영상 검색', '보고서 초안'] }),
+    // 09번 작업 3: 확인 필요 분야와 난이도(기준 미정 — 등급을 매기지 않는다, ADR-0037)
+    open_items: [{ section: 'time_sync', label: '시각', state: 'EMPTY', pointers: [] },
+      { section: 'current_storage', label: '현행 저장', state: 'NEEDS_CONFIRMATION', pointers: ['/current_storage/note'] }],
+    difficulty_grade: { grade: null, criteria_defined: false, note: '기준 미정 — 확인 필요' } }] }),
+  '/v1/policy-drafts': () => ({ items: [], next_cursor: null }),
   '/v1/webhooks/subscriptions': () => ({ items: [
     { webhook_id: id('whk', 1), url: 'https://hooks.example.org/marine', event_types: ['upload.registered', 'upload.quarantined'], active: true, created_at: '2026-10-21T00:00:00Z' },
     { webhook_id: id('whk', 2), url: 'https://old.example.org/hook', event_types: ['grant.revoked'], active: false, created_at: '2026-10-01T00:00:00Z',
