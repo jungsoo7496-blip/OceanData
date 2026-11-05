@@ -166,12 +166,24 @@ def validate_document(contract: str, doc: Any) -> tuple[list[Problem], bool]:
         check = check_schema_version(doc.get("schema_version"), supported_schema_versions())
         if not check.ok:
             return [Problem("/schema_version", "UNSUPPORTED_SCHEMA_VERSION", check.reason or "")], True
-    problems = schema_problems(SCHEMA_FOR_CONTRACT[contract], doc)
-    problems += _location_problems(doc)
-    if contract == "observation-batch":
-        problems += _observation_problems(doc)
-    # 같은 위치의 스키마 범위 오류와 도메인 오류가 겹치면 도메인 쪽(더 구체적인 사유)을 남긴다
-    domain_ptrs = {p.pointer for p in problems if not p.code.startswith("schema.")}
-    problems = [p for p in problems if not (p.code.startswith("schema.") and any(
-        d.startswith(p.pointer) or p.pointer.startswith(d) for d in domain_ptrs))]
-    return problems, False
+    schema = schema_problems(SCHEMA_FOR_CONTRACT[contract], doc)
+    location = _location_problems(doc)
+    items = _observation_problems(doc) if contract == "observation-batch" else []
+    # 같은 값에 대한 스키마 오류와 도메인 오류가 겹치면 도메인 쪽(더 구체적인 사유)을 남긴다.
+    # 경고(WARNING)는 아무것도 가리지 않는다. 포인터는 조각 단위로 비교한다 (/observations/10 ≠ /observations/1).
+    # - 위치: 좌표 오류는 geometry 전체의 oneOf 불일치(/location)로도 나오므로 /location 아래 스키마 오류를 가린다
+    # - 관측 항목: 같은 포인터의 스키마 오류만 가린다 (문서 루트·항목·형제 필드의 오류는 그대로 남는다)
+    subtrees = ["/location"] if any(p.severity == "ERROR" for p in location) else []
+    exact = {p.pointer for p in items if p.severity == "ERROR"}
+    schema = [p for p in schema if p.pointer not in exact and not any(_within(p.pointer, s) for s in subtrees)]
+    return schema + location + items, False
+
+
+def _segments(pointer: str) -> list[str]:
+    return pointer.split("/")[1:] if pointer else []
+
+
+def _within(pointer: str, scope: str) -> bool:
+    """pointer가 scope와 같거나 그 아래인가 (JSON Pointer 조각 단위 비교)."""
+    a, b = _segments(pointer), _segments(scope)
+    return a[:len(b)] == b
