@@ -1109,3 +1109,41 @@ class BackupRun(Base):
     failed_objects: Mapped[list[Any]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     error: Mapped[str | None] = mapped_column(String(1000))
     restore_test: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+class WebhookSubscription(Base):
+    """웹훅 구독 (04번 요구사항 8). 서명 비밀은 저장하지 않고 salt로 서버 키에서 다시 만든다 (ADR-0030)."""
+
+    __tablename__ = "webhook_subscriptions"
+    webhook_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), index=True)
+    url: Mapped[str] = mapped_column(String(500))
+    event_types: Mapped[list[str]] = mapped_column(ARRAY(String(40)))
+    secret_salt: Mapped[str] = mapped_column(String(64))
+    active: Mapped[bool] = mapped_column(Boolean, server_default="true")
+    consecutive_failures: Mapped[int] = mapped_column(Integer, server_default="0")
+    disabled_at: Mapped[datetime | None] = mapped_column(TS)
+    disabled_reason: Mapped[str | None] = mapped_column(String(300))
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+    deleted_at: Mapped[datetime | None] = mapped_column(TS)
+
+
+class WebhookDelivery(Base):
+    """보낼 웹훅 (outbox). 상태를 바꾸는 같은 트랜잭션에서 만들고 워커가 보낸다 (04번 요구사항 8.2·8.3)."""
+
+    __tablename__ = "webhook_deliveries"
+    __table_args__ = (Index("ix_webhook_deliveries_due", "status", "next_attempt_at"),)
+    delivery_id: Mapped[str] = mapped_column(String(26), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(26), index=True)
+    webhook_id: Mapped[str] = mapped_column(ForeignKey("webhook_subscriptions.webhook_id"), index=True)
+    organization_id: Mapped[str] = mapped_column(ID)
+    event_type: Mapped[str] = mapped_column(String(40))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(String(12))  # PENDING / DELIVERED / FAILED / CANCELLED
+    attempts: Mapped[int] = mapped_column(Integer, server_default="0")
+    next_attempt_at: Mapped[datetime] = mapped_column(TS)
+    last_status_code: Mapped[int | None] = mapped_column(Integer)
+    last_error: Mapped[str | None] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(TS)
+    delivered_at: Mapped[datetime | None] = mapped_column(TS)

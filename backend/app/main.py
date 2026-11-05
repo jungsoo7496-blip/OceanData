@@ -23,6 +23,7 @@ from app.api import (
     sharing,
     system,
     uploads,
+    webhooks,
 )
 from app.config import get_settings
 from app.container import Container, build_container
@@ -52,6 +53,7 @@ def create_app(c: Container | None = None) -> FastAPI:
     app.include_router(lifecycle.router)
     app.include_router(onboarding.router)
     app.include_router(break_glass.router)
+    app.include_router(webhooks.router)
     app.include_router(monitoring.router)
     app.include_router(reports.router)
     app.include_router(sharing.router)

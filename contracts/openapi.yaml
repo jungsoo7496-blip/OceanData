@@ -3088,7 +3088,7 @@ paths:
     get:
       tags: [webhooks]
       operationId: listWebhookSubscriptions
-      summary: 웹훅 구독 목록
+      summary: 웹훅 구독 목록 (ORG_ADMIN 또는 webhook:manage 범위 API 키, 자기 기관)
       x-freeze: G1
       responses:
         '200':
@@ -3101,10 +3101,14 @@ paths:
                 properties:
                   items: {type: array, items: {$ref: '#/components/schemas/WebhookSubscription'}}
         '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
     post:
       tags: [webhooks]
       operationId: createWebhookSubscription
       summary: 웹훅 구독 등록 (서명 비밀은 이 응답에서 한 번만)
+      description: |
+        04번 요구사항 8. https만 받고 사설·루프백·링크로컬 주소로 풀리는 대상에는 보내지 않는다(400 또는 전송 시 차단).
+        전송은 지수 백오프로 재시도하고 WEBHOOK_MAX_ATTEMPTS번 실패하면 구독을 끄고 기관 ORG_ADMIN에게 알린다. 리디렉션은 따르지 않는다.
       x-freeze: G1
       requestBody:
         required: true
@@ -3127,11 +3131,12 @@ paths:
     delete:
       tags: [webhooks]
       operationId: deleteWebhookSubscription
-      summary: 웹훅 구독 삭제
+      summary: 웹훅 구독 삭제 (아직 보내지 않은 전송은 취소)
       x-freeze: G1
       responses:
         '204': {description: 삭제됨}
         '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
 
   /v1/datasets:
@@ -5124,6 +5129,8 @@ components:
         active: {type: boolean}
         created_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
         secret: {type: string, description: 등록 응답에서만 한 번 보인다}
+        disabled_at: {type: [string, 'null'], format: date-time, description: 전송이 계속 실패해 꺼진 시각}
+        disabled_reason: {type: [string, 'null']}
 
     DatasetVersionLineage:
       type: object

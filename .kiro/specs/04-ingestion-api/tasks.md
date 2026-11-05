@@ -16,7 +16,7 @@
 - [x] 14. 회차 지정 → 재검증 → 등록 — 요구사항 5.3 · 시험 `test_unknown_session_quarantine_then_assign_and_revalidate`
 - [x] 15. 회차 결정 규칙 — 요구사항 6.1, 6.2 (담당자 "분류 요청" 통지는 격리 통지로 대신 — 09번 화면에서 작업함으로)
 - [x] 16. 업로드 상태(RECEIVED·REGISTERED 구분) — 요구사항 7.2
-- [ ] 17. 웹훅 구독·서명 전송·재시도·비활성화 — 요구사항 8.1~8.3 (contracts `webhooks` 절 있음)
+- [x] 17. 웹훅 구독·서명 전송·재시도·비활성화 — 요구사항 8.1~8.3 · `/v1/webhooks/subscriptions`, outbox(0015)·워커 전송·SSRF 차단 · 시험 `tests/integration/test_webhooks.py` · ADR-0030
 - [x] 18. 호출 제한 429 + Retry-After — 요구사항 9.1, 9.2 (주체별 분당, 자동 시험 없음)
 - [x] 19. 응답 계약 시험 (UploadCreated·UploadStatus·PartList·Receipt·asset-metadata) — 요구사항 10.1
 - [ ] 20. Python 예제 클라이언트 + Schemathesis CI — 요구사항 10.2

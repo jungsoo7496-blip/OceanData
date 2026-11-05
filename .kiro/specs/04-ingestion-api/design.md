@@ -36,3 +36,11 @@ PATCH /v1/assets/{id} {session_id} → UNKNOWN_SESSION 격리 자산 재검증 (
 
 ## 시험
 `backend/tests/integration/test_ingest.py` — moto S3 서버 또는 `TEST_S3_ENDPOINT`(SeaweedFS)로 실제 사전 서명 업로드. 두 환경 모두 통과 확인 (2026-11-04).
+
+## 웹훅 (요구사항 8, ADR-0030)
+- 구독 `GET/POST /v1/webhooks/subscriptions`, `DELETE …/{id}`(ORG_ADMIN 또는 webhook:manage API 키, 자기 기관). 비밀은 등록 응답에서 한 번,
+  저장은 salt만(서버 키로 다시 만듦). https만, 사설·루프백 주소 거부.
+- 발행: `services/webhooks.py`의 `before_flush` outbox → `webhook_deliveries`(0015). 전송: 워커 `WEBHOOK_DISPATCH_INTERVAL_S`마다
+  `deliver_due()`(SKIP LOCKED, HMAC-SHA256 `timestamp.body`, X-Event-Id, 리디렉션 안 따름), 지수 백오프, `WEBHOOK_MAX_ATTEMPTS`번 실패 시 구독 끔 +
+  남은 전송 취소 + 기관 ORG_ADMIN 메일.
+

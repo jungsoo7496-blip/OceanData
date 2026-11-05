@@ -194,6 +194,12 @@ def sweep(c: Container) -> int:
     return n
 
 
+def _dispatch_webhooks(c: Container) -> Any:
+    from app.services import webhooks
+
+    return webhooks.deliver_due(c)
+
+
 def maintenance(c: Container) -> None:
     from app.services import retention
     from app.services.integrity import anchor_previous_days
@@ -292,6 +298,7 @@ def main() -> None:
         (300, lambda: sweep(c), "sweep"),
         (settings.job_lease_reap_interval_s, lambda: maintenance(c), "maintenance"),
         (settings.watch_eval_interval_s, lambda: watch(c), "watch"),  # 11번 감시 규칙
+        (settings.webhook_dispatch_interval_s, lambda: _dispatch_webhooks(c), "webhooks"),  # 04번 웹훅
     ]
     last_run = {name: 0.0 for _, _, name in periodic}
     while not stopping["flag"]:

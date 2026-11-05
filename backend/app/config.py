@@ -119,6 +119,15 @@ class Settings(BaseSettings):
     smtp_host: str | None = None
     smtp_port: int = 25
     mail_from: str = "marine-platform@localhost"
+    # 기관 웹훅 (04번 요구사항 8, ADR-0030). 비밀은 이 키 + 구독 salt로 만든다
+    # (없으면 DEVICE_TOKEN_SIGNING_KEY에서 용도를 나눠 파생)
+    webhook_secret_key: SecretStr | None = None
+    webhook_max_attempts: int = 8  # 이만큼 실패하면 구독을 끄고 기관에 알린다
+    webhook_backoff_base_s: int = 30
+    webhook_backoff_max_s: int = 6 * 3600
+    webhook_timeout_s: float = 5.0
+    webhook_dispatch_interval_s: int = 10
+    webhook_allow_private_targets: bool = False  # 개발용. 운영에서는 사설·루프백 주소로 보내지 않는다 (SSRF)
     alert_webhook_url: str | None = None  # 운영자 알림 웹훅 (메신저 연동은 결정 대기)
     alert_webhook_secret: SecretStr | None = None  # 있으면 X-Signature(HMAC-SHA256)를 붙인다
     watch_eval_interval_s: int = 60

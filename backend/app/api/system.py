@@ -64,5 +64,5 @@ def capabilities(c: Container = Depends(container), _=Depends(require("system:ca
         "processing_steps": steps,
         "report_formats": [f for f in s.report_formats if f in {"PDF", "XLSX", "HWPX"}],
         "external_sources": list(s.external_sources),
-        "features": {"break_glass": True, "webhooks": False, "sharing": True},
+        "features": {"break_glass": True, "webhooks": True, "sharing": True},
     }

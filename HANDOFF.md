@@ -8,6 +8,7 @@
 -1. **08번 삭제 보호 보완 (2026-11-05, 클라우드):** 유효한 이용 권한(GRANTED)이 있는 데이터셋 버전에 든 자산이 `confirm_affected=true`로 삭제되던 빈틈을 막았다 — 재확인과 무관하게 409·철회 안내(원본 삭제로 파생본에 닿는 경로 포함), 철회 뒤에는 삭제 가능. 증빙·보고서 인용은 그대로 재확인 후 삭제 + 근거 손상(DELETED) 표시를 API 시험으로 확인. 계약 설명 갱신, 수정 전 코드에서 새 시험이 실패(200)하는 것 확인. 백엔드 전체 226건 통과, 계약·Go SDK 일치 검사 통과. 새 마이그레이션 없음. **다음: 03번 작업 17 약정·연계 카드 등록 API.**
 -1b. **03번 작업 17 약정·연계 카드 등록 API 완료 (2026-11-05, 클라우드, ADR-0028):** `GET/POST /v1/agreements`(운영자·다중 인증, 종료는 `/end`로 valid_until을 당김 — 새 상태 코드 없음, 13번 공유 규칙에 바로 반영), `GET/POST /v1/integration-cards`·`/{id}`·`/{id}/versions`(ORG_ADMIN, 부록 A 분야별 기록, 정책 코드만 검사, 장비 local_copy_policy 반영·감사), `set-policy --integration-card`로 장비 정책 연결. 계약 먼저(스키마·예시·실패 예시), Go SDK 재생성 일치. 새 마이그레이션 없음(0002 표). **실제 연계 카드 양식은 확인 필요.**
 -1c. **02번 긴급 열람 완료 (2026-11-05, 클라우드, ADR-0029):** `/v1/break-glass-grants`(요청·`/decision`·`/revoke`·조회), 다른 운영자 승인(설정으로 본인), 대상 기관 ORG_ADMIN 메일, 요청 운영자만 download-url 허용 + `BREAK_GLASS_ACCESS` 감사, 만료 즉시 차단·워커 EXPIRED. Runbook 05 갱신. 새 마이그레이션 없음.
+-1d. **04번 웹훅 완료 (2026-11-05, 클라우드, ADR-0030):** 구독 API(https·사설 주소 거부·비밀 한 번), 상태 변경 같은 트랜잭션의 outbox(0015, down 포함), 워커 서명 전송·지수 백오프·N회 실패 시 구독 끔+기관 메일, 전송 직전 DNS 사설 주소 차단. 남은 위험: DNS 재바인딩은 나가는 방화벽으로(확인 필요).
 0. **03번 작업 7·12·14 완료. 다음은 같은 스펙의 작업 17 약정·연계 카드 등록 API다. 기존 CLI·테이블·권한을 읽고 계약부터 진행한다.** 업로드 원래 좌표의 EPSG:4326 변환 결과에 공통 GeoJSON·좌표 검사를 추가했다. 계약 선행 검사, PostGIS 관련 통합·응답 계약 6개, 생성 Go SDK 일치, Ruff·Mypy 통과. 원본·변환 이력 보존과 무효 변환의 400/미생성을 확인했다. 새 DB 마이그레이션/down은 해당 없음. `var/contracts-03-task7.log`, `var/meta03-location-integration.log`, `var/agent-codegen-03-coordinates.log`.
 
    **품질 재평가:** `python -m app.cli reevaluate-quality <기관ID> [--asset-id <자산ID>]`는 활성 DB 규칙을 사용하고 격리·삭제·미완료 자산과 관측 근거가 없는 과거 범위 경고를 보호한다. 신규 PostgreSQL 시험 6개, 수집·미디어 회귀 5개, Ruff·Mypy 통과. 잘못된 규칙으로 RECEIVED를 막지 않고 정상화 뒤 재시도했다. 공개 계약 및 DB 구조 변경 없음. `var/meta03-quality-integration-final.log`, `var/meta03-quality-regression.log`(ADR-0027).
@@ -33,7 +34,7 @@
 **스펙별 남은 [ ] (자세히는 각 tasks.md)**
 - 02: Keycloak MFA 단계 인증, 구성원 관리 (긴급 열람 완료, ADR-0029)
 - 03: 타입 생성(Python·웹). 약정·연계 카드 API·좌표 변환 검증·기관 하위코드 등록·품질 재평가 완료
-- 04: 웹훅, 악성코드 검사 어댑터, 예제 클라이언트·Schemathesis
+- 04: 악성코드 검사 어댑터, 예제 클라이언트·Schemathesis (웹훅 완료, ADR-0030)
 - 05: Model_Registry 등록 API, GPU 인코더 실측, 대용량 임시 디스크 정책
 - 06: 실제 PC 서비스 설치·부팅 확인, ROTATING은 15번과 함께. DPAPI·Go SDK·Windows 서명 업데이트 로컬 검증 완료
 - 08: 백업 도구 PoC → ADR-0021 갱신, PITR·암호화·회차 정리, ROTATING 장비 백업 신청(6.4), Hot/Warm, 용량 예측, SSE, 월간 사용량 리포트
@@ -53,7 +54,7 @@
 | 01 개발 기반 | 거의 완료 | `make up` 실패 경로 자동 시험, golangci-lint(06번과 함께) |
 | 02 인증·테넌트 | 핵심 완료 | 긴급 열람(요구사항 8) 완료. Keycloak MFA 단계 인증, 구성원 관리(요구사항 9) 남음 |
 | 03 메타데이터 표준 | 핵심 완료 | 좌표 변환 검증·기관 하위 이벤트 코드 등록·품질 재평가·약정·연계 카드 API 완료. 타입 생성(Python·웹) 남음 |
-| 04 수집 API | 핵심 완료 | 웹훅, 악성코드 검사 어댑터, 예제 클라이언트·Schemathesis, 10GB 시험, 쿼터 동시성 시험 |
+| 04 수집 API | 핵심 완료 | 웹훅·쿼터 동시성 시험 완료. 악성코드 검사 어댑터, 예제 클라이언트·Schemathesis, 10GB 시험 남음 |
 | 06 동기화 에이전트 | 로컬 핵심 완료 | DPAPI·재개/영수증·계약 SDK·수동/자동 서명 업데이트 완료. 순환 삭제(15번과), 실제 서비스 설치·부팅 확인 남음 |
 | 05 처리 파이프라인 | 핵심 완료 | 대용량 임시 디스크 정책, Model_Registry 등록 API(14번과), GPU 인코더 실측 |
 | 07 센서·이벤트 | 핵심 완료 | 겹침 자산 조회 API, MQTT 계정 보안 저장, 하위코드 등록 API |
@@ -172,6 +173,7 @@ tools/         validate_contracts.py, check_traceability.py, check_licenses.py, 
 - ADR-0023 공급망·릴리스 검사 강화·실제 브라우저 탭 종료/재개
 - ADR-0024 CurrentUser DPAPI·서명 업데이트 감독 (Windows native·제품 CLI 재검증 완료)
 - ADR-0025 계약 SDK 생성용 참조 투영·고정 생성기·재생성/실제 호출 검사
+- ADR-0030 웹훅: ORM outbox 발행·저장하지 않는 서명 비밀·SSRF 차단·N회 실패 시 비활성
 - ADR-0029 긴급 열람: 요청자 한정·자산/회차 대상·만료 시각으로 즉시 회수·접근마다 감사
 - ADR-0028 약정·연계 카드 API: 약정 종료는 valid_until, 카드는 분야별 자유 기록 + 정책 코드 검사
 - ADR-0018 보고서 내보내기: PDF(WeasyPrint)·XLSX(openpyxl)·HWPX(양식 XML 치환), Pillow·Pyphen 예외 승인 대기
