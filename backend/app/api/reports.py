@@ -382,6 +382,24 @@ def _report_version(db: Session, rep: Report, p: Principal, version: int | None)
     return v
 
 
+def _visible_assets(db: Session, p: Principal, ids: list[str]) -> set[str]:
+    """조회자의 데이터 범위(domain.md 2장) 안의 자산 ID만 (관리기관 열람자는 배정 사업의 L1 이상)."""
+    return set(db.execute(select(Asset.asset_id).where(Asset.asset_id.in_(ids), scope_filter(Asset, p)))
+               .scalars()) if ids else set()
+
+
+def _view(db: Session, rep: Report, v: ReportVersion, p: Principal) -> dict:
+    """보고서 응답. 다른 기관 조회자(관리기관 열람자·운영자)에게는 지표 원천 자산 ID를 그 범위 안의 것만 보인다
+    (승인 스냅숏은 report_view 그대로 — 모든 원천이 남는다)."""
+    out = reports.report_view(rep, v)
+    if p.organization_id == rep.organization_id:
+        return out
+    shown = _visible_assets(db, p, sorted({a for m in v.metrics for a in m["sources"].get("asset_ids", [])}))
+    out["metrics"] = [{**m, "sources": {**m["sources"], "asset_ids": [a for a in m["sources"].get("asset_ids", [])
+                                                                      if a in shown]}} for m in v.metrics]
+    return out
+
+
 @router.get("/v1/reports", tags=["reports"])
 def list_reports(session_id: str | None = None, page: dict = Depends(page_params), db: Session = Depends(get_db),
                  p: Principal = Depends(require("report:read"))) -> dict:
@@ -391,7 +409,7 @@ def list_reports(session_id: str | None = None, page: dict = Depends(page_params
     if _viewer(p):
         stmt = stmt.where(Report.report_id.in_(select(ReportVersion.report_id).where(reports.submitted_filter())))
     rows, nxt = paginate(db, stmt, Report.report_id, page["limit"], page["cursor"])
-    return {"items": [reports.report_view(r, _report_version(db, r, p, None)) for r in rows], "next_cursor": nxt}
+    return {"items": [_view(db, r, _report_version(db, r, p, None), p) for r in rows], "next_cursor": nxt}
 
 
 @router.post("/v1/reports", tags=["reports"], status_code=201)
@@ -427,7 +445,7 @@ def create_report(body: ReportCreate, request: Request, db: Session = Depends(ge
     c.audit.record("REPORT_CREATED", principal=p, organization_id=rep.organization_id, target_type="Report",
                    target_id=rep.report_id, source_ip=client_ip(request),
                    details={"template": f"{tpl.code}:v{tpl.version}"})
-    return reports.report_view(rep, v)
+    return _view(db, rep, v, p)
 
 
 @router.get("/v1/reports/{report_id}", tags=["reports"])
@@ -435,7 +453,7 @@ def get_report(report_id: str, request: Request, version: int | None = Query(Non
                db: Session = Depends(get_db), c: Container = Depends(container),
                p: Principal = Depends(require("report:read"))) -> dict:
     rep = _load_report(db, c, request, report_id, p)
-    return reports.report_view(rep, _report_version(db, rep, p, version))
+    return _view(db, rep, _report_version(db, rep, p, version), p)
 
 
 def _owned(db: Session, c: Container, request: Request, report_id: str, p: Principal) -> Report:
@@ -457,7 +475,7 @@ def new_report_version(report_id: str, request: Request, db: Session = Depends(g
         s = db.get(TrialSession, rep.session_id)
         rep.period_to = (s.ends_at if s and s.ends_at else c.clock.now())
     v = reports.generate(c, db, rep, tpl, p.principal_id)
-    return reports.report_view(rep, v)
+    return _view(db, rep, v, p)
 
 
 class FieldEdit(BaseModel):
@@ -481,7 +499,7 @@ def edit_report_fields(report_id: str, body: FieldsPatch, request: Request, db: 
     unknown = reports.edit_fields(v, [f.model_dump() for f in body.fields], p.principal_id, c.clock.now())
     if unknown:
         raise _bad("/fields", f"양식에 없는 항목입니다: {', '.join(unknown)}")
-    return reports.report_view(rep, v)
+    return _view(db, rep, v, p)
 
 
 @router.post("/v1/reports/{report_id}/approve", tags=["reports"])
@@ -493,7 +511,7 @@ def approve_report(report_id: str, request: Request, db: Session = Depends(get_d
     c.audit.record("REPORT_APPROVED", principal=p, organization_id=rep.organization_id, target_type="Report",
                    target_id=rep.report_id, source_ip=client_ip(request),
                    details={"version": v.version, "sha256": v.snapshot_sha256})
-    return reports.report_view(rep, v)
+    return _view(db, rep, v, p)
 
 
 @router.post("/v1/reports/{report_id}/submit", tags=["reports"])
@@ -504,7 +522,7 @@ def submit_report(report_id: str, request: Request, db: Session = Depends(get_db
     reports.submit(c, v, p.principal_id, set(p.roles))
     c.audit.record("REPORT_SUBMITTED", principal=p, organization_id=rep.organization_id, target_type="Report",
                    target_id=rep.report_id, source_ip=client_ip(request), details={"version": v.version})
-    return reports.report_view(rep, v)
+    return _view(db, rep, v, p)
 
 
 @router.get("/v1/reports/{report_id}/export", tags=["reports"])
@@ -541,11 +559,7 @@ def trace_metric(report_id: str, metric_code: str, request: Request, version: in
     rep = _load_report(db, c, request, report_id, p)
     v = _report_version(db, rep, p, version)
 
-    def visible(ids: list[str]) -> set[str]:  # 권한 범위 안의 자산만 (관리기관 열람자는 L1 이상)
-        return set(db.execute(select(Asset.asset_id).where(Asset.asset_id.in_(ids), scope_filter(Asset, p)))
-                   .scalars()) if ids else set()
-
-    out = reports.trace(db, rep, v, metric_code, visible)
+    out = reports.trace(db, rep, v, metric_code, lambda ids: _visible_assets(db, p, ids))
     if out is None:
         raise ProblemError("NOT_FOUND")
     return out

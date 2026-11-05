@@ -253,13 +253,19 @@ def trace(db: Session, rep: Report, v: ReportVersion, code: str, visible: Any) -
         if hit:
             records.append({"record_id": rv.record_id, "version": rv.version, "title": rv.title})
     shown = visible(sorted(asset_ids))
+    rows = list(db.execute(select(Asset).where(Asset.asset_id.in_(shown))).scalars()) if shown else []
+    roots = {a.asset_id: originals(db, a.asset_id) for a in rows}
+    all_roots = {r for xs in roots.values() for r in xs}
+    shown_roots = visible(sorted(all_roots)) if all_roots else set()
+    # 숨긴 자산은 ID도 내보내지 않는다: 지표 원천·이벤트 연결·계보 원본 모두 조회자 범위 안만 (domain.md 2장)
     assets_out = [{"asset_id": a.asset_id, "variant": a.variant, "ingest_status": a.ingest_status,
-                   "originals": originals(db, a.asset_id)}
-                  for a in (db.execute(select(Asset).where(Asset.asset_id.in_(shown))).scalars() if shown else [])]
-    hidden = len(asset_ids - shown)
-    return {"metric": m, "records": records,
+                   "originals": [r for r in roots[a.asset_id] if r in shown_roots]} for a in rows]
+    hidden = len((asset_ids | all_roots) - shown - shown_roots)
+    metric = {**m, "sources": {**src, "asset_ids": [a for a in src.get("asset_ids", []) if a in shown]}}
+    return {"metric": metric, "records": records,
             "events": [{"event_id": e.event_id, "event_code": e.event_code, "source": e.source,
-                        "human_verified": e.human_verified, "asset_ids": sorted(ev_assets.get(e.event_id, []))}
+                        "human_verified": e.human_verified,
+                        "asset_ids": sorted(a for a in ev_assets.get(e.event_id, []) if a in shown)}
                        for e in events],
             "observation_ranges": ranges, "assets": sorted(assets_out, key=lambda x: x["asset_id"]),
             "hidden_count": hidden}
