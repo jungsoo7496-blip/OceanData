@@ -39,7 +39,8 @@ if TYPE_CHECKING:
     from app.container import Container
 
 log = logging.getLogger(__name__)
-EVENT_TYPES = ("upload.registered", "upload.quarantined", "asset.processed", "share.status_changed", "grant.revoked")
+EVENT_TYPES = ("upload.registered", "upload.quarantined", "asset.processed", "share.status_changed", "grant.revoked",
+               "incident.opened", "incident.resolved")
 _BEFORE_REGISTERED = {None, "UPLOADING", "RECEIVED", "VALIDATING", "QUARANTINED"}
 _REGISTERED_OR_LATER = {"REGISTERED", "PROXIED", "READY_PRIVATE"}
 
@@ -176,12 +177,21 @@ def _events_for(session: Session, obj: Any) -> list[tuple[str, str, dict[str, An
     return out
 
 
+def emit(session: Session, organization_id: str, event_type: str, data: dict[str, Any]) -> int:
+    """상태 변경 리스너 밖에서 직접 발행 (예: 11번 장애 열림·해제). 같은 트랜잭션의 outbox에 쌓는다."""
+    return _enqueue(session, [(event_type, organization_id, data)])
+
+
 @event.listens_for(Session, "before_flush")
 def _outbox(session: Session, _ctx: Any, _instances: Any) -> None:
     pending = [e for obj in session.dirty for e in _events_for(session, obj)]
-    if not pending:
-        return
+    if pending:
+        _enqueue(session, pending)
+
+
+def _enqueue(session: Session, pending: list[tuple[str, str, dict[str, Any]]]) -> int:
     now = datetime.now(UTC)
+    added = 0
     subs: dict[str, list[WebhookSubscription]] = {}
     with session.no_autoflush:
         for org in {org for _, org, _ in pending}:
@@ -198,6 +208,8 @@ def _outbox(session: Session, _ctx: Any, _instances: Any) -> None:
             session.add(WebhookDelivery(delivery_id=new_ulid(), event_id=event_id, webhook_id=s.webhook_id,
                                         organization_id=org, event_type=etype, payload=payload, status="PENDING",
                                         attempts=0, next_attempt_at=now, created_at=now))
+            added += 1
+    return added
 
 
 # ------------------------------------------------------------------ 전송

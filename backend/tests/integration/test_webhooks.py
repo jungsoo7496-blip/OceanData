@@ -167,3 +167,41 @@ def test_grant_revoked_goes_to_consumer_org(ictx) -> None:
     d = _deliveries(ctx, event_type="grant.revoked")
     assert [(x.organization_id, x.payload["data"]["grant_id"]) for x in d] == [(ORG_CONSUMER, grant)]
     assert contracts.schema_problems("webhook-event", d[0].payload) == []
+
+
+def test_incident_events_to_org_webhook(ictx) -> None:
+    """11번 요구사항 3.1: 기관 대상 경보 규칙의 장애 열림·해제를 기관 웹훅으로 (재알림은 보내지 않는다)."""
+    from app.db.models import Incident, WatchRule
+    from app.domain.ids import new_id
+    from app.seed import DEV_A_COLLECTOR
+    from app.services import monitoring
+
+    ctx = ictx
+    r = ctx.client.post("/v1/webhooks/subscriptions", headers=ctx.as_user(ADMIN_A),
+                        json={"url": PUBLIC_URL, "event_types": ["incident.opened", "incident.resolved"]})
+    check(r, "POST", "/v1/webhooks/subscriptions")
+    now = ctx.c.clock.now()
+    with ctx.c.sessionmaker.begin() as db:
+        rule = db.execute(select(WatchRule).where(WatchRule.notify_org.is_(True))).scalars().first()
+        assert rule is not None
+        inc = Incident(incident_id=new_id("incident"), alert_key="t", rule_code=rule.rule_code, severity="WARNING",
+                       status="OPEN", organization_id=ORG_A, device_id=DEV_A_COLLECTOR, session_id=None,
+                       summary="합성 장애", guidance="합성 안내", opened_at=now)
+        db.add(inc)
+        db.flush()
+        for kind in ("OPENED", "REMINDER", "RESOLVED"):
+            monitoring.dispatch(ctx.c, db, rule, inc, kind, now)
+        iid = inc.incident_id
+    got = [(d.event_type, d.payload["data"]["incident_id"]) for d in _deliveries(ctx, organization_id=ORG_A)]
+    assert got == [("incident.opened", iid), ("incident.resolved", iid)]
+    for d in _deliveries(ctx, organization_id=ORG_A):
+        assert contracts.schema_problems("webhook-event", d.payload) == [], d.payload
+    # 운영자 전용 경보(기관 장애가 아님)는 기관 웹훅으로 보내지 않는다
+    with ctx.c.sessionmaker.begin() as db:
+        rule = db.execute(select(WatchRule).where(WatchRule.notify_org.is_(True))).scalars().first()
+        op_inc = Incident(incident_id=new_id("incident"), alert_key="op", rule_code=rule.rule_code, severity="CRITICAL",
+                          status="OPEN", organization_id=None, summary="운영 장애", guidance="-", opened_at=now)
+        db.add(op_inc)
+        db.flush()
+        monitoring.dispatch(ctx.c, db, rule, op_inc, "OPENED", now)
+    assert len(_deliveries(ctx)) == 2

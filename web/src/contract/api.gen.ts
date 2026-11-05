@@ -2301,6 +2301,40 @@ export interface webhooks {
         patch?: never;
         trace?: never;
     };
+    "incident.opened": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 수집 경보로 장애가 열림 (11번 요구사항 3.1, 기관 대상 규칙만). 메신저 채널은 결정 대기 */
+        post: operations["webhookIncidentOpened"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "incident.resolved": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 장애가 해제됨 (자동 해제·ACK 뒤 해소) */
+        post: operations["webhookIncidentResolved"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export interface components {
     schemas: {
@@ -3417,7 +3451,7 @@ export interface components {
         WebhookSubscriptionCreate: {
             /** Format: uri */
             url: string;
-            event_types: ("upload.registered" | "upload.quarantined" | "asset.processed" | "share.status_changed" | "grant.revoked")[];
+            event_types: ("upload.registered" | "upload.quarantined" | "asset.processed" | "share.status_changed" | "grant.revoked" | "incident.opened" | "incident.resolved")[];
         };
         WebhookSubscription: {
             webhook_id: components["schemas"]["webhook_id"];
@@ -4404,7 +4438,7 @@ export interface components {
         "webhook-event.schema": {
             event_id: components["schemas"]["ulid"];
             /** @enum {unknown} */
-            type: "upload.registered" | "upload.quarantined" | "asset.processed" | "share.status_changed" | "grant.revoked";
+            type: "upload.registered" | "upload.quarantined" | "asset.processed" | "share.status_changed" | "grant.revoked" | "incident.opened" | "incident.resolved";
             occurred_at: components["schemas"]["utc_datetime"];
             organization_id: components["schemas"]["organization_id"];
             data: {
@@ -4414,8 +4448,13 @@ export interface components {
                 quarantine_reason?: components["schemas"]["quarantine_reason"];
                 share_status?: components["schemas"]["share_status"];
                 grant_id?: components["schemas"]["grant_id"];
+                incident_id?: components["schemas"]["incident_id"];
+                rule_code?: string;
+                severity?: components["schemas"]["event_severity"];
+                device_id?: components["schemas"]["device_id"] | null;
+                session_id?: components["schemas"]["session_id"] | null;
             };
-        } & (unknown & unknown & unknown);
+        } & (unknown & unknown & unknown & unknown);
     };
     responses: {
         /** @description 입력 형식 오류 (VALIDATION_ERROR) */
@@ -8846,6 +8885,62 @@ export interface operations {
         };
     };
     webhookGrantRevoked: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description hex(HMAC-SHA256(secret, timestamp + "." + body)) */
+                "X-Signature": components["parameters"]["WebhookSignature"];
+                /** @description 유닉스 초. 수신 측은 허용 오차(기본 5분) 밖이면 거부한다. */
+                "X-Signature-Timestamp": components["parameters"]["WebhookTimestamp"];
+                "X-Event-Id": components["parameters"]["WebhookEventId"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["webhook-event.schema"];
+            };
+        };
+        responses: {
+            /** @description 받음 */
+            "2XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    webhookIncidentOpened: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description hex(HMAC-SHA256(secret, timestamp + "." + body)) */
+                "X-Signature": components["parameters"]["WebhookSignature"];
+                /** @description 유닉스 초. 수신 측은 허용 오차(기본 5분) 밖이면 거부한다. */
+                "X-Signature-Timestamp": components["parameters"]["WebhookTimestamp"];
+                "X-Event-Id": components["parameters"]["WebhookEventId"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["webhook-event.schema"];
+            };
+        };
+        responses: {
+            /** @description 받음 */
+            "2XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    webhookIncidentResolved: {
         parameters: {
             query?: never;
             header: {

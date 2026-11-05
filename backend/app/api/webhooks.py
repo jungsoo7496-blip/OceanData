@@ -18,13 +18,13 @@ from app.services import webhooks
 
 router = APIRouter(tags=["webhooks"])
 EventType = Literal["upload.registered", "upload.quarantined", "asset.processed", "share.status_changed",
-                    "grant.revoked"]
+                    "grant.revoked", "incident.opened", "incident.resolved"]
 
 
 class SubscriptionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     url: str = Field(max_length=500)
-    event_types: list[EventType] = Field(min_length=1, max_length=5)
+    event_types: list[EventType] = Field(min_length=1, max_length=7)
 
 
 def _own(db: Session, p: Principal) -> list[WebhookSubscription]:

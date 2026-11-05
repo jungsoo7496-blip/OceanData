@@ -600,6 +600,13 @@ def post_webhook(url: str, secret: str | None, payload: dict[str, Any], now: dat
 
 def dispatch(c: Container, db: Session, rule: WatchRule, incident: Incident, kind: str, now: datetime) -> None:
     """kind: OPENED / REMINDER / RESOLVED."""
+    if kind in ("OPENED", "RESOLVED") and rule.notify_org and incident.organization_id:
+        # 기관 웹훅 구독 (11번 요구사항 3.1, 04번 웹훅): 열림·해제만 (재알림은 보내지 않는다)
+        from app.services import webhooks
+
+        webhooks.emit(db, incident.organization_id, f"incident.{kind.lower()}", {
+            "incident_id": incident.incident_id, "rule_code": rule.rule_code, "severity": incident.severity,
+            "device_id": incident.device_id, "session_id": incident.session_id})
     label = {"OPENED": "경보", "REMINDER": "경보 계속", "RESOLVED": "해제"}[kind]
     title = RULES[rule.rule_code][0]
     subject = f"[{label}] {title} ({incident.severity})"

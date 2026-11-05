@@ -24,7 +24,7 @@ type Agreement = components['schemas']['Agreement']
 type Grant = components['schemas']['BreakGlassGrant']
 type UsageReport = components['schemas']['UsageReport']
 
-const EVENTS = ['upload.registered', 'upload.quarantined', 'asset.processed', 'share.status_changed', 'grant.revoked']
+const EVENTS = ['upload.registered', 'upload.quarantined', 'asset.processed', 'share.status_changed', 'grant.revoked', 'incident.opened', 'incident.resolved']
 const COPY = ['RETAINED', 'ROTATING', 'NONE', 'UNKNOWN']
 const MODES = ['C0_METADATA_ONLY', 'C1_SAMPLE_PREVIEW', 'C2_EVENT_CLIPS', 'C3_APPROVED_FULL']
 const NOTES: [string, string][] = [['data', '데이터(영상·센서·로그, 포맷)'], ['network', '통신(망분리·접안 주기)'], ['time_sync', '시각 동기화'],

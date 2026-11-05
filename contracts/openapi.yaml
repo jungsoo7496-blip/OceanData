@@ -3787,6 +3787,40 @@ webhooks:
             schema: {$ref: './schemas/webhook-event.schema.json'}
       responses:
         '2XX': {description: 받음}
+  incident.opened:
+    post:
+      operationId: webhookIncidentOpened
+      summary: 수집 경보로 장애가 열림 (11번 요구사항 3.1, 기관 대상 규칙만). 메신저 채널은 결정 대기
+      x-freeze: G1
+      x-status: draft
+      parameters:
+        - {$ref: '#/components/parameters/WebhookSignature'}
+        - {$ref: '#/components/parameters/WebhookTimestamp'}
+        - {$ref: '#/components/parameters/WebhookEventId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './schemas/webhook-event.schema.json'}
+      responses:
+        '2XX': {description: 받음}
+  incident.resolved:
+    post:
+      operationId: webhookIncidentResolved
+      summary: 장애가 해제됨 (자동 해제·ACK 뒤 해소)
+      x-freeze: G1
+      x-status: draft
+      parameters:
+        - {$ref: '#/components/parameters/WebhookSignature'}
+        - {$ref: '#/components/parameters/WebhookTimestamp'}
+        - {$ref: '#/components/parameters/WebhookEventId'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: './schemas/webhook-event.schema.json'}
+      responses:
+        '2XX': {description: 받음}
 
 components:
   securitySchemes:
@@ -5402,8 +5436,9 @@ components:
         event_types:
           type: array
           minItems: 1
+          maxItems: 7
           uniqueItems: true
-          items: {enum: [upload.registered, upload.quarantined, asset.processed, share.status_changed, grant.revoked]}
+          items: {enum: [upload.registered, upload.quarantined, asset.processed, share.status_changed, grant.revoked, incident.opened, incident.resolved]}
 
     WebhookSubscription:
       type: object
