@@ -64,7 +64,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "init-buckets":
         for zone, bucket in settings.buckets.items():
             c.storage.ensure_bucket(bucket)
-            print(f"{zone}: {bucket} 준비됨")
+            enc = ""
+            if settings.s3_sse == "AES256" and hasattr(c.storage, "ensure_encryption"):
+                enc = f" · 서버 측 암호화 {c.storage.ensure_encryption(bucket)}"
+            print(f"{zone}: {bucket} 준비됨{enc}")
         return 0
     if args.cmd == "seed":
         from app.seed import seed

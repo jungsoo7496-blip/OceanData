@@ -2286,6 +2286,8 @@ export interface components {
             checks: {
                 [key: string]: "ok" | "failed";
             };
+            /** @description 준비 상태를 바꾸지 않는 경고 코드 (예 storage_encryption_unsupported:RAW — S3_SSE를 요청했는데 스토리지가 지원하지 않음, 08번 요구사항 1.4) */
+            warnings?: string[];
         };
         Capabilities: {
             api_version: string;

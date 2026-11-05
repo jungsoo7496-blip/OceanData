@@ -43,8 +43,16 @@ def readyz(c: Container = Depends(container)) -> JSONResponse:
             checks[name] = "failed"
     ready = all(v == "ok" for v in checks.values())
     # 실패한 의존 시스템 이름만 돌려준다 (주소·자격증명 없음)
-    return JSONResponse({"status": "ready" if ready else "not_ready", "checks": checks},
-                        status_code=200 if ready else 503)
+    body: dict = {"status": "ready" if ready else "not_ready", "checks": checks}
+    from app.services.storage_check import encryption_warnings
+
+    try:
+        warnings = encryption_warnings(c) if checks.get("storage") == "ok" else []
+    except Exception:  # noqa: BLE001
+        warnings = []
+    if warnings:  # 준비 상태는 바꾸지 않고 상세에 표시 (요구사항 1.4)
+        body["warnings"] = warnings
+    return JSONResponse(body, status_code=200 if ready else 503)
 
 
 @router.get("/metrics", include_in_schema=False)

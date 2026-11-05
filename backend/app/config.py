@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     s3_access_key_id: SecretStr
     s3_secret_access_key: SecretStr
     s3_force_path_style: bool = True
+    # 서버 측 암호화 (08번 요구사항 1.3·1.4): none | AES256(SSE-S3, 버킷 기본 암호화로 요청). 지원 여부는 기동 때 확인
+    s3_sse: str = "none"
     bucket_raw: str = "raw"
     bucket_proc: str = "proc"
     bucket_evidence: str = "evidence"

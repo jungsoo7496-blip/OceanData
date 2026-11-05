@@ -40,6 +40,9 @@ def create_app(c: Container | None = None) -> FastAPI:
     app = FastAPI(title="해양 실증데이터 플랫폼 API", version=API_VERSION, docs_url="/docs", redoc_url=None,
                   openapi_url="/openapi.json")
     app.state.container = c
+    from app.services.storage_check import warn_on_startup
+
+    warn_on_startup(c)  # 서버 측 암호화를 요청했는데 지원하지 않으면 기동 경고 (08번 요구사항 1.4)
     install_error_handlers(app)
     app.add_middleware(RequestContextMiddleware)
     app.include_router(system.router)

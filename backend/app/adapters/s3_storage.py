@@ -58,6 +58,30 @@ class S3Storage:
         except ClientError:
             self.client.create_bucket(Bucket=bucket)  # type: ignore[attr-defined]
 
+    # --- 서버 측 암호화 (08번 요구사항 1.3·1.4). 버킷 기본 암호화로 요청해 사전 서명 업로드에도 적용되게 한다
+    def ensure_encryption(self, bucket: str) -> str:
+        """SSE-S3(AES256) 기본 암호화를 요청한다. 'enabled' 또는 'unsupported'."""
+        try:
+            self.client.put_bucket_encryption(  # type: ignore[attr-defined]
+                Bucket=bucket, ServerSideEncryptionConfiguration={
+                    "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]})
+        except (ClientError, BotoCoreError):
+            return "unsupported"
+        return "enabled" if self.encryption_status(bucket) == "enabled" else "unsupported"
+
+    def encryption_status(self, bucket: str) -> str:
+        """'enabled'(기본 암호화 있음) · 'disabled'(지원하지만 꺼짐) · 'unsupported'(미지원·확인 불가)."""
+        try:
+            r = self.client.get_bucket_encryption(Bucket=bucket)  # type: ignore[attr-defined]
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            return "disabled" if code == "ServerSideEncryptionConfigurationNotFoundError" else "unsupported"
+        except BotoCoreError:
+            return "unsupported"
+        rules = r.get("ServerSideEncryptionConfiguration", {}).get("Rules", [])
+        algs = {x.get("ApplyServerSideEncryptionByDefault", {}).get("SSEAlgorithm") for x in rules}
+        return "enabled" if algs & {"AES256", "aws:kms"} else "disabled"
+
     # --- 객체
     def put_object(self, bucket: str, key: str, data: bytes, content_type: str | None = None) -> None:
         extra = {"ContentType": content_type} if content_type else {}

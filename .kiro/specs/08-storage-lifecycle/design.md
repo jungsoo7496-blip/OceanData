@@ -36,3 +36,8 @@
 - `GET /v1/usage-reports?month=YYYY-MM`(ORG_ADMIN 자기 기관, 운영자 전체): 그 달 마지막 스냅숏의 존별 저장량, 처리 시간(작업 마지막 시도의
   locked_at~updated_at, CPU/GPU), 다운로드 URL 발급 수·대상 크기(실제 전송량 아님), 데이터셋 배포 수. 금액은 넣지 않는다.
 
+## 서버 측 암호화 (요구사항 1.3·1.4)
+`S3_SSE=AES256`이면 `init-buckets`가 존별 버킷에 기본 암호화(SSE-S3)를 요청한다(객체마다 헤더를 붙이지 않아 사전 서명 업로드도 적용).
+API 기동 때와 `/readyz`(5분 캐시)에서 `GetBucketEncryption`으로 확인해, 켜지지 않았거나 제품이 지원하지 않으면 경고 로그와
+`/readyz` `warnings: ["storage_encryption_unsupported:<존>"]`. 준비 상태(200/503)는 바꾸지 않는다. 주소·자격증명은 내보내지 않는다.
+
