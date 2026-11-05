@@ -13,6 +13,8 @@
   "otpPolicyAlgorithm": "HmacSHA1",
   "otpPolicyDigits": 6,
   "otpPolicyPeriod": 30,
+  "browserFlow": "browser-mfa",
+  "directGrantFlow": "direct-grant-mfa",
   "clients": [
     {
       "clientId": "marine-web",
@@ -29,7 +31,8 @@
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "http://localhost:5173/*"
+        "post.logout.redirect.uris": "http://localhost:5173/*",
+        "default.acr.values": "2"
       },
       "protocolMappers": [
         {
@@ -40,6 +43,15 @@
             "included.custom.audience": "marine-api",
             "access.token.claim": "true",
             "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "amr",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-amr-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true"
           }
         }
       ]
@@ -61,10 +73,47 @@
             "access.token.claim": "true",
             "id.token.claim": "false"
           }
+        },
+        {
+          "name": "amr",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-amr-mapper",
+          "config": {
+            "access.token.claim": "true",
+            "id.token.claim": "true"
+          }
         }
       ]
     }
   ],
+  "roles": {
+    "realm": [
+      {
+        "name": "mfa-required",
+        "description": "IdP 내부 표지: 로그인 때 OTP를 거쳐야 한다 (ADR-0034). ORG_ADMIN·PLATFORM_OPERATOR가 포함한다. API 권한 판단에는 쓰지 않는다."
+      },
+      {
+        "name": "ORG_ADMIN",
+        "description": "플랫폼 DB users.roles의 ORG_ADMIN과 같게 둔다. 권한 판단은 플랫폼 DB 기준이고, 여기서는 MFA 강제에만 쓴다.",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "mfa-required"
+          ]
+        }
+      },
+      {
+        "name": "PLATFORM_OPERATOR",
+        "description": "플랫폼 DB users.roles의 PLATFORM_OPERATOR와 같게 둔다. 권한 판단은 플랫폼 DB 기준이고, 여기서는 MFA 강제에만 쓴다.",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "mfa-required"
+          ]
+        }
+      }
+    ]
+  },
   "users": [
     {
       "id": "00000000-0000-4000-8000-000000000101",
@@ -81,11 +130,10 @@
           "temporary": false
         }
       ],
-      "requiredActions": [
-        "CONFIGURE_TOTP"
-      ],
+      "requiredActions": [],
       "realmRoles": [
-        "default-roles-marine"
+        "default-roles-marine",
+        "ORG_ADMIN"
       ]
     },
     {
@@ -123,11 +171,10 @@
           "temporary": false
         }
       ],
-      "requiredActions": [
-        "CONFIGURE_TOTP"
-      ],
+      "requiredActions": [],
       "realmRoles": [
-        "default-roles-marine"
+        "default-roles-marine",
+        "ORG_ADMIN"
       ]
     },
     {
@@ -185,11 +232,10 @@
           "temporary": false
         }
       ],
-      "requiredActions": [
-        "CONFIGURE_TOTP"
-      ],
+      "requiredActions": [],
       "realmRoles": [
-        "default-roles-marine"
+        "default-roles-marine",
+        "PLATFORM_OPERATOR"
       ]
     },
     {
@@ -207,11 +253,10 @@
           "temporary": false
         }
       ],
-      "requiredActions": [
-        "CONFIGURE_TOTP"
-      ],
+      "requiredActions": [],
       "realmRoles": [
-        "default-roles-marine"
+        "default-roles-marine",
+        "PLATFORM_OPERATOR"
       ]
     },
     {
@@ -252,6 +297,396 @@
       "requiredActions": [],
       "realmRoles": [
         "default-roles-marine"
+      ]
+    }
+  ],
+  "authenticatorConfig": [
+    {
+      "alias": "loa-1-password",
+      "config": {
+        "loa-condition-level": "1",
+        "loa-max-age": "36000"
+      }
+    },
+    {
+      "alias": "loa-2-otp",
+      "config": {
+        "loa-condition-level": "2",
+        "loa-max-age": "36000"
+      }
+    },
+    {
+      "alias": "role-mfa-required",
+      "config": {
+        "condUserRole": "mfa-required",
+        "negate": "false"
+      }
+    },
+    {
+      "alias": "role-not-mfa-required",
+      "config": {
+        "condUserRole": "mfa-required",
+        "negate": "true"
+      }
+    },
+    {
+      "alias": "role-mfa-required-direct-grant",
+      "config": {
+        "condUserRole": "mfa-required",
+        "negate": "false"
+      }
+    },
+    {
+      "alias": "amr-pwd",
+      "config": {
+        "default.reference.value": "pwd",
+        "default.reference.maxAge": "36000"
+      }
+    },
+    {
+      "alias": "amr-otp-level-2",
+      "config": {
+        "default.reference.value": "otp",
+        "default.reference.maxAge": "36000"
+      }
+    },
+    {
+      "alias": "amr-otp-fallback",
+      "config": {
+        "default.reference.value": "otp",
+        "default.reference.maxAge": "36000"
+      }
+    },
+    {
+      "alias": "amr-pwd-direct-grant",
+      "config": {
+        "default.reference.value": "pwd",
+        "default.reference.maxAge": "36000"
+      }
+    },
+    {
+      "alias": "amr-otp-direct-grant",
+      "config": {
+        "default.reference.value": "otp",
+        "default.reference.maxAge": "36000"
+      }
+    },
+    {
+      "alias": "deny-otp-not-configured",
+      "config": {
+        "denyErrorMessage": "OTP 등록 필요: 브라우저로 먼저 로그인해 OTP를 등록하세요"
+      }
+    }
+  ],
+  "authenticationFlows": [
+    {
+      "alias": "browser-mfa",
+      "description": "브라우저 로그인 (ADR-0034): mfa-required 역할(ORG_ADMIN·PLATFORM_OPERATOR)은 OTP 필수, 그 밖의 역할은 비밀번호만",
+      "providerId": "basic-flow",
+      "topLevel": true,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "auth-cookie",
+          "authenticatorFlow": false,
+          "requirement": "ALTERNATIVE",
+          "priority": 10,
+          "userSetupAllowed": false
+        },
+        {
+          "flowAlias": "browser-mfa forms",
+          "authenticatorFlow": true,
+          "requirement": "ALTERNATIVE",
+          "priority": 20,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "browser-mfa forms",
+      "description": "LoA 1(비밀번호) → 역할별 OTP. 조건 하위 흐름만 둔다",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "flowAlias": "browser-mfa level 1 password",
+          "authenticatorFlow": true,
+          "requirement": "CONDITIONAL",
+          "priority": 10,
+          "userSetupAllowed": false
+        },
+        {
+          "flowAlias": "browser-mfa privileged otp",
+          "authenticatorFlow": true,
+          "requirement": "CONDITIONAL",
+          "priority": 20,
+          "userSetupAllowed": false
+        },
+        {
+          "flowAlias": "browser-mfa other roles",
+          "authenticatorFlow": true,
+          "requirement": "CONDITIONAL",
+          "priority": 30,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "browser-mfa level 1 password",
+      "description": "LoA 1 = 비밀번호 (acr 1)",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-level-of-authentication",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "loa-1-password"
+        },
+        {
+          "authenticator": "auth-username-password-form",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "amr-pwd"
+        }
+      ]
+    },
+    {
+      "alias": "browser-mfa privileged otp",
+      "description": "mfa-required 역할은 OTP를 반드시 거친다. LoA 2가 요청되면(marine-web 기본) acr 2, 아니면 acr 1이지만 amr에 otp",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-user-role",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "role-mfa-required"
+        },
+        {
+          "flowAlias": "browser-mfa level 2 wrapper",
+          "authenticatorFlow": true,
+          "requirement": "ALTERNATIVE",
+          "priority": 20,
+          "userSetupAllowed": false
+        },
+        {
+          "flowAlias": "browser-mfa otp without step-up",
+          "authenticatorFlow": true,
+          "requirement": "ALTERNATIVE",
+          "priority": 30,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "browser-mfa level 2 wrapper",
+      "description": "LoA 2 조건이 맞지 않으면 이 대안은 실패하고 다음 대안(OTP)으로 넘어간다",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "flowAlias": "browser-mfa level 2 otp",
+          "authenticatorFlow": true,
+          "requirement": "CONDITIONAL",
+          "priority": 10,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "browser-mfa level 2 otp",
+      "description": "LoA 2 = 비밀번호 + OTP (acr 2)",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-level-of-authentication",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "loa-2-otp"
+        },
+        {
+          "authenticator": "auth-otp-form",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "amr-otp-level-2"
+        }
+      ]
+    },
+    {
+      "alias": "browser-mfa otp without step-up",
+      "description": "클라이언트가 LoA 2를 요청하지 않아도 OTP는 거친다 (acr_values 조작 방지)",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "auth-otp-form",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "amr-otp-fallback"
+        }
+      ]
+    },
+    {
+      "alias": "browser-mfa other roles",
+      "description": "mfa-required가 아닌 사용자: LoA 1 세션으로 LoA 2 요청이 와도 SSO가 끊기지 않게 현재 수준(acr 1)으로 마친다",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-user-role",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "role-not-mfa-required"
+        },
+        {
+          "authenticator": "allow-access-authenticator",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "direct-grant-mfa",
+      "description": "개발용 비밀번호 그랜트 (ADR-0034): mfa-required 역할은 totp 파라미터 필수",
+      "providerId": "basic-flow",
+      "topLevel": true,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "direct-grant-validate-username",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "direct-grant-validate-password",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "amr-pwd-direct-grant"
+        },
+        {
+          "flowAlias": "direct-grant-mfa privileged",
+          "authenticatorFlow": true,
+          "requirement": "CONDITIONAL",
+          "priority": 30,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "direct-grant-mfa privileged",
+      "description": "mfa-required 역할: OTP를 등록했으면 totp 검증, 등록 전이면 거부",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-user-role",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "role-mfa-required-direct-grant"
+        },
+        {
+          "flowAlias": "direct-grant-mfa otp configured",
+          "authenticatorFlow": true,
+          "requirement": "ALTERNATIVE",
+          "priority": 20,
+          "userSetupAllowed": false
+        },
+        {
+          "flowAlias": "direct-grant-mfa otp not configured",
+          "authenticatorFlow": true,
+          "requirement": "ALTERNATIVE",
+          "priority": 30,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "direct-grant-mfa otp configured",
+      "description": "OTP가 등록돼 있지 않으면 이 대안은 실패하고 거부로 넘어간다",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "flowAlias": "direct-grant-mfa validate otp",
+          "authenticatorFlow": true,
+          "requirement": "CONDITIONAL",
+          "priority": 10,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "direct-grant-mfa validate otp",
+      "description": "등록된 OTP로 totp 파라미터 검증",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-user-configured",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "direct-grant-validate-otp",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "amr-otp-direct-grant"
+        }
+      ]
+    },
+    {
+      "alias": "direct-grant-mfa otp not configured",
+      "description": "OTP 등록 전: 비밀번호 그랜트로는 토큰을 주지 않는다 (브라우저로 먼저 등록)",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "deny-access-authenticator",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorConfig": "deny-otp-not-configured"
+        }
       ]
     }
   ]

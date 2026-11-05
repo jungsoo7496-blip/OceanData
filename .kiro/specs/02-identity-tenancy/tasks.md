@@ -3,7 +3,7 @@
 - [x] 1. KeycloakIdentity(JWKS 캐시·키 교체) + Auth_Middleware — 요구사항 1.1, 1.2, 1.3 · 시험 `test_user_token_validation_and_audit`
 - [x] 2. Permission_Table(기본 거부) — 요구사항 3.1, 3.2 · 시험 `test_permission_default_deny_and_mfa`
 - [x] 3. MFA 필요 동작 403 MFA_REQUIRED — 요구사항 4.2 · 시험 `test_mfa_required_for_high_risk_actions`
-- [ ] 4. Keycloak에서 ORG_ADMIN·PLATFORM_OPERATOR MFA 강제 + acr/amr 클레임 확인 — 요구사항 4.1 (realm은 OTP 등록 요구까지만, 단계 인증 흐름 미설정)
+- [x] 4. Keycloak에서 ORG_ADMIN·PLATFORM_OPERATOR MFA 강제 + acr/amr 클레임 확인 — 요구사항 4.1 · realm 역할 → `mfa-required` 조건부 OTP(브라우저·개발용 비밀번호 그랜트), marine-web 기본 LoA 2 → 관리자 토큰 acr 2·amr otp, 일반 역할 acr 1(OTP 없음) · 시험 `tools/tests/test_keycloak_realm_mfa.py`, `deploy/compose/keycloak/tests/verify-mfa.sh`(Keycloak 26.0.7 일회용 컨테이너·실제 브라우저·API 판정) · ADR-0034
 - [x] 5. Tenant_Guard + 교차 기관 404·감사 — 요구사항 2.1, 2.2, 2.5, 2.6 · T01-a·b·c
 - [x] 6. PROGRAM_VIEWER 범위 (배정 사업만) — 요구사항 2.3 일부 · T01-f (L1 자산·보고서 범위는 04·10번에서 자산이 생기면 추가)
 - [x] 7. 등록 코드·등록·기기 토큰·폐기 — 요구사항 5.1~5.6 · 시험 `test_device_enrollment_token_and_revocation`
