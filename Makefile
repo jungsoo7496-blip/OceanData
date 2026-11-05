@@ -39,7 +39,7 @@ verify-audit:
 sample-video:
 	tools/sample_video.sh var/samples
 
-test: test-unit web-check
+test: test-unit agent-test web-check  # tech.md 4장: 단위 테스트 (Python·Go·TS)
 
 test-unit:
 	cd backend && .venv/bin/pytest -q tests/unit

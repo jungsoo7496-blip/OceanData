@@ -1,0 +1,8 @@
+# 줄 끝 규칙. Windows의 Git 기본값(core.autocrlf=true)으로 받아도 아래 파일은 LF를 유지한다.
+# CRLF로 바뀌면 컨테이너 안 sh 스크립트가 '/bin/sh^M' 오류로, Makefile이 'missing separator'로 멈춘다.
+*.sh text eol=lf
+Makefile text eol=lf
+Dockerfile text eol=lf
+
+# 시험 고정 파일(Go 퍼징 말뭉치 등)은 바이트 그대로 둔다 — 말뭉치 첫 줄 'go test fuzz v1' 뒤에 CR이 붙으면 읽지 못한다
+**/testdata/** -text
