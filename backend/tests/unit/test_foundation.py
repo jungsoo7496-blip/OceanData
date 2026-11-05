@@ -60,6 +60,34 @@ def test_json_log_has_required_fields_and_no_secrets() -> None:
     assert out["token"] == REDACTED
 
 
+def test_json_log_drops_db_error_values_but_keeps_sqlstate() -> None:
+    """DB 오류 문구·바인딩 값에 든 개인정보(합성)가 처리되지 않은 예외 로그에 남지 않는다 (security.md)."""
+    import sys
+
+    import pg8000.dbapi
+    from sqlalchemy.exc import DataError
+
+    from app.db.session import make_engine
+
+    pii = "홍길동 010-0000-0000"  # 합성 값 (traceback의 소스 줄에는 나오지 않게 변수로)
+    orig = pg8000.dbapi.DatabaseError({"S": "ERROR", "C": "22P02", "M": f'invalid input syntax for type integer: "{pii}"'})
+    stmt, params = "SELECT CAST(%s AS integer)", (pii,)
+    for chained in (False, True):
+        try:
+            try:
+                raise DataError(stmt, params, orig)
+            except DataError as db_exc:
+                if chained:
+                    raise RuntimeError("보고서 만들기 실패") from db_exc
+                raise
+        except Exception:  # noqa: BLE001 - 로그 형식만 본다
+            rec = logging.LogRecord("t", logging.ERROR, __file__, 1, "unhandled_exception", None, sys.exc_info())
+        out = json.loads(JsonFormatter().format(rec))
+        assert "홍길동" not in out["exc"] and "010-0000-0000" not in out["exc"], out["exc"]
+        assert "SQLSTATE=22P02" in out["exc"] and "Traceback" in out["exc"]
+    assert make_engine("postgresql+pg8000://u:p@127.0.0.1:1/x").hide_parameters is True
+
+
 def test_ulid_and_prefix() -> None:
     a, b = new_ulid(), new_ulid()
     assert is_ulid(a) and len(a) == 26 and a != b

@@ -39,6 +39,37 @@ def scrub(value: Any, key: str | None = None) -> Any:
     return value
 
 
+def _db_error(exc: BaseException) -> bool:
+    try:
+        from sqlalchemy.exc import StatementError
+    except ImportError:  # pragma: no cover - 백엔드에는 항상 있다
+        return False
+    import pg8000.dbapi
+
+    return isinstance(exc, StatementError | pg8000.dbapi.Error)
+
+
+def _sqlstate(exc: BaseException) -> str:
+    orig = getattr(exc, "orig", exc)
+    args = getattr(orig, "args", ())
+    if args and isinstance(args[0], dict):
+        return str(args[0].get("C", "?"))
+    return "?"
+
+
+def redact_db_messages(text: str, exc: BaseException | None) -> str:
+    """DB 오류 문구에는 바인딩 값·제약 위반 값(개인정보일 수 있다)이 들어 있으므로 SQLSTATE만 남긴다 (security.md)."""
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if _db_error(exc):
+            msg = str(exc)
+            if msg:
+                text = text.replace(msg, f"[DB 오류 내용 생략 SQLSTATE={_sqlstate(exc)}]")
+        exc = exc.__cause__ or exc.__context__
+    return text
+
+
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
@@ -53,7 +84,7 @@ class JsonFormatter(logging.Formatter):
             if k not in _RESERVED and not k.startswith("_"):
                 payload[k] = scrub(v, k)
         if record.exc_info:
-            payload["exc"] = scrub(self.formatException(record.exc_info))
+            payload["exc"] = scrub(redact_db_messages(self.formatException(record.exc_info), record.exc_info[1]))
         return json.dumps(payload, ensure_ascii=False, default=str)
 
 
