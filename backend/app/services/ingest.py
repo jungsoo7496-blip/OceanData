@@ -381,11 +381,13 @@ class IngestService:
         if up.status in ("EXPIRED", "ABORTED"):
             raise ProblemError("GONE", detail="만료되었거나 취소된 업로드입니다")
 
-    def _release(self, up: Upload, final: str) -> None:
+    def _release(self, up: Upload, final: str, *, require_cleanup: bool = False) -> None:
         try:
             self.c.storage.abort_multipart_upload(up.bucket, up.object_key, up.s3_upload_id)
         except Exception as exc:  # noqa: BLE001 - 이미 정리된 멀티파트일 수 있다
             log.warning("abort_multipart_failed", extra={"error_type": type(exc).__name__})
+            if require_cleanup:
+                raise ProblemError("STORAGE_UNAVAILABLE", headers={"Retry-After": "30"}) from None
         self.quota.settle(up.organization_id, up.reserved_bytes, to=None)
         up.status, up.reserved_bytes, up.updated_at = final, 0, self.c.clock.now()
         asset = self.db.get(Asset, up.asset_id) if up.asset_id else None
@@ -481,14 +483,16 @@ class IngestService:
             stored = self.c.storage.list_parts(up.bucket, up.object_key, up.s3_upload_id)
         except Exception:  # noqa: BLE001
             raise ProblemError("STORAGE_UNAVAILABLE", headers={"Retry-After": "30"}) from None
+        if any(part.size is None or part.size < 0 or not 1 <= part.part_number <= 10000 for part in stored):
+            raise ProblemError("STORAGE_UNAVAILABLE", detail="저장소의 파트 크기를 확인하지 못했습니다",
+                               headers={"Retry-After": "30"})
         wrong = [{"part_number": s.part_number, "expected_size": self._part_len(up, s.part_number),
                   "actual_size": s.size} for s in sorted(stored, key=lambda s: s.part_number)
-                 if s.size is not None and (s.part_number > up.part_count
-                                            or s.size != self._part_len(up, s.part_number))]
+                 if s.part_number > up.part_count or s.size != self._part_len(up, s.part_number)]
         if not wrong:
             return
         log.warning("upload_part_size_mismatch", extra={"upload_id": up.upload_id, "parts": len(wrong)})
-        self._release(up, "ABORTED")
+        self._release(up, "ABORTED", require_cleanup=True)
         self.db.commit()  # 409를 돌려주기 전에 취소·예약 해제를 확정한다
         raise ProblemError("CONFLICT", detail="올린 파트 크기가 신고한 파일 크기(byte_size)와 다릅니다. 업로드를 "
                                               "취소했습니다 — 새 업로드로 다시 보내세요",

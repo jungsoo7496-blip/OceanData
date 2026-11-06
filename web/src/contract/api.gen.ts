@@ -1051,6 +1051,8 @@ export interface paths {
          *     part_number·expected_size·actual_size를 담는다(최대 100개). 같은 파일은 새 업로드(POST /v1/uploads)로 다시 보낸다.
          *     사전 서명 파트 URL은 계획한 파트 크기를 Content-Length로 서명하므로(X-Amz-SignedHeaders에 content-length) 다른 크기의
          *     본문은 저장소가 먼저 거부할 수 있다.
+         *     저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
+         *     Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
          */
         post: operations["completeUpload"];
         delete?: never;
@@ -3820,7 +3822,7 @@ export interface components {
             part_number: number;
             /**
              * Format: uri
-             * @description 사전 서명 URL. 로그에 남기지 않는다.
+             * @description 파트 크기를 Content-Length로 서명한 PUT URL. 0바이트도 Content-Length: 0을 전송한다. 로그에 남기지 않는다.
              */
             url: string;
             expires_at: components["schemas"]["utc_datetime"];
@@ -4250,6 +4252,14 @@ export interface components {
                 code: string;
                 message: string;
             }[];
+            /** @description 업로드 완료에서 크기 불일치로 세션을 취소한 경우의 파트별 내역. */
+            size_mismatch?: {
+                part_number: number;
+                /** Format: int64 */
+                expected_size: number;
+                /** Format: int64 */
+                actual_size: number;
+            }[];
             unmet_conditions?: {
                 /**
                  * @example review_result=PASSED
@@ -4258,7 +4268,7 @@ export interface components {
                 condition: string;
                 actual?: string | null;
             }[];
-        } & (unknown & unknown);
+        } & (unknown & unknown & unknown);
         device_id: string;
         user_id: string;
         organization_id: string;
@@ -7210,6 +7220,7 @@ export interface operations {
             409: components["responses"]["Conflict"];
             410: components["responses"]["Gone"];
             429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     listAssets: {

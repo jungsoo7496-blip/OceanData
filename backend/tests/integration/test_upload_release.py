@@ -10,7 +10,6 @@ import hashlib
 from dataclasses import replace
 
 import httpx
-
 import pytest
 from sqlalchemy import select, text
 

@@ -479,8 +479,15 @@ type ExternalProblemSchemaF86d77f4 struct {
 	} `json:"errors,omitempty"`
 	Instance  *string                              `json:"instance,omitempty"`
 	RequestId ExternalCommonSchemaDefsUlid3520d2d2 `json:"request_id"`
-	Status    int                                  `json:"status"`
-	Title     string                               `json:"title"`
+
+	// SizeMismatch 업로드 완료에서 크기 불일치로 세션을 취소한 경우의 파트별 내역.
+	SizeMismatch *[]struct {
+		ActualSize   int64 `json:"actual_size"`
+		ExpectedSize int64 `json:"expected_size"`
+		PartNumber   int   `json:"part_number"`
+	} `json:"size_mismatch,omitempty"`
+	Status int    `json:"status"`
+	Title  string `json:"title"`
 
 	// Type Examples: /problems/rule-violation
 	Type            string `json:"type"`
@@ -626,7 +633,7 @@ type PartUrl struct {
 	ExpiresAt  ExternalCommonSchemaDefsUtcDatetime546d5477 `json:"expires_at"`
 	PartNumber int                                         `json:"part_number"`
 
-	// Url 사전 서명 URL. 로그에 남기지 않는다.
+	// Url 파트 크기를 Content-Length로 서명한 PUT URL. 0바이트도 Content-Length: 0을 전송한다. 로그에 남기지 않는다.
 	Url string `json:"url"`
 }
 
@@ -1320,6 +1327,8 @@ type ClientInterface interface {
 	// part_number·expected_size·actual_size를 담는다(최대 100개). 같은 파일은 새 업로드(POST /v1/uploads)로 다시 보낸다.
 	// 사전 서명 파트 URL은 계획한 파트 크기를 Content-Length로 서명하므로(X-Amz-SignedHeaders에 content-length) 다른 크기의
 	// 본문은 저장소가 먼저 거부할 수 있다.
+	// 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
+	// Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -1335,6 +1344,8 @@ type ClientInterface interface {
 	// part_number·expected_size·actual_size를 담는다(최대 100개). 같은 파일은 새 업로드(POST /v1/uploads)로 다시 보낸다.
 	// 사전 서명 파트 URL은 계획한 파트 크기를 Content-Length로 서명하므로(X-Amz-SignedHeaders에 content-length) 다른 크기의
 	// 본문은 저장소가 먼저 거부할 수 있다.
+	// 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
+	// Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -1636,6 +1647,8 @@ func (c *Client) GetUpload(ctx context.Context, uploadId UploadId, reqEditors ..
 // part_number·expected_size·actual_size를 담는다(최대 100개). 같은 파일은 새 업로드(POST /v1/uploads)로 다시 보낸다.
 // 사전 서명 파트 URL은 계획한 파트 크기를 Content-Length로 서명하므로(X-Amz-SignedHeaders에 content-length) 다른 크기의
 // 본문은 저장소가 먼저 거부할 수 있다.
+// 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
+// Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 //
 // Takes any type of body and a specified content type.
 //
@@ -1661,6 +1674,8 @@ func (c *Client) CompleteUploadWithBody(ctx context.Context, uploadId UploadId, 
 // part_number·expected_size·actual_size를 담는다(최대 100개). 같은 파일은 새 업로드(POST /v1/uploads)로 다시 보낸다.
 // 사전 서명 파트 URL은 계획한 파트 크기를 Content-Length로 서명하므로(X-Amz-SignedHeaders에 content-length) 다른 크기의
 // 본문은 저장소가 먼저 거부할 수 있다.
+// 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
+// Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -2381,6 +2396,8 @@ type ClientWithResponsesInterface interface {
 	// part_number·expected_size·actual_size를 담는다(최대 100개). 같은 파일은 새 업로드(POST /v1/uploads)로 다시 보낸다.
 	// 사전 서명 파트 URL은 계획한 파트 크기를 Content-Length로 서명하므로(X-Amz-SignedHeaders에 content-length) 다른 크기의
 	// 본문은 저장소가 먼저 거부할 수 있다.
+	// 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
+	// Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -2396,6 +2413,8 @@ type ClientWithResponsesInterface interface {
 	// part_number·expected_size·actual_size를 담는다(최대 100개). 같은 파일은 새 업로드(POST /v1/uploads)로 다시 보낸다.
 	// 사전 서명 파트 URL은 계획한 파트 크기를 Content-Length로 서명하므로(X-Amz-SignedHeaders에 content-length) 다른 크기의
 	// 본문은 저장소가 먼저 거부할 수 있다.
+	// 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
+	// Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -3532,6 +3551,12 @@ type CompleteUploadResponse429Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
+// CompleteUploadResponse503Headers the declared response headers of an HTTP 503 response for CompleteUpload
+type CompleteUploadResponse503Headers struct {
+	RetryAfter *int
+	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
+}
+
 type CompleteUploadResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -3551,6 +3576,8 @@ type CompleteUploadResponse struct {
 	ApplicationproblemJSON410 *Gone
 	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
 	ApplicationproblemJSON429 *TooManyRequests
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *ServiceUnavailable
 	// Headers400 the parsed response headers for an HTTP 400 response
 	Headers400 *CompleteUploadResponse400Headers
 	// Headers401 the parsed response headers for an HTTP 401 response
@@ -3565,6 +3592,8 @@ type CompleteUploadResponse struct {
 	Headers410 *CompleteUploadResponse410Headers
 	// Headers429 the parsed response headers for an HTTP 429 response
 	Headers429 *CompleteUploadResponse429Headers
+	// Headers503 the parsed response headers for an HTTP 503 response
+	Headers503 *CompleteUploadResponse503Headers
 }
 
 // GetJSON202 returns the response for an HTTP 202 `application/json` response
@@ -3605,6 +3634,11 @@ func (r CompleteUploadResponse) GetApplicationproblemJSON410() *Gone {
 // GetApplicationproblemJSON429 returns the response for an HTTP 429 `application/problem+json` response
 func (r CompleteUploadResponse) GetApplicationproblemJSON429() *TooManyRequests {
 	return r.ApplicationproblemJSON429
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r CompleteUploadResponse) GetApplicationproblemJSON503() *ServiceUnavailable {
+	return r.ApplicationproblemJSON503
 }
 
 // GetBody returns the raw response body bytes
@@ -4001,6 +4035,8 @@ func (c *ClientWithResponses) GetUploadWithResponse(ctx context.Context, uploadI
 // part_number·expected_size·actual_size를 담는다(최대 100개). 같은 파일은 새 업로드(POST /v1/uploads)로 다시 보낸다.
 // 사전 서명 파트 URL은 계획한 파트 크기를 Content-Length로 서명하므로(X-Amz-SignedHeaders에 content-length) 다른 크기의
 // 본문은 저장소가 먼저 거부할 수 있다.
+// 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
+// Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -4022,6 +4058,8 @@ func (c *ClientWithResponses) CompleteUploadWithBodyWithResponse(ctx context.Con
 // part_number·expected_size·actual_size를 담는다(최대 100개). 같은 파일은 새 업로드(POST /v1/uploads)로 다시 보낸다.
 // 사전 서명 파트 URL은 계획한 파트 크기를 Content-Length로 서명하므로(X-Amz-SignedHeaders에 content-length) 다른 크기의
 // 본문은 저장소가 먼저 거부할 수 있다.
+// 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
+// Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -5299,6 +5337,13 @@ func ParseCompleteUploadResponse(rsp *http.Response) (*CompleteUploadResponse, e
 		}
 		response.ApplicationproblemJSON429 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
 	}
 
 	switch {
@@ -5379,6 +5424,23 @@ func ParseCompleteUploadResponse(rsp *http.Response) (*CompleteUploadResponse, e
 			headers.XRequestId = &value
 		}
 		response.Headers429 = &headers
+	case rsp.StatusCode == 503:
+		var headers CompleteUploadResponse503Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = &value
+		}
+		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
+			var value ExternalCommonSchemaDefsUlid3520d2d2
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XRequestId = &value
+		}
+		response.Headers503 = &headers
 	}
 
 	return response, nil

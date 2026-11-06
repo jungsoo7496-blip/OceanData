@@ -27,6 +27,7 @@
 - [x] 24. 하트비트 저장·`GET /v1/agents/{id}/health` (상태: NEVER_SEEN/OK/STALE/ERROR, 지연은 11번) — 요구사항 11.2, 11.3 · 시험 `test_heartbeat_and_health`
 - [x] 25. 자산 목록·상세(감사)·수정(data_role 사유·감사, 위치 정밀도) — contracts assets 태그
 - [x] 26. 원래 좌표계 → EPSG:4326 (PostGIS ST_Transform) — 03번 요구사항 6.3 · 시험 `test_source_location_is_transformed_to_4326`
+- [x] 27. 파트 길이 서명과 완료 전 크기 검증·정리 — 요구사항 1.1, 1.4, 1.5, 3.1, 4.1, 10.1 · `test_upload_release.py`, SeaweedFS 3.80 서명 검증, Go 빈 PUT 회귀 · ADR-0044
 
 ## 확인 필요 (사람 결정)
 - 취소·만료된 C0 시작 세션의 UPLOADING → READY_PRIVATE 역전이를 domain.md 5장 표에 추가할지

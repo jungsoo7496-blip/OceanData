@@ -209,7 +209,11 @@ class S3Storage:
         )
 
     def abort_multipart_upload(self, bucket: str, key: str, upload_id: str) -> None:
-        self.client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)  # type: ignore[attr-defined]
+        try:
+            self.client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)  # type: ignore[attr-defined]
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") != "NoSuchUpload":
+                raise
 
     # --- 사전 서명 (URL은 로그에 남기지 않는다)
     def presign_put(self, bucket: str, key: str, expires_s: int, content_type: str | None = None) -> str:
