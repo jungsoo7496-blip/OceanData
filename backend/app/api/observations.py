@@ -417,7 +417,7 @@ def overlapping_assets(event_id: str, request: Request, margin_s: int = Query(0,
     """이벤트 구간과 촬영 구간이 겹치는 같은 회차 자산 (요구사항 7.6). 촬영시각 미상은 개수만."""
     from datetime import timedelta
 
-    from app.api.assets import asset_view
+    from app.api.assets import asset_views
 
     e = load_scoped(db, c, request, Event, event_id, p)
     start = e.started_at - timedelta(seconds=margin_s)
@@ -433,11 +433,11 @@ def overlapping_assets(event_id: str, request: Request, margin_s: int = Query(0,
         base.where(Asset.capture_start_at.is_(None)).subquery())).scalar_one()
     linked = set(db.execute(select(EventAsset.asset_id).where(EventAsset.event_id == e.event_id)).scalars())
     items = []
-    for a in rows:
+    for a, view in zip(rows, asset_views(db, rows, p), strict=True):
         a_start = a.capture_start_at
         assert a_start is not None  # noqa: S101 - 위 조건
         overlap = (min(a.capture_end_at or a_start, end) - max(a_start, start)).total_seconds()
-        items.append({"asset": asset_view(a, p), "overlap_s": max(0.0, overlap), "linked": a.asset_id in linked})
+        items.append({"asset": view, "overlap_s": max(0.0, overlap), "linked": a.asset_id in linked})
     return {"event_id": e.event_id, "session_id": e.session_id, "window": {"from": iso(start), "to": iso(end)},
             "items": items, "unknown_capture_count": int(unknown)}
 

@@ -18,7 +18,7 @@ interface Field { key: string; label: string; auto_value: string | null; value: 
 interface Report {
   report_id: string; title: string; version: number; latest_version: number; status: string; session_id: string | null
   generated_at: string; data_as_of: string; fields: Field[]; metrics: Metric[]; record_ids: string[]
-  evidence_damaged: boolean; damage: { asset_id: string; reason: string }[]; snapshot_sha256: string | null
+  evidence_damaged: boolean; damage?: { asset_id: string; reason: string }[]; snapshot_sha256: string | null
 }
 interface RecordV { record_id: string; title: string; kind: string; version: number; status: string; result: string | null; evidence_refs: unknown[]; evidence_damaged: boolean }
 interface Trace {
@@ -110,6 +110,8 @@ export function ReportDetail({ me }: { me: Me }) {
   })
   const r = report.data
   if (!r) return <Card loading={report.isLoading}>{report.error ? '보고서를 찾을 수 없습니다' : null}</Card>
+  const damageList = r.damage?.map((d) => `${d.asset_id} (${d.reason})`).join(', ')
+  const damageDescription = damageList ? `인용한 자산이 바뀌었습니다: ${damageList}.` : '인용한 근거가 변경되었습니다.'
   const openTrace = async (m: Metric) => {
     setTrace({ metric: m })
     try {
@@ -128,8 +130,8 @@ export function ReportDetail({ me }: { me: Me }) {
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       {r.evidence_damaged && (
-        <Alert type="error" showIcon message="근거 손상 — 제출할 수 없습니다"
-          description={`인용한 자산이 바뀌었습니다: ${r.damage.map((d) => `${d.asset_id} (${d.reason})`).join(', ')}. 근거를 고친 뒤 새 버전을 만드세요.`} />
+        <Alert type="error" showIcon message={isOrg ? '근거 손상 — 제출할 수 없습니다' : '근거 손상'}
+          description={isOrg ? `${damageDescription} 근거를 고친 뒤 새 버전을 만드세요.` : damageDescription} />
       )}
       <Card title={r.title} extra={
         <Space wrap>

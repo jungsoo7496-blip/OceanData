@@ -164,7 +164,14 @@ def report_view(rep: Report, v: ReportVersion) -> dict[str, Any]:
             "submitted_at": iso(v.submitted_at), "created_at": iso(rep.created_at)}
 
 
-def render_model(db: Session, rep: Report, v: ReportVersion, tpl: ReportTemplate) -> dict[str, Any]:
+def metric_view(metric: dict[str, Any], shown: set[str]) -> dict[str, Any]:
+    sources = metric["sources"]
+    return {**metric, "sources": {**sources, "asset_ids": [a for a in sources.get("asset_ids", []) if a in shown]}}
+
+
+def render_model(
+    db: Session, rep: Report, v: ReportVersion, tpl: ReportTemplate, *, damage: list[dict[str, Any]],
+) -> dict[str, Any]:
     """렌더러에 넘길 모델 (양식 순서대로 절을 채운다)."""
     fields = {f["key"]: f for f in v.fields}
     by_code = {m["metric_code"]: m for m in v.metrics}
@@ -187,12 +194,13 @@ def render_model(db: Session, rep: Report, v: ReportVersion, tpl: ReportTemplate
         else:
             sec["records"] = records
         sections.append(sec)
-    damage = None
+    damage_note = None
     if v.evidence_damaged:
-        damage = "근거 손상: " + ", ".join(sorted({d["asset_id"] for d in v.damage}))
+        causes = ", ".join(sorted({d["asset_id"] for d in damage}))
+        damage_note = f"근거 손상: {causes}" if causes else "근거 손상"
     return {"title": rep.title, "status_label": rr.STATUS_LABEL[v.status], "version": v.version,
             "generated_at": kst(v.generated_at), "data_as_of": kst(v.data_as_of), "variables": v.variables,
-            "sections": sections, "damage_note": damage}
+            "sections": sections, "damage_note": damage_note}
 
 
 def approve(c: Container, db: Session, rep: Report, v: ReportVersion, by: str, roles: set[str]) -> None:
@@ -253,13 +261,18 @@ def trace(db: Session, rep: Report, v: ReportVersion, code: str, visible: Any) -
         if hit:
             records.append({"record_id": rv.record_id, "version": rv.version, "title": rv.title})
     shown = visible(sorted(asset_ids))
+    rows = list(db.execute(select(Asset).where(Asset.asset_id.in_(shown))).scalars()) if shown else []
+    roots = {a.asset_id: originals(db, a.asset_id) for a in rows}
+    all_roots = {r for xs in roots.values() for r in xs}
+    shown_roots = visible(sorted(all_roots)) if all_roots else set()
+    # 숨긴 자산은 ID도 내보내지 않는다: 지표 원천·이벤트 연결·계보 원본 모두 조회자 범위 안만 (domain.md 2장)
     assets_out = [{"asset_id": a.asset_id, "variant": a.variant, "ingest_status": a.ingest_status,
-                   "originals": originals(db, a.asset_id)}
-                  for a in (db.execute(select(Asset).where(Asset.asset_id.in_(shown))).scalars() if shown else [])]
-    hidden = len(asset_ids - shown)
-    return {"metric": m, "records": records,
+                   "originals": [r for r in roots[a.asset_id] if r in shown_roots]} for a in rows]
+    hidden = len((asset_ids | all_roots) - shown - shown_roots)
+    return {"metric": metric_view(m, shown), "records": records,
             "events": [{"event_id": e.event_id, "event_code": e.event_code, "source": e.source,
-                        "human_verified": e.human_verified, "asset_ids": sorted(ev_assets.get(e.event_id, []))}
+                        "human_verified": e.human_verified,
+                        "asset_ids": sorted(a for a in ev_assets.get(e.event_id, []) if a in shown)}
                        for e in events],
             "observation_ranges": ranges, "assets": sorted(assets_out, key=lambda x: x["asset_id"]),
             "hidden_count": hidden}

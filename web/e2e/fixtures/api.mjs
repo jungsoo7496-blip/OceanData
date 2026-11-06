@@ -369,7 +369,7 @@ const REPORTS = [
     damage: [{ asset_id: AST_RECEIVED, reason: 'QUARANTINED', detected_at: at('09:30:00') }] }),
   report(RPT_APPROVED, 'APPROVED', { approved_by: USR_ADMIN, approved_at: at('09:20:00'), snapshot_sha256: sha(7) }),
   report(RPT_SUBMITTED, 'SUBMITTED', { title: '2026-11-01 사전 점검 보고서 (합성)', approved_by: USR_ADMIN, approved_at: '2026-11-01T09:00:00Z',
-    submitted_at: '2026-11-01T10:00:00Z', snapshot_sha256: sha(8) }),
+    submitted_at: '2026-11-01T10:00:00Z', snapshot_sha256: sha(8), evidence_damaged: true, damage: [] }),
 ]
 /** 관리기관 열람자는 제출된 보고서만 @param {Role} role */
 const visibleReports = (role) => REPORTS.filter((r) => role !== 'PROGRAM_VIEWER' || r.status === 'SUBMITTED')

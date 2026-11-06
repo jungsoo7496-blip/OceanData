@@ -6,11 +6,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Any, TypeVar
 
 from sqlalchemy import ColumnElement, and_, false, select, true
 from sqlalchemy.orm import Session
 
+from app.db.models import Asset
 from app.domain.principal import Principal
 
 T = TypeVar("T")
@@ -66,6 +68,12 @@ def _device_filter(model: Any, principal: Principal) -> ColumnElement[bool]:
 
 def scoped_select(model: Any, principal: Principal, *, purpose: str = "metadata") -> Any:
     return select(model).where(scope_filter(model, principal, purpose=purpose))
+
+
+def visible_asset_ids(db: Session, principal: Principal, ids: Collection[str]) -> set[str]:
+    if not ids:
+        return set()
+    return set(db.scalars(select(Asset.asset_id).where(Asset.asset_id.in_(ids), scope_filter(Asset, principal))))
 
 
 def get_scoped(db: Session, model: type[T], ident: str, principal: Principal, *, purpose: str = "metadata") -> T:
