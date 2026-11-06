@@ -7,21 +7,30 @@ from __future__ import annotations
 
 import threading
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
 
 from app.errors import ProblemError
 
 
 class Limiter:
-    def __init__(self, limit: int, window_s: float = 60.0) -> None:
+    def __init__(self, limit: int, window_s: float = 60.0, *, max_keys: int = 4096) -> None:
+        if max_keys < 1:
+            raise ValueError("max_keys must be positive")
         self.limit, self.window_s = limit, window_s
-        self.hits: dict[str, deque[float]] = defaultdict(deque)
+        self.max_keys = max_keys
+        self.hits: OrderedDict[str, deque[float]] = OrderedDict()
         self._lock = threading.Lock()
 
     def check(self, key: str) -> None:
-        now = time.monotonic()
         with self._lock:
-            q = self.hits[key]
+            now = time.monotonic()
+            q = self.hits.get(key)
+            if q is None:
+                if len(self.hits) >= self.max_keys:
+                    self.hits.popitem(last=False)
+                q = self.hits[key] = deque()
+            else:
+                self.hits.move_to_end(key)
             while q and now - q[0] > self.window_s:
                 q.popleft()
             if len(q) >= self.limit:

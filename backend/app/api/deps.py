@@ -53,15 +53,16 @@ def get_principal(request: Request, db: Session = Depends(get_db), c: Container 
                                                         "message": "기관 범위는 인증 정보로만 정합니다"}])
     auth = request.headers.get("authorization", "")
     scheme, _, token = auth.partition(" ")
+    audit_path = getattr(request.scope.get("route"), "path", None) or request.url.path[:100]
     if scheme.lower() != "bearer" or not token.strip():
         c.audit.record("AUTH_FAILED", result="DENIED", source_ip=client_ip(request),
-                       details={"reason": "missing_token", "path": request.url.path})
+                       details={"reason": "missing_token", "path": audit_path})
         raise ProblemError("UNAUTHENTICATED", headers={"WWW-Authenticate": "Bearer"})
     try:
         principal = c.authenticator.authenticate(db, token.strip())
     except AuthFailed as exc:
         c.audit.record("AUTH_FAILED", result="DENIED", source_ip=client_ip(request),
-                       details={"reason": exc.reason, "path": request.url.path})
+                       details={"reason": exc.reason, "path": audit_path})
         raise ProblemError("UNAUTHENTICATED", headers={"WWW-Authenticate": "Bearer"}) from None
     organization_id_var.set(principal.organization_id)
     request.state.principal = principal

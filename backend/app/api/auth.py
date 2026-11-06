@@ -39,7 +39,9 @@ def issue_token(request: Request,
                 client_secret: Annotated[str, Form(max_length=256)],
                 scope: Annotated[str | None, Form()] = None,
                 db: Session = Depends(get_db), c: Container = Depends(container)) -> JSONResponse:
-    _auth_limiter.check(f"{client_ip(request)}:{client_id}")
+    source = client_ip(request)
+    _auth_limiter.check(f"token-ip:{source}")
+    _auth_limiter.check(f"token-client:[{source}]:{client_id}")
     now = c.clock.now()
     requested = frozenset(scope.split()) if scope else None
 

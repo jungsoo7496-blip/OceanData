@@ -16,6 +16,7 @@ from app.ports.identity import InvalidToken, TokenClaims
 
 log = logging.getLogger(__name__)
 JwksProvider = Callable[[], dict[str, Any]]
+REFRESH_BACKOFF_S = 5.0
 
 
 class KeycloakIdentity:
@@ -34,25 +35,60 @@ class KeycloakIdentity:
         self._jwks: PyJWKSet | None = None
         self._jwks_at = 0.0
         self._lock = threading.Lock()
+        self._refreshing: threading.Event | None = None
+        self._unknown_refresh_after = 0.0
+        self._failed_refresh_after = 0.0
 
     def _fetch_jwks(self) -> dict[str, Any]:
         r = httpx.get(f"{self.base}/protocol/openid-connect/certs", timeout=self.timeout_s)
         r.raise_for_status()
         return dict(r.json())
 
-    def _keyset(self, force: bool = False) -> PyJWKSet:
-        with self._lock:
-            if force or self._jwks is None or time.monotonic() - self._jwks_at > self._cache_ttl_s:
-                self._jwks = PyJWKSet.from_dict(self._jwks_provider())
-                self._jwks_at = time.monotonic()
-            return self._jwks
+    @staticmethod
+    def _matching_key(jwks: PyJWKSet, kid: str | None) -> Any:
+        return next((key.key for key in jwks.keys if kid is None or key.key_id == kid), None)
 
     def _key_for(self, kid: str | None) -> Any:
-        for force in (False, True):  # 키 교체 대비: 못 찾으면 한 번 새로 받는다
-            for k in self._keyset(force).keys:
-                if kid is None or k.key_id == kid:
-                    return k.key
-        raise InvalidToken("unknown_kid")
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                fresh = self._jwks if now - self._jwks_at <= self._cache_ttl_s else None
+                if fresh is not None:
+                    key = self._matching_key(fresh, kid)
+                    if key is not None:
+                        return key
+                    # 서로 다른 미확인 kid도 같은 간격을 적용한다. 캐시된 키 확인은 갱신을 기다리지 않는다.
+                    if self._refreshing is not None or now < self._unknown_refresh_after:
+                        raise InvalidToken("unknown_kid")
+                if self._refreshing is None:
+                    if now < self._failed_refresh_after:
+                        raise InvalidToken("jwks_unavailable")
+                    flight = self._refreshing = threading.Event()
+                    if fresh is not None:
+                        self._unknown_refresh_after = now + REFRESH_BACKOFF_S
+                    break
+                flight = self._refreshing
+            flight.wait()  # 최초 또는 만료 조회가 진행 중이면 새 키 집합을 함께 쓴다.
+
+        jwks = None
+        key = None
+        try:
+            jwks = PyJWKSet.from_dict(self._jwks_provider())
+            key = self._matching_key(jwks, kid)
+        finally:
+            with self._lock:
+                now = time.monotonic()
+                if jwks is None:
+                    self._failed_refresh_after = now + REFRESH_BACKOFF_S
+                else:
+                    self._jwks, self._jwks_at = jwks, now
+                    if key is None:
+                        self._unknown_refresh_after = now + REFRESH_BACKOFF_S
+                self._refreshing = None
+                flight.set()
+        if key is None:
+            raise InvalidToken("unknown_kid")
+        return key
 
     def verify_access_token(self, token: str) -> TokenClaims:
         try:
