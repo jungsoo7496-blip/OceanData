@@ -15,6 +15,7 @@ from sqlalchemy import select, text
 
 from app.db.models import Asset, AssetLineage, OrgQuota, Upload
 from app.seed import ORG_A
+from app.services.ingest import IngestService
 from tests.integration.test_ingest import MB, manifest, mp4_bytes
 
 pytestmark = pytest.mark.integration
@@ -126,8 +127,6 @@ def test_part_urls_sign_planned_content_length(ictx) -> None:  # type: ignore[no
     """사전 서명 파트 URL은 계획한 파트 크기를 Content-Length로 서명한다 (마지막 파트는 나머지)."""
     from urllib.parse import parse_qs, urlparse
 
-    from app.services.ingest import IngestService
-
     h = ictx.as_user(102)
     data = mp4_bytes(12 * MB, seed=201)
     cr = ictx.client.post("/v1/uploads", json=manifest(data), headers=h).json()
@@ -206,3 +205,40 @@ def test_complete_preserves_reservation_when_size_cannot_be_verified_or_cleaned(
     assert _quota(ictx).reserved_bytes == 1
     assert ictx.c.storage.head_object(up.bucket, up.object_key) is None
     assert len(ictx.c.storage.list_parts(up.bucket, up.object_key, up.s3_upload_id)) == 1
+
+
+def test_complete_uses_etag_from_validated_part_snapshot(ictx, monkeypatch) -> None:
+    """크기를 확인한 뒤 파트가 바뀌면 다른 ETag로는 완료하지 않는다."""
+    h = ictx.as_user(102)
+    cr = ictx.client.post("/v1/uploads", json=manifest(b"Z"), headers=h).json()
+    up = _upload(ictx, cr["upload_id"])
+    assert httpx.put(cr["parts"][0]["url"], content=b"Z").is_success
+    snapshot = ictx.c.storage.list_parts(up.bucket, up.object_key, up.s3_upload_id)
+    assert len(snapshot) == 1 and snapshot[0].size == 1
+    unsigned_url = ictx.c.storage.presign_upload_part(up.bucket, up.object_key, up.s3_upload_id, 1, 60)
+    other = httpx.put(unsigned_url, content=b"ZZ")
+    assert other.is_success and other.headers["etag"] != snapshot[0].etag
+    monkeypatch.setattr(ictx.c.storage, "list_parts", lambda *_args: snapshot)
+    r = ictx.client.post(f"/v1/uploads/{up.upload_id}/complete", headers=h,
+                         json={"parts": [{"part_number": 1, "etag": other.headers["etag"]}]})
+    assert r.status_code == 409
+    assert "size_mismatch" not in r.json()
+    assert _upload(ictx, up.upload_id).status == "UPLOADING"
+    assert _quota(ictx).reserved_bytes == 1
+    assert ictx.c.storage.head_object(up.bucket, up.object_key) is None
+
+
+def test_stale_abort_does_not_release_another_uploads_reservation(ictx) -> None:
+    h = ictx.as_user(102)
+    _, up, etag = _upload_oversized_legacy_part(ictx, h)
+    other = ictx.client.post("/v1/uploads", json=manifest(b"X"), headers=h)
+    assert other.status_code == 201 and _quota(ictx).reserved_bytes == 2
+    with ictx.c.sessionmaker.begin() as stale:
+        stale_upload = stale.get(Upload, up.upload_id)
+        assert stale_upload is not None and stale_upload.reserved_bytes == 1
+        response = ictx.client.post(f"/v1/uploads/{up.upload_id}/complete", headers=h,
+                                    json={"parts": [{"part_number": 1, "etag": etag}]})
+        assert response.status_code == 409
+        assert _quota(ictx).reserved_bytes == 1
+        IngestService(ictx.c, stale)._release(stale_upload, "ABORTED")
+    assert _quota(ictx).reserved_bytes == 1
