@@ -1283,6 +1283,9 @@ type ClientInterface interface {
 	// - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
 	// - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
 	// - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
+	// - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
+	//   C0 자산에서 시작한 세션은 기존 asset_id를 유지한다. 다른 요청이 세션을 처리 중이면 409 CONFLICT로 재시도할 수 있고,
+	//   저장소에서 만료 세션을 정리하지 못하면 503 STORAGE_UNAVAILABLE을 반환한다.
 	// - 같은 (기관, 장비, sha256) 자산에 바이너리가 있으면 200 ALREADY_REGISTERED와 기존 asset_id.
 	// - 같은 자산이 바이너리 없는 C0 자산이고 정책이 허용하면 201 UPLOAD_CREATED (기존 asset_id로 세션을 연다).
 	// - C0_METADATA_ONLY 원천 장비는 파트 URL 없이 201 METADATA_ONLY_REGISTERED.
@@ -1298,6 +1301,9 @@ type ClientInterface interface {
 	// - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
 	// - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
 	// - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
+	// - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
+	//   C0 자산에서 시작한 세션은 기존 asset_id를 유지한다. 다른 요청이 세션을 처리 중이면 409 CONFLICT로 재시도할 수 있고,
+	//   저장소에서 만료 세션을 정리하지 못하면 503 STORAGE_UNAVAILABLE을 반환한다.
 	// - 같은 (기관, 장비, sha256) 자산에 바이너리가 있으면 200 ALREADY_REGISTERED와 기존 asset_id.
 	// - 같은 자산이 바이너리 없는 C0 자산이고 정책이 허용하면 201 UPLOAD_CREATED (기존 asset_id로 세션을 연다).
 	// - C0_METADATA_ONLY 원천 장비는 파트 URL 없이 201 METADATA_ONLY_REGISTERED.
@@ -1562,13 +1568,16 @@ func (c *Client) PostObservations(ctx context.Context, params *PostObservationsP
 
 // CreateUploadWithBody 매니페스트 신고 → 업로드 세션과 파트 URL 발급
 //
-// - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
-// - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
-// - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
-// - 같은 (기관, 장비, sha256) 자산에 바이너리가 있으면 200 ALREADY_REGISTERED와 기존 asset_id.
-// - 같은 자산이 바이너리 없는 C0 자산이고 정책이 허용하면 201 UPLOAD_CREATED (기존 asset_id로 세션을 연다).
-// - C0_METADATA_ONLY 원천 장비는 파트 URL 없이 201 METADATA_ONLY_REGISTERED.
-// - schema_version 주버전이 다르거나 서버가 모르는 높은 부버전이면 422 UNSUPPORTED_SCHEMA_VERSION.
+//   - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
+//   - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
+//   - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
+//   - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
+//     C0 자산에서 시작한 세션은 기존 asset_id를 유지한다. 다른 요청이 세션을 처리 중이면 409 CONFLICT로 재시도할 수 있고,
+//     저장소에서 만료 세션을 정리하지 못하면 503 STORAGE_UNAVAILABLE을 반환한다.
+//   - 같은 (기관, 장비, sha256) 자산에 바이너리가 있으면 200 ALREADY_REGISTERED와 기존 asset_id.
+//   - 같은 자산이 바이너리 없는 C0 자산이고 정책이 허용하면 201 UPLOAD_CREATED (기존 asset_id로 세션을 연다).
+//   - C0_METADATA_ONLY 원천 장비는 파트 URL 없이 201 METADATA_ONLY_REGISTERED.
+//   - schema_version 주버전이 다르거나 서버가 모르는 높은 부버전이면 422 UNSUPPORTED_SCHEMA_VERSION.
 //
 // Takes any type of body and a specified content type.
 //
@@ -1587,13 +1596,16 @@ func (c *Client) CreateUploadWithBody(ctx context.Context, params *CreateUploadP
 
 // CreateUpload 매니페스트 신고 → 업로드 세션과 파트 URL 발급
 //
-// - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
-// - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
-// - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
-// - 같은 (기관, 장비, sha256) 자산에 바이너리가 있으면 200 ALREADY_REGISTERED와 기존 asset_id.
-// - 같은 자산이 바이너리 없는 C0 자산이고 정책이 허용하면 201 UPLOAD_CREATED (기존 asset_id로 세션을 연다).
-// - C0_METADATA_ONLY 원천 장비는 파트 URL 없이 201 METADATA_ONLY_REGISTERED.
-// - schema_version 주버전이 다르거나 서버가 모르는 높은 부버전이면 422 UNSUPPORTED_SCHEMA_VERSION.
+//   - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
+//   - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
+//   - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
+//   - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
+//     C0 자산에서 시작한 세션은 기존 asset_id를 유지한다. 다른 요청이 세션을 처리 중이면 409 CONFLICT로 재시도할 수 있고,
+//     저장소에서 만료 세션을 정리하지 못하면 503 STORAGE_UNAVAILABLE을 반환한다.
+//   - 같은 (기관, 장비, sha256) 자산에 바이너리가 있으면 200 ALREADY_REGISTERED와 기존 asset_id.
+//   - 같은 자산이 바이너리 없는 C0 자산이고 정책이 허용하면 201 UPLOAD_CREATED (기존 asset_id로 세션을 연다).
+//   - C0_METADATA_ONLY 원천 장비는 파트 URL 없이 201 METADATA_ONLY_REGISTERED.
+//   - schema_version 주버전이 다르거나 서버가 모르는 높은 부버전이면 422 UNSUPPORTED_SCHEMA_VERSION.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -2352,6 +2364,9 @@ type ClientWithResponsesInterface interface {
 	// - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
 	// - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
 	// - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
+	// - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
+	//   C0 자산에서 시작한 세션은 기존 asset_id를 유지한다. 다른 요청이 세션을 처리 중이면 409 CONFLICT로 재시도할 수 있고,
+	//   저장소에서 만료 세션을 정리하지 못하면 503 STORAGE_UNAVAILABLE을 반환한다.
 	// - 같은 (기관, 장비, sha256) 자산에 바이너리가 있으면 200 ALREADY_REGISTERED와 기존 asset_id.
 	// - 같은 자산이 바이너리 없는 C0 자산이고 정책이 허용하면 201 UPLOAD_CREATED (기존 asset_id로 세션을 연다).
 	// - C0_METADATA_ONLY 원천 장비는 파트 URL 없이 201 METADATA_ONLY_REGISTERED.
@@ -2367,6 +2382,9 @@ type ClientWithResponsesInterface interface {
 	// - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
 	// - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
 	// - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
+	// - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
+	//   C0 자산에서 시작한 세션은 기존 asset_id를 유지한다. 다른 요청이 세션을 처리 중이면 409 CONFLICT로 재시도할 수 있고,
+	//   저장소에서 만료 세션을 정리하지 못하면 503 STORAGE_UNAVAILABLE을 반환한다.
 	// - 같은 (기관, 장비, sha256) 자산에 바이너리가 있으면 200 ALREADY_REGISTERED와 기존 asset_id.
 	// - 같은 자산이 바이너리 없는 C0 자산이고 정책이 허용하면 201 UPLOAD_CREATED (기존 asset_id로 세션을 연다).
 	// - C0_METADATA_ONLY 원천 장비는 파트 URL 없이 201 METADATA_ONLY_REGISTERED.
@@ -3966,13 +3984,16 @@ func (c *ClientWithResponses) PostObservationsWithResponse(ctx context.Context, 
 
 // CreateUploadWithBodyWithResponse 매니페스트 신고 → 업로드 세션과 파트 URL 발급
 //
-// - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
-// - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
-// - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
-// - 같은 (기관, 장비, sha256) 자산에 바이너리가 있으면 200 ALREADY_REGISTERED와 기존 asset_id.
-// - 같은 자산이 바이너리 없는 C0 자산이고 정책이 허용하면 201 UPLOAD_CREATED (기존 asset_id로 세션을 연다).
-// - C0_METADATA_ONLY 원천 장비는 파트 URL 없이 201 METADATA_ONLY_REGISTERED.
-// - schema_version 주버전이 다르거나 서버가 모르는 높은 부버전이면 422 UNSUPPORTED_SCHEMA_VERSION.
+//   - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
+//   - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
+//   - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
+//   - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
+//     C0 자산에서 시작한 세션은 기존 asset_id를 유지한다. 다른 요청이 세션을 처리 중이면 409 CONFLICT로 재시도할 수 있고,
+//     저장소에서 만료 세션을 정리하지 못하면 503 STORAGE_UNAVAILABLE을 반환한다.
+//   - 같은 (기관, 장비, sha256) 자산에 바이너리가 있으면 200 ALREADY_REGISTERED와 기존 asset_id.
+//   - 같은 자산이 바이너리 없는 C0 자산이고 정책이 허용하면 201 UPLOAD_CREATED (기존 asset_id로 세션을 연다).
+//   - C0_METADATA_ONLY 원천 장비는 파트 URL 없이 201 METADATA_ONLY_REGISTERED.
+//   - schema_version 주버전이 다르거나 서버가 모르는 높은 부버전이면 422 UNSUPPORTED_SCHEMA_VERSION.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -3987,13 +4008,16 @@ func (c *ClientWithResponses) CreateUploadWithBodyWithResponse(ctx context.Conte
 
 // CreateUploadWithResponse 매니페스트 신고 → 업로드 세션과 파트 URL 발급
 //
-// - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
-// - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
-// - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
-// - 같은 (기관, 장비, sha256) 자산에 바이너리가 있으면 200 ALREADY_REGISTERED와 기존 asset_id.
-// - 같은 자산이 바이너리 없는 C0 자산이고 정책이 허용하면 201 UPLOAD_CREATED (기존 asset_id로 세션을 연다).
-// - C0_METADATA_ONLY 원천 장비는 파트 URL 없이 201 METADATA_ONLY_REGISTERED.
-// - schema_version 주버전이 다르거나 서버가 모르는 높은 부버전이면 422 UNSUPPORTED_SCHEMA_VERSION.
+//   - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
+//   - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
+//   - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
+//   - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
+//     C0 자산에서 시작한 세션은 기존 asset_id를 유지한다. 다른 요청이 세션을 처리 중이면 409 CONFLICT로 재시도할 수 있고,
+//     저장소에서 만료 세션을 정리하지 못하면 503 STORAGE_UNAVAILABLE을 반환한다.
+//   - 같은 (기관, 장비, sha256) 자산에 바이너리가 있으면 200 ALREADY_REGISTERED와 기존 asset_id.
+//   - 같은 자산이 바이너리 없는 C0 자산이고 정책이 허용하면 201 UPLOAD_CREATED (기존 asset_id로 세션을 연다).
+//   - C0_METADATA_ONLY 원천 장비는 파트 URL 없이 201 METADATA_ONLY_REGISTERED.
+//   - schema_version 주버전이 다르거나 서버가 모르는 높은 부버전이면 422 UNSUPPORTED_SCHEMA_VERSION.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
