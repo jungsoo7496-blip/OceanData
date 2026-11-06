@@ -29,6 +29,7 @@
 - [x] 26. 원래 좌표계 → EPSG:4326 (PostGIS ST_Transform) — 03번 요구사항 6.3 · 시험 `test_source_location_is_transformed_to_4326`
 - [x] 27. 파트 길이 서명과 완료 전 크기 검증·정리 — 요구사항 1.1, 1.4, 1.5, 3.1, 4.1, 10.1 · `test_upload_release.py`, SeaweedFS 3.80 서명 검증, Go 빈 PUT 회귀 · ADR-0044
 - [x] 28. 재신고 시 기존 만료 업로드 정리·새 세션·C0 자산 ID 유지 — 요구사항 1.5, 2.1, 2.4, 3.2, 3.3 · `test_upload_release.py` · ADR-0045. 체크섬 불일치 격리의 재수집은 운영 정책 결정 필요
+- [x] 29. 완료와 취소·만료의 행 잠금 독립 검증 — 요구사항 1.5, 3.3, 3.4, 4.1 · `test_completion_serializes_with_upload_cleanup`의 DELETE·요청 중 만료·주기 정리 3개 경합 · ADR-0044
 
 ## 확인 필요 (사람 결정)
 - 취소·만료된 C0 시작 세션의 UPLOADING → READY_PRIVATE 역전이를 domain.md 5장 표에 추가할지

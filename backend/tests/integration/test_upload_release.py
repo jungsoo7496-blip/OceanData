@@ -7,7 +7,11 @@
 from __future__ import annotations
 
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from pathlib import Path
+from threading import Event
+from time import monotonic, sleep
 
 import httpx
 import pytest
@@ -15,7 +19,9 @@ from botocore.exceptions import ClientError
 from sqlalchemy import event, select, text
 from sqlalchemy.engine import Connection
 
+from app.adapters.system_clock import FixedClock
 from app.db.models import Asset, AssetLineage, Device, OrgQuota, Upload
+from app.ports.storage import CompletedPart
 from app.seed import DEV_A_CAMERA, ORG_A
 from app.services.ingest import IngestService
 from tests.conftest import Ctx
@@ -333,3 +339,92 @@ def test_stale_abort_does_not_release_another_uploads_reservation(ictx) -> None:
         assert _quota(ictx).reserved_bytes == 1
         IngestService(ictx.c, stale)._release(stale_upload, "ABORTED")
     assert _quota(ictx).reserved_bytes == 1
+
+
+@pytest.mark.parametrize("contender", ["cancel", "sweep", "lazy-expiry"])
+def test_completion_serializes_with_upload_cleanup(
+    ictx: Ctx, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, contender: str,
+) -> None:
+    from app.workers.main import sweep
+
+    clock = FixedClock(ictx.c.clock.now())
+    monkeypatch.setattr(ictx.c, "clock", clock)
+    monkeypatch.setattr(ictx.c.settings, "work_dir", str(tmp_path))
+    headers = ictx.as_user(102)
+    data = mp4_bytes(128, seed=701)
+    response = ictx.client.post("/v1/uploads", json=manifest(data), headers=headers)
+    assert response.status_code == 201, response.text
+    created = response.json()
+    path = f"/v1/uploads/{created['upload_id']}"
+    original = _upload(ictx, created["upload_id"])
+    parts = put_parts(created, data)
+    if contender == "sweep":
+        other = ictx.client.post("/v1/uploads", json=manifest(mp4_bytes(128, seed=702)), headers=headers)
+        assert other.status_code == 201, other.text
+        other_upload_id = other.json()["upload_id"]
+
+    storage_completed, finish_db = Event(), Event()
+    complete_storage = ictx.c.storage.complete_multipart_upload
+
+    def pause_after_storage_complete(bucket: str, key: str, upload_id: str, uploaded: list[CompletedPart]) -> None:
+        complete_storage(bucket, key, upload_id, uploaded)
+        storage_completed.set()
+        assert finish_db.wait(15), "DB 완료 재개를 기다리다 시간이 지났습니다"
+
+    monkeypatch.setattr(ictx.c.storage, "complete_multipart_upload", pause_after_storage_complete)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        completing = pool.submit(ictx.client.post, f"{path}/complete", headers=headers, json={"parts": parts})
+        try:
+            assert storage_completed.wait(5), "스토리지 완료 단계에 도달하지 못했습니다"
+            if contender != "cancel":
+                clock.advance(seconds=ictx.c.settings.upload_session_ttl_s + 1)
+                assert original.expires_at < clock.now()
+            if contender == "sweep":
+                # 잠긴 세션을 기다리지 않고 만료된 다른 세션만 정리해야 한다.
+                swept = pool.submit(sweep, ictx.c).result(timeout=5)
+            else:
+                method, cleanup_path = ("DELETE", path) if contender == "cancel" else ("GET", f"{path}/parts")
+                cleaning = pool.submit(ictx.client.request, method, cleanup_path, headers=headers)
+                blocked = False
+                deadline = monotonic() + 5
+                with ictx.c.engine.connect() as conn:
+                    while not cleaning.done():
+                        blocked = bool(conn.scalar(text("""
+                            SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+                                AND pid <> pg_backend_pid() AND cardinality(pg_blocking_pids(pid)) > 0)
+                        """)))
+                        conn.rollback()  # 다음 조회는 최신 잠금 상태를 본다.
+                        if blocked:
+                            break
+                        assert monotonic() < deadline, "정리 요청이 DB 잠금에 도달하지 못했습니다"
+                        sleep(0.02)
+        finally:
+            finish_db.set()
+        completed = completing.result(timeout=10)
+        if contender != "sweep":
+            cleanup = cleaning.result(timeout=10)
+
+    stored = ictx.c.storage.head_object(original.bucket, original.object_key)
+    assert stored is not None and stored.size == len(data)
+    with ictx.c.sessionmaker() as db:
+        upload = db.get(Upload, original.upload_id)
+        asset = db.get(Asset, created["asset_id"])
+        quota = db.get(OrgQuota, ORG_A)
+        state = (upload.status, asset.ingest_status if asset else None, upload.reserved_bytes, quota.reserved_bytes)
+        cleanup_result = swept if contender == "sweep" else cleanup.status_code
+        assert state == ("RECEIVED", "RECEIVED", len(data), len(data)), (state, completed.status_code, cleanup_result)
+        if contender == "sweep":
+            assert swept == 1 and db.get(Upload, other_upload_id).status == "EXPIRED"
+    assert completed.status_code == 202, completed.text
+    check(completed, "POST", "/v1/uploads/{upload_id}/complete")
+    if contender != "sweep":
+        assert blocked and cleanup.status_code == 409, cleanup.text
+        assert cleanup.json()["code"] == "CONFLICT"
+        template = "/v1/uploads/{upload_id}" if contender == "cancel" else "/v1/uploads/{upload_id}/parts"
+        check(cleanup, method, template)
+
+    drain(ictx)
+    receipt = ictx.client.get(f"/v1/assets/{created['asset_id']}/receipt", headers=headers)
+    assert receipt.status_code == 200 and receipt.json()["checksum_sha256"] == hashlib.sha256(data).hexdigest()
+    quota = _quota(ictx)
+    assert (quota.reserved_bytes, quota.used_bytes, quota.quarantine_bytes) == (0, len(data), 0)
