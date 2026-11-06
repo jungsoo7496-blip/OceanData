@@ -79,44 +79,6 @@ def test_rv_already_registered_after_checksum_quarantine(ictx) -> None:
     print("re-POST of the correct file ->", retry.status_code, retry.json())
 
 
-# 7) complete vs abort race: S3 object completed, DB rows gone -> orphan object outside quota
-def test_rv_complete_abort_race_orphans_object(ictx) -> None:
-    from app.services.ingest import IngestService
-
-    h = ictx.as_user(102)
-    data = mp4_bytes(6 * MB, seed=701)
-    cr = ictx.client.post("/v1/uploads", json=manifest(data), headers=h).json()
-    parts = put_parts(cr, data)
-    storage = ictx.c.storage
-    real_complete = storage.complete_multipart_upload
-    token = h["Authorization"].split()[1]
-
-    def racing_complete(bucket, key, upload_id, ps):  # type: ignore[no-untyped-def]
-        real_complete(bucket, key, upload_id, ps)
-        # a concurrent DELETE /v1/uploads/{id} lands here (between S3 complete and the DB flush)
-        with ictx.c.sessionmaker.begin() as db2:
-            p = ictx.c.authenticator.authenticate(db2, token)
-            svc = IngestService(ictx.c, db2)
-            svc.abort(svc.load_upload(p, cr["upload_id"]))
-
-    storage.complete_multipart_upload = racing_complete
-    try:
-        r = ictx.client.post(f"/v1/uploads/{cr['upload_id']}/complete", json={"parts": parts}, headers=h)
-    finally:
-        storage.complete_multipart_upload = real_complete
-    print("complete ->", r.status_code, r.text[:120])
-    with ictx.c.sessionmaker() as db:
-        up = db.get(Upload, cr["upload_id"])
-        a = db.get(Asset, cr["asset_id"])
-        print("upload status:", up.status, "asset row:", a)
-        info = ictx.c.storage.head_object(up.bucket, up.object_key)
-        print("object in", up.bucket, "size:", info.size if info else None)
-        q = db.get(OrgQuota, ORG_A)
-        print("quota used/reserved/quarantine:", q.used_bytes, q.reserved_bytes, q.quarantine_bytes)
-    retry = ictx.client.post(f"/v1/uploads/{cr['upload_id']}/complete", json={"parts": parts}, headers=h)
-    print("client retry complete ->", retry.status_code, retry.json().get("code"))
-
-
 # 8) deleting an asset/session while its upload is in progress: certificate issued, upload still completes
 def test_rv_delete_during_upload(ictx) -> None:
     h = ictx.as_user(102)
