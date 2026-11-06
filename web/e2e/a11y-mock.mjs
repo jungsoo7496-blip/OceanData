@@ -77,7 +77,7 @@ const SCENARIOS = [
       dialog('회차 수정', button('회차 수정'))] },
     { path: `/sessions/${SES1}/records`, ready: '1차 항해 실증일지', open: [dialog('회차 기록 작성', button('기록 작성'))] },
     { path: '/reports', ready: '사전 점검 보고서', open: [dialog('회차 보고서 초안', button('회차 보고서 초안 만들기'))] },
-    { path: `/reports/${RPT_DRAFT}`, ready: '근거 손상', open: [state('지표 근거 서랍', async (page) => {
+    { path: `/reports/${RPT_DRAFT}`, ready: /^인용한 자산이 바뀌었습니다: ast_\w+ \(QUARANTINED\)\. 근거를 고친 뒤 새 버전을 만드세요\.$/, open: [state('지표 근거 서랍', async (page) => {
       await page.getByRole('button', { name: '소형 선박 이벤트 수 (v1) 근거 보기' }).press('Enter') // 키보드로 연다
       await page.getByText('근거 경로 — 소형 선박 이벤트 수').waitFor()
       await page.getByText('권한 범위 밖 근거 1건은 숨겼습니다').waitFor()
@@ -113,7 +113,7 @@ const SCENARIOS = [
   { role: 'PROGRAM_VIEWER', visits: [
     { path: '/program', ready: '2026-11-03_항해01' },
     { path: '/reports', ready: '사전 점검 보고서' },
-    { path: `/reports/${RPT_SUBMITTED}`, ready: '작성 항목' },
+    { path: `/reports/${RPT_SUBMITTED}`, ready: /^인용한 근거가 변경되었습니다\.$/ },
   ] },
   { role: 'REVIEWER', visits: [
     { path: '/review', ready: '배정된 비식별 검수', open: [dialog('검수', button('검수'), (page) => page.getByAltText('원본 0.5초').waitFor())] },
