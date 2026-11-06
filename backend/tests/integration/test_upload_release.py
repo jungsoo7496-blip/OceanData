@@ -7,6 +7,9 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
+
+import httpx
 
 import pytest
 from sqlalchemy import select, text
@@ -138,23 +141,26 @@ def test_part_urls_sign_planned_content_length(ictx) -> None:  # type: ignore[no
         assert [IngestService._part_len(up, n) for n in (1, 2, 3)] == [5 * MB, 5 * MB, 2 * MB]
 
 
-def test_complete_rejects_parts_larger_than_declared(ictx) -> None:  # type: ignore[no-untyped-def]
-    """1바이트로 신고하고 더 큰 파트를 올려 완료하면 409, 세션 취소·예약 해제, 객체를 만들지 않는다 (쿼터 우회 방지)."""
-    import httpx
+def _upload_oversized_legacy_part(ictx, headers: dict) -> tuple[dict, Upload, str]:  # type: ignore[no-untyped-def]
+    cr = ictx.client.post("/v1/uploads", json=manifest(b"Z"), headers=headers).json()
+    assert cr["part_count"] == 1
+    assert _quota(ictx).reserved_bytes == 1
+    # 배포 전에 발급한 URL에는 크기 서명이 없었다. 실제 저장소에서도 완료 검사의 동작을 검증한다.
+    up = _upload(ictx, cr["upload_id"])
+    legacy_url = ictx.c.storage.presign_upload_part(up.bucket, up.object_key, up.s3_upload_id, 1, 60)
+    r = httpx.put(legacy_url, content=mp4_bytes(6 * MB, seed=299), timeout=60)
+    assert r.is_success
+    return cr, up, r.headers["etag"]
 
+
+def test_complete_rejects_parts_larger_than_declared(ictx) -> None:  # type: ignore[no-untyped-def]
+    """1바이트로 신고하고 더 큰 파트를 올려 완료하면 409, 세션 취소·예약 해제, 객체를 만들지 않는다."""
     from tests.contract.openapi_contract import assert_matches_contract as check
 
     h = ictx.as_user(102)
-    cr = ictx.client.post("/v1/uploads", json=manifest(b"Z"), headers=h).json()
-    assert cr["part_count"] == 1
-    assert _quota(ictx).reserved_bytes == 1
-    # 저장소가 Content-Length 서명을 검사하지 않는 경우(moto)를 가정해 그대로 올린다 — 완료 검사가 이중 방어
-    r = httpx.put(cr["parts"][0]["url"], content=mp4_bytes(6 * MB, seed=299), timeout=60)
-    if r.status_code != 200:  # 서명을 검사하는 저장소(SeaweedFS·AWS)는 여기서 이미 거부한다
-        assert r.status_code == 403, r.text
-        return
+    cr, _, etag = _upload_oversized_legacy_part(ictx, h)
     r2 = ictx.client.post(f"/v1/uploads/{cr['upload_id']}/complete",
-                          json={"parts": [{"part_number": 1, "etag": r.headers["etag"]}]}, headers=h)
+                          json={"parts": [{"part_number": 1, "etag": etag}]}, headers=h)
     assert r2.status_code == 409, r2.text
     body = r2.json()
     assert body["code"] == "CONFLICT"
@@ -167,5 +173,37 @@ def test_complete_rejects_parts_larger_than_declared(ictx) -> None:  # type: ign
     with ictx.c.sessionmaker() as db:
         assert db.get(Asset, cr["asset_id"]) is None  # 받은 것이 없는 자산 기록은 지운다
     again = ictx.client.post(f"/v1/uploads/{cr['upload_id']}/complete",
-                             json={"parts": [{"part_number": 1, "etag": r.headers["etag"]}]}, headers=h)
+                             json={"parts": [{"part_number": 1, "etag": etag}]}, headers=h)
     assert again.status_code == 410
+
+
+@pytest.mark.parametrize("storage_failure", ["size_missing", "abort_failed"])
+def test_complete_preserves_reservation_when_size_cannot_be_verified_or_cleaned(
+    ictx, monkeypatch: pytest.MonkeyPatch, storage_failure: str,  # type: ignore[no-untyped-def]
+) -> None:
+    from tests.contract.openapi_contract import assert_matches_contract as check
+
+    h = ictx.as_user(102)
+    cr, up, etag = _upload_oversized_legacy_part(ictx, h)
+    with monkeypatch.context() as patch:
+        if storage_failure == "size_missing":
+            original = ictx.c.storage.list_parts
+
+            def sizes_missing(*args):
+                return [replace(part, size=None) for part in original(*args)]
+
+            patch.setattr(ictx.c.storage, "list_parts", sizes_missing)
+        else:
+            def abort_failed(*_args):
+                raise TimeoutError("합성 스토리지 중단")
+
+            patch.setattr(ictx.c.storage, "abort_multipart_upload", abort_failed)
+        r = ictx.client.post(f"/v1/uploads/{cr['upload_id']}/complete",
+                             json={"parts": [{"part_number": 1, "etag": etag}]}, headers=h)
+    assert r.status_code == 503 and r.json()["code"] == "STORAGE_UNAVAILABLE"
+    assert r.headers["Retry-After"] == "30"
+    check(r, "POST", "/v1/uploads/{upload_id}/complete")
+    assert _upload(ictx, up.upload_id).status == "UPLOADING"
+    assert _quota(ictx).reserved_bytes == 1
+    assert ictx.c.storage.head_object(up.bucket, up.object_key) is None
+    assert len(ictx.c.storage.list_parts(up.bucket, up.object_key, up.s3_upload_id)) == 1

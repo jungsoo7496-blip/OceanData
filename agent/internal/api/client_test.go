@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -66,5 +68,25 @@ func TestLargeTokenLifetimeDoesNotTriggerImmediateRefresh(t *testing.T) {
 	}
 	if got := tokenCalls.Load(); got != 1 {
 		t.Fatalf("토큰을 두 정책 요청에 재사용해야 한다: 발급 요청 %d회", got)
+	}
+}
+
+func TestPutEmptyPartSendsSignedContentLength(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if length := r.Header.Get("Content-Length"); length != "0" || len(r.TransferEncoding) != 0 {
+			t.Errorf("빈 파트에 Content-Length: 0이 필요합니다: Content-Length=%q Transfer-Encoding=%v",
+				length, r.TransferEncoding)
+		}
+		w.Header().Set("ETag", `"synthetic"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	client := New(server.URL, server.Client(), nil, "test")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// 에이전트는 빈 파일도 같은 SectionReader 경로로 파트 전송을 요청한다.
+	body := io.NewSectionReader(bytes.NewReader(nil), 0, 0)
+	if etag, err := client.PutPart(ctx, server.URL, body, 0); err != nil || etag != `"synthetic"` {
+		t.Fatalf("빈 파트 전송 실패: ETag=%q 오류=%v", etag, err)
 	}
 }
