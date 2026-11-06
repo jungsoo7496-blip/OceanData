@@ -11,14 +11,9 @@ import hashlib
 import pytest
 from sqlalchemy import select, text
 
-from app.db.models import Asset, AssetLineage, OrgQuota, Upload
-from app.seed import ORG_A, SES_A
+from app.db.models import AssetLineage, OrgQuota, Upload
+from app.seed import ORG_A
 from tests.integration.test_ingest import MB, drain, manifest, mp4_bytes, put_parts
-
-
-def _quota(c) -> OrgQuota:
-    with c.sessionmaker() as db:
-        return db.get(OrgQuota, ORG_A)
 
 
 # 1) parent_ref lineage row -> abort 500, sweeper wedged
@@ -77,25 +72,3 @@ def test_rv_already_registered_after_checksum_quarantine(ictx) -> None:
     print("status:", st["ingest_status"], st.get("quarantine_reason"))
     retry = ictx.client.post("/v1/uploads", json=m, headers=h)
     print("re-POST of the correct file ->", retry.status_code, retry.json())
-
-
-# 8) deleting an asset/session while its upload is in progress: certificate issued, upload still completes
-def test_rv_delete_during_upload(ictx) -> None:
-    h = ictx.as_user(102)
-    admin = ictx.as_user(101, mfa=True)
-    data = mp4_bytes(6 * MB, seed=801)
-    cr = ictx.client.post("/v1/uploads", json=manifest(data), headers=h).json()
-    q0 = _quota(ictx.c)
-    d = ictx.client.post(f"/v1/sessions/{SES_A}/deletion", json={"reason": "개인정보 포함 회차 삭제"}, headers=admin)
-    print("session deletion ->", d.status_code, [o["object_key"][-20:] for o in d.json().get("objects", [])])
-    q1 = _quota(ictx.c)
-    print("quota used before/after deletion:", q0.used_bytes, q1.used_bytes, "reserved:", q1.reserved_bytes)
-    parts = put_parts(cr, data)
-    r = ictx.client.post(f"/v1/uploads/{cr['upload_id']}/complete", json={"parts": parts}, headers=h)
-    print("complete after deletion ->", r.status_code, r.json().get("ingest_status"))
-    with ictx.c.sessionmaker() as db:
-        up = db.get(Upload, cr["upload_id"])
-        info = ictx.c.storage.head_object(up.bucket, up.object_key)
-        a = db.get(Asset, cr["asset_id"])
-        print("object exists after 'deletion':", info.size if info else None, "asset deleted_at:", a.deleted_at,
-              "storage_key:", a.storage_key)

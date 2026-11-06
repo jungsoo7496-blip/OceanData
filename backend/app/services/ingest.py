@@ -389,18 +389,26 @@ class IngestService:
         if up.status in ("EXPIRED", "ABORTED"):
             raise ProblemError("GONE", detail="만료되었거나 취소된 업로드입니다")
 
-    def _release(self, up: Upload, final: str, *, require_cleanup: bool = False) -> bool:
+    def _release(
+        self, up: Upload, final: str, *, require_cleanup: bool = False, preserve_asset: bool = False,
+    ) -> bool:
         self.db.refresh(up, with_for_update=True)
         if up.status != "UPLOADING":
             return False
         try:
             self.c.storage.abort_multipart_upload(up.bucket, up.object_key, up.s3_upload_id)
+            completed_object = preserve_asset and self.c.storage.head_object(up.bucket, up.object_key) is not None
         except Exception as exc:  # noqa: BLE001 - 이미 정리된 멀티파트일 수 있다
             log.warning("abort_multipart_failed", extra={"error_type": type(exc).__name__})
-            if require_cleanup:
+            if require_cleanup or preserve_asset:
                 raise ProblemError("STORAGE_UNAVAILABLE", headers={"Retry-After": "30"}) from None
+        else:
+            if completed_object:
+                raise ProblemError("CONFLICT", detail="저장소에 완료 객체가 있어 업로드 중단을 확인할 수 없습니다")
         self.quota.settle(up.organization_id, up.reserved_bytes, to=None)
         up.status, up.reserved_bytes, up.updated_at = final, 0, self.c.clock.now()
+        if preserve_asset:
+            up.asset_id = None  # 삭제 경로에서 자산 기록에 삭제 증명을 연결한다.
         asset = self.db.get(Asset, up.asset_id) if up.asset_id else None
         if asset is not None and asset.ingest_status == "UPLOADING":
             if up.asset_was_metadata_only:
@@ -479,8 +487,8 @@ class IngestService:
             done += int(released)
         return done
 
-    def abort(self, up: Upload) -> None:
-        if not self._release(up, "ABORTED"):
+    def abort(self, up: Upload, *, preserve_asset: bool = False) -> None:
+        if not self._release(up, "ABORTED", preserve_asset=preserve_asset):
             raise ProblemError("CONFLICT", detail="진행 중인 업로드만 취소할 수 있습니다")
 
     def _check_part_sizes(self, up: Upload) -> dict[int, CompletedPart]:

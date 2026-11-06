@@ -4,21 +4,30 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from threading import Event
 
 import httpx
 import pytest
+from botocore.exceptions import ClientError
 from sqlalchemy import select, text
 
-from app.db.models import Asset, OrgQuota
+from app.db.models import Asset, DeletionCertificate, OrgQuota, Upload
+from app.ports.storage import CompletedPart
 from app.seed import DEV_A_CAMERA, DEV_A_SENSOR, ORG_A, SES_A
 from app.services import retention
+from app.services.ingest import IntegrityVerifier
 from app.workers import main as worker
+from tests.conftest import Ctx
 from tests.contract.openapi_contract import assert_matches_contract as check
+from tests.integration.test_ingest import drain, manifest, mp4_bytes, put_parts
 from tests.integration.test_pipeline import synth_video
 from tests.integration.test_pipeline import upload as upload_video
 
 pytestmark = pytest.mark.integration
+DELETION_PATHS = {"ASSET": "/v1/assets/{asset_id}/deletion", "SESSION": "/v1/sessions/{session_id}/deletion"}
 
 
 def upload_csv(ctx, data: bytes, *, session: str | None = SES_A, sha: str | None = None) -> str:
@@ -135,6 +144,228 @@ def test_session_deletion_and_cross_org(ictx) -> None:
     check(r, "POST", "/v1/sessions/{session_id}/deletion")
     assert {o["asset_id"] for o in r.json()["objects"]} == {a1, a2}
     assert ictx.client.get("/v1/assets", headers=ictx.as_user(102)).json()["items"] == []
+
+
+def _start_video_upload(ictx: Ctx, data: bytes, headers: dict[str, str]) -> tuple[Upload, list[dict]]:
+    response = ictx.client.post("/v1/uploads", json=manifest(data), headers=headers)
+    assert response.status_code == 201, response.text
+    created = response.json()
+    parts = put_parts(created, data)
+    with ictx.c.sessionmaker() as db:
+        upload = db.get(Upload, created["upload_id"])
+        assert upload is not None and upload.asset_id is not None
+        return upload, parts
+
+
+@pytest.mark.parametrize("scope", ["ASSET", "SESSION"])
+def test_deletion_aborts_active_upload_without_certifying_uncreated_object(ictx: Ctx, scope: str) -> None:
+    ready_id = upload_csv(ictx, b"t,v\n21,21\n")
+    data = mp4_bytes(128, seed=801)
+    headers = ictx.as_user(102)
+    upload, parts = _start_video_upload(ictx, data, headers)
+    assert ictx.c.storage.head_object(upload.bucket, upload.object_key) is None
+    assert len(ictx.c.storage.list_parts(upload.bucket, upload.object_key, upload.s3_upload_id)) == 1
+    with ictx.c.sessionmaker() as db:
+        quota = db.get(OrgQuota, ORG_A)
+        assert quota.reserved_bytes == len(data) and quota.used_bytes > 0
+        prior_used = quota.used_bytes
+
+    template = DELETION_PATHS[scope]
+    path = template.format(asset_id=upload.asset_id, session_id=SES_A)
+    response = ictx.client.post(path, json={"reason": "업로드 중 삭제 합성 시험"}, headers=ictx.as_user(101, mfa=True))
+    assert response.status_code == 200, response.text
+    check(response, "POST", template)
+    cert = response.json()
+    assert cert["scope"] == scope
+    assert [entry["asset_id"] for entry in cert["objects"]] == ([ready_id] if scope == "SESSION" else [])
+
+    with ictx.c.sessionmaker() as db:
+        ended = db.get(Upload, upload.upload_id)
+        assert (ended.status, ended.reserved_bytes, ended.asset_id) == ("ABORTED", 0, None)
+        deleted = db.get(Asset, upload.asset_id)
+        assert deleted.deleted_at is not None and deleted.storage_key is None
+        assert deleted.deletion_certificate_id == cert["certificate_id"]
+        quota = db.get(OrgQuota, ORG_A)
+        assert (quota.reserved_bytes, quota.used_bytes) == (0, prior_used if scope == "ASSET" else 0)
+    with pytest.raises(ClientError) as missing:
+        ictx.c.storage.list_parts(upload.bucket, upload.object_key, upload.s3_upload_id)
+    assert missing.value.response["Error"]["Code"] == "NoSuchUpload"
+    old = ictx.client.post(f"/v1/uploads/{upload.upload_id}/complete", json={"parts": parts}, headers=headers)
+    assert old.status_code == 410 and old.json()["code"] == "GONE"
+    check(old, "POST", "/v1/uploads/{upload_id}/complete")
+    assert ictx.c.storage.head_object(upload.bucket, upload.object_key) is None
+    assert ictx.client.get(f"/v1/assets/{upload.asset_id}", headers=headers).status_code == 404
+
+
+@pytest.mark.parametrize(("scope", "stage"), [("ASSET", "RECEIVED"), ("SESSION", "VALIDATING")])
+def test_deletion_defers_unverified_asset_without_side_effects(
+    ictx: Ctx, monkeypatch: pytest.MonkeyPatch, scope: str, stage: str,
+) -> None:
+    ready_id = upload_csv(ictx, b"t,v\n22,22\n") if scope == "SESSION" else None
+    data = mp4_bytes(128, seed=802)
+    headers = ictx.as_user(102)
+    upload, parts = _start_video_upload(ictx, data, headers)
+    assert upload.asset_id is not None
+    completed = ictx.client.post(f"/v1/uploads/{upload.upload_id}/complete", json={"parts": parts}, headers=headers)
+    assert completed.status_code == 202, completed.text
+
+    started, resume = Event(), Event()
+    original_read = ictx.c.storage.iter_object
+
+    def pause_verification(*args, **kwargs) -> Iterator[bytes]:
+        started.set()
+        assert resume.wait(15), "무결성 검증 재개 대기 시간 초과"
+        yield from original_read(*args, **kwargs)
+
+    template = DELETION_PATHS[scope]
+    path = template.format(asset_id=upload.asset_id, session_id=SES_A)
+    body = {"reason": "검증 중 삭제 합성 시험"}
+    admin = ictx.as_user(101, mfa=True)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        if stage == "VALIDATING":
+            monkeypatch.setattr(ictx.c.storage, "iter_object", pause_verification)
+            verifying = pool.submit(IntegrityVerifier(ictx.c).verify, upload.asset_id)
+        try:
+            if stage == "VALIDATING":
+                assert started.wait(5), "검증기가 스토리지 읽기 단계에 도달하지 못했습니다"
+            before = asset(ictx, upload.asset_id)
+            assert before.ingest_status == stage
+            with ictx.c.sessionmaker() as db:
+                quota = db.get(OrgQuota, ORG_A)
+                prior_usage = (quota.reserved_bytes, quota.used_bytes, quota.quarantine_bytes)
+            response = ictx.client.post(path, json=body, headers=admin)
+            assert response.status_code == 409, response.text
+            check(response, "POST", template)
+            assert response.json()["code"] == "CONFLICT"
+            after = asset(ictx, upload.asset_id)
+            assert (after.ingest_status, after.deleted_at, after.storage_key, after.updated_at) == (
+                stage, None, before.storage_key, before.updated_at,
+            )
+            with ictx.c.sessionmaker() as db:
+                assert db.scalars(select(DeletionCertificate)).all() == []
+                unchanged = db.get(Upload, upload.upload_id)
+                assert (unchanged.status, unchanged.reserved_bytes) == ("RECEIVED", len(data))
+                quota = db.get(OrgQuota, ORG_A)
+                assert (quota.reserved_bytes, quota.used_bytes, quota.quarantine_bytes) == prior_usage
+            assert ictx.c.storage.get_object(upload.bucket, upload.object_key) == data
+            if ready_id is not None:
+                ready = asset(ictx, ready_id)
+                assert ready.deleted_at is None
+                assert ictx.c.storage.head_object(ictx.c.settings.buckets[ready.storage_zone], ready.storage_key)
+        finally:
+            resume.set()
+        if stage == "VALIDATING":
+            assert verifying.result(timeout=10) == "REGISTERED"
+    if stage == "RECEIVED":
+        drain(ictx)
+
+    receipt = ictx.client.get(f"/v1/assets/{upload.asset_id}/receipt", headers=headers)
+    assert receipt.status_code == 200, receipt.text
+    deleted = ictx.client.post(path, json=body, headers=admin)
+    assert deleted.status_code == 200, deleted.text
+    check(deleted, "POST", template)
+    expected = {upload.asset_id} if ready_id is None else {upload.asset_id, ready_id}
+    assert {entry["asset_id"] for entry in deleted.json()["objects"]} == expected
+
+
+@pytest.mark.parametrize("storage_state", ["already-completed", "abort-timeout"])
+def test_deletion_preserves_upload_when_storage_cannot_confirm_abort(
+    ictx: Ctx, monkeypatch: pytest.MonkeyPatch, storage_state: str,
+) -> None:
+    data = mp4_bytes(128, seed=803)
+    upload, parts = _start_video_upload(ictx, data, ictx.as_user(102))
+    if storage_state == "already-completed":
+        ictx.c.storage.complete_multipart_upload(
+            upload.bucket, upload.object_key, upload.s3_upload_id,
+            [CompletedPart(part["part_number"], part["etag"]) for part in parts],
+        )
+        assert ictx.c.storage.get_object(upload.bucket, upload.object_key) == data
+        expected_status, expected_code = 409, "CONFLICT"
+    else:
+        def unavailable(*_args) -> None:
+            raise TimeoutError("합성 멀티파트 중단 시간 초과")
+
+        monkeypatch.setattr(ictx.c.storage, "abort_multipart_upload", unavailable)
+        expected_status, expected_code = 503, "STORAGE_UNAVAILABLE"
+
+    template = DELETION_PATHS["ASSET"]
+    response = ictx.client.post(template.format(asset_id=upload.asset_id), json={"reason": "저장소 장애 합성 시험"},
+                                headers=ictx.as_user(101, mfa=True))
+    assert response.status_code == expected_status, response.text
+    check(response, "POST", template)
+    assert response.json()["code"] == expected_code
+    with ictx.c.sessionmaker() as db:
+        current = db.get(Upload, upload.upload_id)
+        pending = db.get(Asset, upload.asset_id)
+        quota = db.get(OrgQuota, ORG_A)
+        assert (current.status, current.reserved_bytes) == ("UPLOADING", len(data))
+        assert (pending.ingest_status, pending.deleted_at, pending.storage_key) == ("UPLOADING", None, upload.object_key)
+        assert quota.reserved_bytes == len(data)
+        assert db.scalars(select(DeletionCertificate)).all() == []
+    if storage_state == "already-completed":
+        assert ictx.c.storage.get_object(upload.bucket, upload.object_key) == data
+    else:
+        assert len(ictx.c.storage.list_parts(upload.bucket, upload.object_key, upload.s3_upload_id)) == 1
+
+
+def test_retention_expiry_skips_received_upload(ictx: Ctx) -> None:
+    data = mp4_bytes(128, seed=804)
+    headers = ictx.as_user(102)
+    upload, parts = _start_video_upload(ictx, data, headers)
+    completed = ictx.client.post(f"/v1/uploads/{upload.upload_id}/complete", json={"parts": parts}, headers=headers)
+    assert completed.status_code == 202, completed.text
+    now = ictx.c.clock.now()
+    with ictx.c.sessionmaker.begin() as db:
+        db.get(Asset, upload.asset_id).retention_until = now - timedelta(days=1)
+    with ictx.c.sessionmaker.begin() as db:
+        preview = retention.dry_run(db, now)
+        certs = retention.execute_expired(ictx.c, db, now)
+    assert (preview["total_count"], len(certs)) == (0, 0)
+    assert ictx.c.storage.get_object(upload.bucket, upload.object_key) == data
+    with ictx.c.sessionmaker() as db:
+        pending = db.get(Asset, upload.asset_id)
+        assert (pending.ingest_status, pending.deleted_at) == ("RECEIVED", None)
+        assert db.get(OrgQuota, ORG_A).reserved_bytes == len(data)
+
+
+def test_session_deletion_retries_after_partial_abort(ictx: Ctx, monkeypatch: pytest.MonkeyPatch) -> None:
+    headers = ictx.as_user(102)
+    first, _ = _start_video_upload(ictx, mp4_bytes(128, seed=805), headers)
+    second, _ = _start_video_upload(ictx, mp4_bytes(128, seed=806), headers)
+    first, second = sorted((first, second), key=lambda up: up.upload_id)
+    abort = ictx.c.storage.abort_multipart_upload
+
+    def fail_second(bucket: str, key: str, upload_id: str) -> None:
+        if upload_id == second.s3_upload_id:
+            raise TimeoutError("합성 멀티파트 중단 시간 초과")
+        abort(bucket, key, upload_id)
+
+    template = DELETION_PATHS["SESSION"]
+    path = template.format(session_id=SES_A)
+    admin = ictx.as_user(101, mfa=True)
+    body = {"reason": "멀티파트 일부 중단 뒤 재시도 합성 시험"}
+    with monkeypatch.context() as patch:
+        patch.setattr(ictx.c.storage, "abort_multipart_upload", fail_second)
+        response = ictx.client.post(path, json=body, headers=admin)
+    assert response.status_code == 503, response.text
+    assert response.headers["Retry-After"] == "30"
+    check(response, "POST", template)
+    with pytest.raises(ClientError) as missing:
+        ictx.c.storage.list_parts(first.bucket, first.object_key, first.s3_upload_id)
+    assert missing.value.response["Error"]["Code"] == "NoSuchUpload"
+    assert len(ictx.c.storage.list_parts(second.bucket, second.object_key, second.s3_upload_id)) == 1
+    with ictx.c.sessionmaker() as db:
+        assert db.get(OrgQuota, ORG_A).reserved_bytes == first.reserved_bytes + second.reserved_bytes
+        assert db.scalars(select(DeletionCertificate)).all() == []
+        assert all(db.get(Upload, up.upload_id).status == "UPLOADING" for up in (first, second))
+
+    response = ictx.client.post(path, json=body, headers=admin)
+    assert response.status_code == 200, response.text
+    check(response, "POST", template)
+    assert response.json()["objects"] == []
+    with ictx.c.sessionmaker() as db:
+        assert db.get(OrgQuota, ORG_A).reserved_bytes == 0
+        assert all(db.get(Upload, up.upload_id).status == "ABORTED" for up in (first, second))
 
 
 def test_quota_alerts_usage_and_reconcile(ictx) -> None:
