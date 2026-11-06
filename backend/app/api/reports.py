@@ -16,7 +16,6 @@ from app.api.deps import client_ip, container, get_db, load_scoped, page_params,
 from app.api.pagination import paginate
 from app.container import Container
 from app.db.models import (
-    Asset,
     MetricDefinition,
     Project,
     Report,
@@ -32,7 +31,7 @@ from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services import evidence, metrics, reports
 from app.services.idempotency import run_idempotent
-from app.services.tenant import scope_filter
+from app.services.tenant import scope_filter, visible_asset_ids
 from app.timefmt import iso
 
 router = APIRouter()
@@ -382,21 +381,19 @@ def _report_version(db: Session, rep: Report, p: Principal, version: int | None)
     return v
 
 
-def _visible_assets(db: Session, p: Principal, ids: list[str]) -> set[str]:
-    """조회자의 데이터 범위(domain.md 2장) 안의 자산 ID만 (관리기관 열람자는 배정 사업의 L1 이상)."""
-    return set(db.execute(select(Asset.asset_id).where(Asset.asset_id.in_(ids), scope_filter(Asset, p)))
-               .scalars()) if ids else set()
+def _damage_view(db: Session, rep: Report, v: ReportVersion, p: Principal) -> list[dict[str, Any]]:
+    if p.organization_id == rep.organization_id and not _viewer(p):
+        return v.damage  # 소유 기관의 복구에 필요한 삭제 이력도 포함한다.
+    shown = visible_asset_ids(db, p, {d["asset_id"] for d in v.damage})
+    return [d for d in v.damage if d["asset_id"] in shown]
 
 
 def _view(db: Session, rep: Report, v: ReportVersion, p: Principal) -> dict:
-    """보고서 응답. 다른 기관 조회자(관리기관 열람자·운영자)에게는 지표 원천 자산 ID를 그 범위 안의 것만 보인다
-    (승인 스냅숏은 report_view 그대로 — 모든 원천이 남는다)."""
+    """조회 권한에 맞춰 근거를 표시한다. 승인 스냅숏은 원천을 모두 보존한다."""
     out = reports.report_view(rep, v)
-    if p.organization_id == rep.organization_id:
-        return out
-    shown = _visible_assets(db, p, sorted({a for m in v.metrics for a in m["sources"].get("asset_ids", [])}))
-    out["metrics"] = [{**m, "sources": {**m["sources"], "asset_ids": [a for a in m["sources"].get("asset_ids", [])
-                                                                      if a in shown]}} for m in v.metrics]
+    shown = visible_asset_ids(db, p, {a for m in v.metrics for a in m["sources"].get("asset_ids", [])})
+    out["metrics"] = [reports.metric_view(m, shown) for m in v.metrics]
+    out["damage"] = _damage_view(db, rep, v, p)
     return out
 
 
@@ -536,7 +533,7 @@ def export_report(report_id: str, request: Request, format: Literal["PDF", "XLSX
     tpl = reports.latest_template(db, rep.template_code, rep.template_version)
     if tpl is None:
         raise ProblemError("CONFLICT", detail="보고서 양식을 찾을 수 없습니다")
-    doc = reports.render_model(db, rep, v, tpl)
+    doc = reports.render_model(db, rep, v, tpl, damage=_damage_view(db, rep, v, p))
     if format == "XLSX":
         data = rr.render_xlsx(doc)
     elif format == "PDF":
@@ -559,7 +556,7 @@ def trace_metric(report_id: str, metric_code: str, request: Request, version: in
     rep = _load_report(db, c, request, report_id, p)
     v = _report_version(db, rep, p, version)
 
-    out = reports.trace(db, rep, v, metric_code, lambda ids: _visible_assets(db, p, ids))
+    out = reports.trace(db, rep, v, metric_code, lambda ids: visible_asset_ids(db, p, ids))
     if out is None:
         raise ProblemError("NOT_FOUND")
     return out
