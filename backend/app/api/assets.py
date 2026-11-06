@@ -21,17 +21,25 @@ from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services.external import public_env
 from app.services.ingest import EXT_KEYS, receipt
-from app.services.tenant import scoped_select
+from app.services.tenant import scoped_select, visible_asset_ids
 from app.timefmt import iso
 
 router = APIRouter(tags=["assets"])
 
 
-def asset_view(a: Asset, p: Principal) -> dict[str, Any]:
+def asset_view(a: Asset, p: Principal, visible_parents: set[str]) -> dict[str, Any]:
     precision = a.location_precision
     if p.organization_id != a.organization_id and precision == "EXACT_RESTRICTED":
         precision = "GENERALIZED"  # 정확한 위치는 소유 기관만 (03번 요구사항 6.4)
     location = generalize_location(a.location, precision)
+    provenance = dict(a.provenance)
+    owns_asset = p.organization_id == a.organization_id and p.has_role("ORG_ADMIN", "ORG_MEMBER")
+    if p.kind != "USER" or not (owns_asset or p.has_role("PLATFORM_OPERATOR")):
+        provenance.pop("original_filename", None)
+        provenance.pop("original_relative_path", None)
+    if "parent_asset_ids" in provenance:
+        provenance["parent_asset_ids"] = [asset_id for asset_id in provenance["parent_asset_ids"]
+                                           if asset_id in visible_parents]
     out: dict[str, Any] = {
         "schema_version": a.schema_version, "asset_id": a.asset_id, "organization_id": a.organization_id,
         "project_id": a.project_id, "session_id": a.session_id, "source_system_id": a.source_system_id,
@@ -44,7 +52,7 @@ def asset_view(a: Asset, p: Principal) -> dict[str, Any]:
         "retention_policy_id": a.retention_policy_id, "retention_until": iso(a.retention_until),
         "quality_status": a.quality_status, "quality_reasons": list(a.quality_reasons or []),
         "ingest_status": a.ingest_status, "share_status": a.share_status, "backup_class": a.backup_class,
-        "provenance": a.provenance,
+        "provenance": provenance,
     }
     optional = {"dataset_id": a.dataset_id, "location": location,
                 "location_precision": precision if location else None, "area_code": a.area_code,
@@ -57,6 +65,12 @@ def asset_view(a: Asset, p: Principal) -> dict[str, Any]:
     out.update({k: v for k, v in optional.items() if v is not None})
     out.update({k: v for k, v in (a.ext or {}).items() if k in EXT_KEYS})
     return out
+
+
+def asset_views(db: Session, assets: list[Asset], p: Principal) -> list[dict[str, Any]]:
+    parents = {asset_id for asset in assets for asset_id in asset.provenance.get("parent_asset_ids", [])}
+    shown = visible_asset_ids(db, p, parents)
+    return [asset_view(asset, p, shown) for asset in assets]
 
 
 @router.get("/v1/assets")
@@ -87,7 +101,7 @@ def list_assets(request: Request, session_id: str | None = None, source_system_i
     if captured_to is not None:
         stmt = stmt.where(Asset.capture_start_at < captured_to)
     rows, nxt = paginate(db, stmt, Asset.asset_id, page["limit"], page["cursor"])
-    return {"items": [asset_view(a, p) for a in rows], "next_cursor": nxt}
+    return {"items": asset_views(db, rows, p), "next_cursor": nxt}
 
 
 @router.get("/v1/assets/{asset_id}")
@@ -96,7 +110,7 @@ def get_asset(asset_id: str, request: Request, db: Session = Depends(get_db), c:
     a = load_scoped(db, c, request, Asset, asset_id, p)
     c.audit.record("ASSET_VIEWED", principal=p, organization_id=a.organization_id, target_type="Asset",
                    target_id=a.asset_id, source_ip=client_ip(request))  # 자산 상세 조회 감사 (security.md)
-    return asset_view(a, p)
+    return asset_views(db, [a], p)[0]
 
 
 class AssetPatch(BaseModel):
@@ -156,7 +170,7 @@ def patch_asset(asset_id: str, body: AssetPatch, request: Request, db: Session =
             raise ProblemError("CONFLICT", detail="등록된 자산의 회차는 바꿀 수 없습니다")
     a.updated_at = now
     db.flush()
-    return asset_view(a, p)
+    return asset_views(db, [a], p)[0]
 
 
 @router.get("/v1/assets/{asset_id}/receipt")

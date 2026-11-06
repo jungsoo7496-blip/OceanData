@@ -878,6 +878,7 @@ paths:
       tags: [reports]
       operationId: exportReport
       summary: 보고서 내보내기 (켜진 형식만, /v1/capabilities의 report_formats). 초안은 "초안" 표시
+      description: PDF·XLSX의 근거 손상 안내는 보고서 조회와 같은 범위의 손상 자산 ID를 표시한다.
       x-freeze: G1
       x-status: draft
       parameters:
@@ -5722,7 +5723,12 @@ components:
         metrics: {type: array, items: {$ref: '#/components/schemas/MetricResult'}}
         record_ids: {type: array, items: {$ref: './schemas/common.schema.json#/$defs/record_id'}}
         evidence_damaged: {type: boolean}
-        damage: {type: array, items: {$ref: '#/components/schemas/EvidenceDamage'}}
+        damage:
+          type: array
+          items: {$ref: '#/components/schemas/EvidenceDamage'}
+          description: >-
+            조회자의 자산 범위 안의 손상 근거만 포함한다. 보고서를 소유 기관 범위로 조회하면 삭제된 근거의 손상 이력도 포함한다.
+            손상 상태(evidence_damaged)는 표시할 수 있는 근거가 없어도 유지한다.
         approved_by: {type: [string, 'null']}
         approved_at: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
         snapshot_sha256: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/sha256'}, {type: 'null'}]}

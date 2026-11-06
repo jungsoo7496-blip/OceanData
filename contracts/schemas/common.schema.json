@@ -572,10 +572,12 @@
         },
         "original_filename": {
           "type": "string",
+          "description": "자산 응답에서는 소유 기관 구성원과 플랫폼 운영자에게만 표시",
           "maxLength": 512
         },
         "original_relative_path": {
           "type": "string",
+          "description": "자산 응답에서는 소유 기관 구성원과 플랫폼 운영자에게만 표시",
           "maxLength": 1024
         },
         "original_timestamps": {
@@ -587,6 +589,7 @@
         },
         "parent_asset_ids": {
           "type": "array",
+          "description": "자산 응답에는 호출자의 자산 조회 범위 안에 있는 부모만 포함",
           "items": {
             "$ref": "#/$defs/asset_id"
           }

@@ -511,7 +511,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** 보고서 내보내기 (켜진 형식만, /v1/capabilities의 report_formats). 초안은 "초안" 표시 */
+        /**
+         * 보고서 내보내기 (켜진 형식만, /v1/capabilities의 report_formats). 초안은 "초안" 표시
+         * @description PDF·XLSX의 근거 손상 안내는 보고서 조회와 같은 범위의 손상 자산 ID를 표시한다.
+         */
         get: operations["exportReport"];
         put?: never;
         post?: never;
@@ -3452,6 +3455,7 @@ export interface components {
             metrics: components["schemas"]["MetricResult"][];
             record_ids?: components["schemas"]["record_id"][];
             evidence_damaged: boolean;
+            /** @description 조회자의 자산 범위 안의 손상 근거만 포함한다. 보고서를 소유 기관 범위로 조회하면 삭제된 근거의 손상 이력도 포함한다. 손상 상태(evidence_damaged)는 표시할 수 있는 근거가 없어도 유지한다. */
             damage?: components["schemas"]["EvidenceDamage"][];
             approved_by?: string | null;
             approved_at?: components["schemas"]["utc_datetime"] | null;
@@ -4738,12 +4742,15 @@ export interface components {
             /** @enum {unknown} */
             ingest_channel: "AGENT" | "EDGE" | "WEB" | "API" | "EXTERNAL_API" | "PIPELINE";
             client_version?: string;
+            /** @description 자산 응답에서는 소유 기관 구성원과 플랫폼 운영자에게만 표시 */
             original_filename?: string;
+            /** @description 자산 응답에서는 소유 기관 구성원과 플랫폼 운영자에게만 표시 */
             original_relative_path?: string;
             /** @description 변환 전 원래 시각 문자열들 */
             original_timestamps?: {
                 [key: string]: string;
             };
+            /** @description 자산 응답에는 호출자의 자산 조회 범위 안에 있는 부모만 포함 */
             parent_asset_ids?: components["schemas"]["asset_id"][];
             /** @description PROXY, THUMBNAIL, CLIP, DEID, LABEL 등 */
             transform?: string;
