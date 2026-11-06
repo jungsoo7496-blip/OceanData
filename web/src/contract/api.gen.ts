@@ -3384,6 +3384,7 @@ export interface components {
             missing_count: number;
             sources: {
                 event_ids?: components["schemas"]["event_id"][];
+                /** @description 근거 자산. 응답에는 조회자의 데이터 범위(domain.md 2장) 안의 자산만 넣는다 (예: 관리기관 열람자에게 PRIVATE 자산은 빠진다). 승인 스냅숏(EVIDENCE 존)에는 모두 남는다 */
                 asset_ids?: components["schemas"]["asset_id"][];
                 observation_ranges?: Record<string, never>[];
             };
@@ -3470,6 +3471,7 @@ export interface components {
                 event_code: string;
                 source?: string;
                 human_verified?: boolean;
+                /** @description 이벤트에 연결된 자산 중 조회자 범위 안의 것만 */
                 asset_ids: components["schemas"]["asset_id"][];
             }[];
             observation_ranges: Record<string, never>[];
@@ -3477,10 +3479,10 @@ export interface components {
                 asset_id: components["schemas"]["asset_id"];
                 variant: string;
                 ingest_status?: string;
-                /** @description 계보를 거슬러 올라간 원본 */
+                /** @description 계보를 거슬러 올라간 원본 중 조회자 범위 안의 것만 */
                 originals: components["schemas"]["asset_id"][];
             }[];
-            /** @description 권한 범위 밖이라 보이지 않는 근거 수 */
+            /** @description 권한 범위 밖이라 보이지 않는 근거 자산 수 (계보 원본 포함). metric.sources.asset_ids·events[].asset_ids· assets[].originals에도 숨긴 자산 ID는 넣지 않는다 */
             hidden_count: number;
         };
         DeviceCreate: {
