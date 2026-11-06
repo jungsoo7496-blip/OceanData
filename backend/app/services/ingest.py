@@ -210,7 +210,6 @@ class IngestService:
 
     def create_upload(self, p: Principal, m: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         self._validate_manifest(m)
-        now = self.c.clock.now()
         try:
             cap = resolve_capture_time(m.get("capture_start_at"), m.get("capture_end_at"), m.get("timestamp_quality"),
                                        m.get("original_timestamps"))
@@ -226,12 +225,22 @@ class IngestService:
             Asset.organization_id == p.organization_id, Asset.source_system_id == r.device.device_id,
             Asset.checksum_sha256 == f["checksum_sha256"], Asset.deleted_at.is_(None)).with_for_update()) \
             .scalar_one_or_none()
+        now = self.c.clock.now()
         if existing is not None and existing.has_binary:
             active = self.db.execute(select(Upload).where(Upload.asset_id == existing.asset_id,
                                                           Upload.status == "UPLOADING")).scalar_one_or_none()
-            if active is not None and active.expires_at > now:  # 같은 파일의 진행 중 세션을 다시 돌려준다
+            if active is None:
+                return 200, {"status": "ALREADY_REGISTERED", "asset_id": existing.asset_id}
+            if active.expires_at > now:  # 같은 파일의 진행 중 세션을 다시 돌려준다
                 return 201, self._created_view(active, existing)
-            return 200, {"status": "ALREADY_REGISTERED", "asset_id": existing.asset_id}
+            # 완료·취소는 세션을 먼저 잠근다. 자산을 잡은 이 경로는 세션 잠금을 기다리지 않는다.
+            locked = self.db.scalar(select(Upload.upload_id).where(
+                Upload.upload_id == active.upload_id, Upload.status == "UPLOADING").with_for_update(skip_locked=True))
+            if locked is None:
+                raise ProblemError("CONFLICT", detail="기존 업로드를 처리 중입니다. 잠시 뒤 다시 시도하세요")
+            self._release(active, "EXPIRED", require_cleanup=True)
+            if not active.asset_was_metadata_only:
+                existing = None  # 바이너리를 받은 적 없는 신규 자산 기록은 삭제됐다
 
         if mode == "C0_METADATA_ONLY":
             return self._register_metadata_only(p, m, r, cap, existing)

@@ -61,25 +61,6 @@ def test_rv_lineage_blocks_abort_and_sweep(ictx) -> None:
     print("GET child parts ->", r.status_code)
 
 
-# 3a) expired-but-unswept session -> ALREADY_REGISTERED for a file whose bytes never arrived
-def test_rv_already_registered_for_expired_session(ictx) -> None:
-    h = ictx.as_user(102)
-    data = mp4_bytes(5 * MB, seed=301)
-    m = manifest(data)
-    first = ictx.client.post("/v1/uploads", json=m, headers=h).json()
-    with ictx.c.engine.begin() as conn:
-        conn.execute(text("UPDATE uploads SET expires_at = now() - interval '1 minute' WHERE upload_id = :u"),
-                     {"u": first["upload_id"]})
-    again = ictx.client.post("/v1/uploads", json=m, headers=h)
-    print("re-POST after expiry ->", again.status_code, again.json())
-    rc = ictx.client.get(f"/v1/assets/{first['asset_id']}/receipt", headers=h)
-    print("receipt ->", rc.status_code)
-    from app.workers.main import sweep
-
-    print("sweep ->", sweep(ictx.c))
-    print("asset after sweep ->", ictx.client.get(f"/v1/assets/{first['asset_id']}", headers=h).status_code)
-
-
 # 3b) CHECKSUM_MISMATCH (transfer corruption) -> the correct file can never be re-sent
 def test_rv_already_registered_after_checksum_quarantine(ictx) -> None:
     h = ictx.as_user(102)

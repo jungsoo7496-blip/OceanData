@@ -119,9 +119,9 @@ CI 결과가 필요하면 사용자에게 "fix/backup-runtime-pg16 → main draf
 
 **권장 실행 순서** (사용량이 모자랄 수 있으니 끝내기 쉬운 것·가장 중요한 것을 먼저 합치고, 모든 라우터를 건드리는 5번은 마지막에 한다. S 반나절 미만 · M 하루 · L 이틀 이상):
 
-    2(M) → 4(S) → 3(M) → 8(M) → 7(M) → 13(S) → 10(L) → 11(L) → 12(L) → 5(L)
+    4(S) → 3(M) → 8(M) → 7(M) → 13(S) → 10(L) → 11(L) → 12(L) → 5(L)
 
-6번·9번·1번은 완료했다(`HANDOFF.md` 0장 -1ac·-1ad·-1ae).
+6번·9번·1번과 2번의 만료 세션 보완은 완료했다(`HANDOFF.md` 0장 -1ac·-1ad·-1ae·-1af). 2번의 체크섬 격리 재수집은 5장 사람 결정 항목이다.
 
 12번은 HANDOFF에서 '먼저 확인할 것'이다. 웹훅 격리·기기 범위처럼 보안에 닿는 병합분은 사용량이 남으면 앞당겨도 된다.
 
@@ -143,12 +143,7 @@ wip가 없는 항목은 `git switch -c gpt/<NN>-<주제> --no-track origin/fix/b
 **1) 업로드 선언 크기 강제 (완료, 2026-11-06).** Content-Length 서명과 완료 전 크기·ETag 확인, 불일치 정리 및 예약 보호를 반영했다. 실제 SeaweedFS 3.80 서명·브라우저 재개와 백엔드 전체 시험을 확인했다(ADR-0044, `HANDOFF.md` 0장 -1ae).
 재현 원본 `docs/review-2026-11-05/repro/older-code-review/test_rv_uploads.py`의 `test_rv_oversized_part_bypasses_quota`는 단언이 없는 참고용이다. WIP의 `test_complete_rejects_parts_larger_than_declared`가 정식판이니 끝나면 repro 사본은 지운다.
 
-**2) 검토 2 #5 — `ALREADY_REGISTERED` 오판 (M, 가장 중요: 현장 데이터 유실 가능)** — 바이트가 없는 파일에도 서버가 `ALREADY_REGISTERED`를 돌려준다.
-위치: `backend/app/services/ingest.py` `create_upload`의 `existing.has_binary` 분기(229행 부근, 반환 234행. C0 경로 336행도 같은 응답). `has_binary`는 세션을 만들 때 이미 켜진다.
-Go 에이전트는 이 응답을 받으면 영수증(`GET /v1/assets/{id}/receipt`)을 확인하고 404면 `RECEIPT_PENDING`으로 다음 재시도를 기다릴 뿐 **다시 올리지 않는다**(`agent/internal/core/agent.go` 430·509·521·524행 부근 — 고쳐야 하는지 확인만 한다).
-(가) 만료됐지만 정리 전인 UPLOADING 세션은 정리 주기(약 5분) 뒤 스스로 풀린다. (나) CHECKSUM_MISMATCH 격리(30일 보존)는 풀리지 않아, 순환 녹화 원천은 그 사이 원본이 덮이면 조용히 유실된다.
-'등록됨'은 자산이 RECEIVED 이상이고 QUARANTINED가 아닐 때만. (가)는 그 자리에서 기존 만료 세션을 정리하고 새 세션을 연다(C0 자산은 이미 구현된 UPLOADING→READY_PRIVATE 역전이 — HANDOFF 5장 첫 행 — 를 따른다).
-(나)는 `domain.md` 5장 상태 표·7장에 없는 전이와 `uq_assets_idem_live`(기관·장비·checksum 유일 제약)에 걸릴 가능성이 높다 — **그 부분은 구현하지 말고** 선택지와 추천을 `HANDOFF.md` 5장에 올리고 (가)만 끝낸다.
+**2) 만료 세션의 `ALREADY_REGISTERED` 오판 (만료 세션 보완 완료, 2026-11-06).** 기존 만료 정리 뒤 새 세션을 열고 C0 자산 ID를 유지한다(ADR-0045). 체크섬 불일치 격리 재수집과 기존 영수증 대기 에이전트 복구는 `HANDOFF.md` 5장 확인 대기다.
 
 **4) 검토 2 #8 — 완료와 취소(또는 만료 정리) 경합 독립 확인 (S)** — 1번에서 완료·취소 경로의 업로드 행 잠금을 추가했다(ADR-0044). 기존 고아 객체 재현을 실제 동시 회귀 시험으로 정리하고 만료까지 잠금 규칙을 검증한다. 3번이 이 잠금 규칙을 쓰므로 3번보다 먼저 한다.
 재현: `repro/older-code-review/test_rv_uploads.py::test_rv_complete_abort_race_orphans_object`. 3번이 이 잠금 규칙을 쓰므로 3번보다 먼저 한다.
