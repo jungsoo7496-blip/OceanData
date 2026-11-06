@@ -374,14 +374,16 @@ class IngestService:
         return up
 
     def _expire_if_needed(self, up: Upload) -> None:
-        if up.status == "UPLOADING" and up.expires_at <= self.c.clock.now():
-            self._release(up, "EXPIRED")
+        if up.status == "UPLOADING" and up.expires_at <= self.c.clock.now() and self._release(up, "EXPIRED"):
             self.db.commit()  # 410을 돌려주기 전에 정리를 확정한다 (요구사항 3.3)
             raise ProblemError("GONE", detail="업로드 세션이 만료되었습니다")
         if up.status in ("EXPIRED", "ABORTED"):
             raise ProblemError("GONE", detail="만료되었거나 취소된 업로드입니다")
 
-    def _release(self, up: Upload, final: str, *, require_cleanup: bool = False) -> None:
+    def _release(self, up: Upload, final: str, *, require_cleanup: bool = False) -> bool:
+        self.db.refresh(up, with_for_update=True)
+        if up.status != "UPLOADING":
+            return False
         try:
             self.c.storage.abort_multipart_upload(up.bucket, up.object_key, up.s3_upload_id)
         except Exception as exc:  # noqa: BLE001 - 이미 정리된 멀티파트일 수 있다
@@ -403,6 +405,7 @@ class IngestService:
                                                                AssetLineage.parent_asset_id == asset.asset_id)))
                 self.db.delete(asset)
         self.db.flush()
+        return True
 
     def upload_status(self, up: Upload) -> dict[str, Any]:
         asset = self.db.get(Asset, up.asset_id) if up.asset_id else None
@@ -459,25 +462,23 @@ class IngestService:
             upload_id = up.upload_id
             try:
                 with self.db.begin_nested():
-                    self._release(up, "EXPIRED")
+                    released = self._release(up, "EXPIRED")
             except Exception as exc:  # noqa: BLE001 - 한 세션의 실패가 묶음 전체를 막지 않게 한다
                 log.error("expired_upload_release_failed", extra={"upload_id": upload_id,
                                                                   "error_type": type(exc).__name__})
                 continue
-            done += 1
+            done += int(released)
         return done
 
     def abort(self, up: Upload) -> None:
-        if up.status != "UPLOADING":
+        if not self._release(up, "ABORTED"):
             raise ProblemError("CONFLICT", detail="진행 중인 업로드만 취소할 수 있습니다")
-        self._release(up, "ABORTED")
 
-    def _check_part_sizes(self, up: Upload) -> None:
+    def _check_part_sizes(self, up: Upload) -> dict[int, CompletedPart]:
         """저장소에 올라간 파트 크기가 계획(신고 byte_size)과 같아야 완료한다.
 
         쿼터는 신고 크기로 예약하므로, 더 큰 파트를 올려 완료하면 쿼터 밖 바이트가 남는다. 다르면 세션을 취소하고
-        (멀티파트 정리·예약 해제, ABORTED) 409로 알린다. 없는 파트는 여기서 보지 않는다 — 아래 완료 호출이
-        CONFLICT로 알리고 세션은 남아 GET .../parts로 이어 올릴 수 있다.
+        (멀티파트 정리·예약 해제, ABORTED) 409로 알린다. 일치한 파트는 ETag와 함께 반환한다.
         """
         try:
             stored = self.c.storage.list_parts(up.bucket, up.object_key, up.s3_upload_id)
@@ -490,7 +491,7 @@ class IngestService:
                   "actual_size": s.size} for s in sorted(stored, key=lambda s: s.part_number)
                  if s.part_number > up.part_count or s.size != self._part_len(up, s.part_number)]
         if not wrong:
-            return
+            return {part.part_number: part for part in stored}
         log.warning("upload_part_size_mismatch", extra={"upload_id": up.upload_id, "parts": len(wrong)})
         self._release(up, "ABORTED", require_cleanup=True)
         self.db.commit()  # 409를 돌려주기 전에 취소·예약 해제를 확정한다
@@ -499,6 +500,7 @@ class IngestService:
                            extra={"size_mismatch": wrong[:100]})
 
     def complete(self, p: Principal, up: Upload, parts: list[dict[str, Any]]) -> dict[str, Any]:
+        self.db.refresh(up, with_for_update=True)
         self._expire_if_needed(up)
         if up.status == "RECEIVED":
             return self.upload_status(up)  # 같은 완료 요청 재시도
@@ -508,13 +510,19 @@ class IngestService:
         if numbers != list(range(1, up.part_count + 1)):
             raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/parts", "code": "incomplete_parts",
                                                             "message": f"파트 1~{up.part_count}이 모두 필요합니다"}])
-        self._check_part_sizes(up)
+        stored = self._check_part_sizes(up)
+        verified = []
+        mismatch = "파트 목록이 저장소와 맞지 않습니다 (GET .../parts로 확인)"
+        for part in parts:
+            saved = stored.get(int(part["part_number"]))
+            if saved is None or saved.etag.strip('"') != part["etag"].strip('"'):
+                raise ProblemError("CONFLICT", detail=mismatch)
+            verified.append(saved)
         try:
-            self.c.storage.complete_multipart_upload(up.bucket, up.object_key, up.s3_upload_id,
-                                                     [CompletedPart(int(x["part_number"]), x["etag"]) for x in parts])
+            self.c.storage.complete_multipart_upload(up.bucket, up.object_key, up.s3_upload_id, verified)
         except Exception as exc:  # noqa: BLE001 - 잘못된 ETag·누락 파트
             log.warning("complete_multipart_failed", extra={"error_type": type(exc).__name__})
-            raise ProblemError("CONFLICT", detail="파트 목록이 저장소와 맞지 않습니다 (GET .../parts로 확인)") from None
+            raise ProblemError("CONFLICT", detail=mismatch) from None
         asset = self.db.get(Asset, up.asset_id)
         assert asset is not None
         asset.ingest_status = states.transition("ingest_status", asset.ingest_status, "RECEIVED", actor_roles(p))

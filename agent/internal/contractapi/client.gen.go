@@ -1322,6 +1322,7 @@ type ClientInterface interface {
 	//
 	// 파트 목록(ETag·누락 파트)이 저장소와 맞지 않으면 409 CONFLICT이고 세션은 그대로다 — GET /v1/uploads/{upload_id}/parts로
 	// 확인해 이어 올린 뒤 다시 완료한다.
+	// 완료에 쓰는 파트의 ETag는 크기를 확인한 저장소 목록과 같아야 한다.
 	// 저장소에 올라간 파트 크기가 계획(part_size, 마지막 파트는 신고 byte_size의 나머지)과 다르면 409 CONFLICT와 함께 세션을
 	// 취소한다(멀티파트 정리·쿼터 예약 해제, 이후 이 upload_id는 410). 문제 응답의 확장 필드 size_mismatch에 파트별
 	// part_number·expected_size·actual_size를 담는다(최대 100개). 같은 파일은 새 업로드(POST /v1/uploads)로 다시 보낸다.
@@ -1339,6 +1340,7 @@ type ClientInterface interface {
 	//
 	// 파트 목록(ETag·누락 파트)이 저장소와 맞지 않으면 409 CONFLICT이고 세션은 그대로다 — GET /v1/uploads/{upload_id}/parts로
 	// 확인해 이어 올린 뒤 다시 완료한다.
+	// 완료에 쓰는 파트의 ETag는 크기를 확인한 저장소 목록과 같아야 한다.
 	// 저장소에 올라간 파트 크기가 계획(part_size, 마지막 파트는 신고 byte_size의 나머지)과 다르면 409 CONFLICT와 함께 세션을
 	// 취소한다(멀티파트 정리·쿼터 예약 해제, 이후 이 upload_id는 410). 문제 응답의 확장 필드 size_mismatch에 파트별
 	// part_number·expected_size·actual_size를 담는다(최대 100개). 같은 파일은 새 업로드(POST /v1/uploads)로 다시 보낸다.
@@ -1642,6 +1644,7 @@ func (c *Client) GetUpload(ctx context.Context, uploadId UploadId, reqEditors ..
 //
 // 파트 목록(ETag·누락 파트)이 저장소와 맞지 않으면 409 CONFLICT이고 세션은 그대로다 — GET /v1/uploads/{upload_id}/parts로
 // 확인해 이어 올린 뒤 다시 완료한다.
+// 완료에 쓰는 파트의 ETag는 크기를 확인한 저장소 목록과 같아야 한다.
 // 저장소에 올라간 파트 크기가 계획(part_size, 마지막 파트는 신고 byte_size의 나머지)과 다르면 409 CONFLICT와 함께 세션을
 // 취소한다(멀티파트 정리·쿼터 예약 해제, 이후 이 upload_id는 410). 문제 응답의 확장 필드 size_mismatch에 파트별
 // part_number·expected_size·actual_size를 담는다(최대 100개). 같은 파일은 새 업로드(POST /v1/uploads)로 다시 보낸다.
@@ -1669,6 +1672,7 @@ func (c *Client) CompleteUploadWithBody(ctx context.Context, uploadId UploadId, 
 //
 // 파트 목록(ETag·누락 파트)이 저장소와 맞지 않으면 409 CONFLICT이고 세션은 그대로다 — GET /v1/uploads/{upload_id}/parts로
 // 확인해 이어 올린 뒤 다시 완료한다.
+// 완료에 쓰는 파트의 ETag는 크기를 확인한 저장소 목록과 같아야 한다.
 // 저장소에 올라간 파트 크기가 계획(part_size, 마지막 파트는 신고 byte_size의 나머지)과 다르면 409 CONFLICT와 함께 세션을
 // 취소한다(멀티파트 정리·쿼터 예약 해제, 이후 이 upload_id는 410). 문제 응답의 확장 필드 size_mismatch에 파트별
 // part_number·expected_size·actual_size를 담는다(최대 100개). 같은 파일은 새 업로드(POST /v1/uploads)로 다시 보낸다.
@@ -2391,6 +2395,7 @@ type ClientWithResponsesInterface interface {
 	//
 	// 파트 목록(ETag·누락 파트)이 저장소와 맞지 않으면 409 CONFLICT이고 세션은 그대로다 — GET /v1/uploads/{upload_id}/parts로
 	// 확인해 이어 올린 뒤 다시 완료한다.
+	// 완료에 쓰는 파트의 ETag는 크기를 확인한 저장소 목록과 같아야 한다.
 	// 저장소에 올라간 파트 크기가 계획(part_size, 마지막 파트는 신고 byte_size의 나머지)과 다르면 409 CONFLICT와 함께 세션을
 	// 취소한다(멀티파트 정리·쿼터 예약 해제, 이후 이 upload_id는 410). 문제 응답의 확장 필드 size_mismatch에 파트별
 	// part_number·expected_size·actual_size를 담는다(최대 100개). 같은 파일은 새 업로드(POST /v1/uploads)로 다시 보낸다.
@@ -2408,6 +2413,7 @@ type ClientWithResponsesInterface interface {
 	//
 	// 파트 목록(ETag·누락 파트)이 저장소와 맞지 않으면 409 CONFLICT이고 세션은 그대로다 — GET /v1/uploads/{upload_id}/parts로
 	// 확인해 이어 올린 뒤 다시 완료한다.
+	// 완료에 쓰는 파트의 ETag는 크기를 확인한 저장소 목록과 같아야 한다.
 	// 저장소에 올라간 파트 크기가 계획(part_size, 마지막 파트는 신고 byte_size의 나머지)과 다르면 409 CONFLICT와 함께 세션을
 	// 취소한다(멀티파트 정리·쿼터 예약 해제, 이후 이 upload_id는 410). 문제 응답의 확장 필드 size_mismatch에 파트별
 	// part_number·expected_size·actual_size를 담는다(최대 100개). 같은 파일은 새 업로드(POST /v1/uploads)로 다시 보낸다.
@@ -4030,6 +4036,7 @@ func (c *ClientWithResponses) GetUploadWithResponse(ctx context.Context, uploadI
 //
 // 파트 목록(ETag·누락 파트)이 저장소와 맞지 않으면 409 CONFLICT이고 세션은 그대로다 — GET /v1/uploads/{upload_id}/parts로
 // 확인해 이어 올린 뒤 다시 완료한다.
+// 완료에 쓰는 파트의 ETag는 크기를 확인한 저장소 목록과 같아야 한다.
 // 저장소에 올라간 파트 크기가 계획(part_size, 마지막 파트는 신고 byte_size의 나머지)과 다르면 409 CONFLICT와 함께 세션을
 // 취소한다(멀티파트 정리·쿼터 예약 해제, 이후 이 upload_id는 410). 문제 응답의 확장 필드 size_mismatch에 파트별
 // part_number·expected_size·actual_size를 담는다(최대 100개). 같은 파일은 새 업로드(POST /v1/uploads)로 다시 보낸다.
@@ -4053,6 +4060,7 @@ func (c *ClientWithResponses) CompleteUploadWithBodyWithResponse(ctx context.Con
 //
 // 파트 목록(ETag·누락 파트)이 저장소와 맞지 않으면 409 CONFLICT이고 세션은 그대로다 — GET /v1/uploads/{upload_id}/parts로
 // 확인해 이어 올린 뒤 다시 완료한다.
+// 완료에 쓰는 파트의 ETag는 크기를 확인한 저장소 목록과 같아야 한다.
 // 저장소에 올라간 파트 크기가 계획(part_size, 마지막 파트는 신고 byte_size의 나머지)과 다르면 409 CONFLICT와 함께 세션을
 // 취소한다(멀티파트 정리·쿼터 예약 해제, 이후 이 upload_id는 410). 문제 응답의 확장 필드 size_mismatch에 파트별
 // part_number·expected_size·actual_size를 담는다(최대 100개). 같은 파일은 새 업로드(POST /v1/uploads)로 다시 보낸다.

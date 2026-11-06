@@ -108,9 +108,10 @@ def test_sweep_continues_past_failing_upload(ictx, monkeypatch: pytest.MonkeyPat
     real = IngestService._release
 
     def failing(self, up, final):  # type: ignore[no-untyped-def]
-        real(self, up, final)
+        released = real(self, up, final)
         if up.upload_id == bad["upload_id"]:
             raise RuntimeError("합성 실패")
+        return released
 
     monkeypatch.setattr(IngestService, "_release", failing)
     assert sweep(ictx.c) == 1
