@@ -1,10 +1,10 @@
 # 인수인계 (클라우드 → 로컬)
 
 이 파일은 클라우드 세션에서 만든 작업을 로컬에서 이어가기 위한 안내다. 작업이 진행될 때마다 갱신한다.
-최종 갱신 2026-11-06 (KST). 지시서 6번 장비 등록 코드 무효화 완료(0장 -1ac). 다음은 지시서 9번 에이전트 정책 숫자 상한이다.
+최종 갱신 2026-11-06 (KST). 지시서 6번 등록 코드 무효화와 9번 에이전트 정책 숫자 상한 완료(0장 -1ac·-1ad). 다음은 지시서 1번 업로드 선언 크기 강제다.
 
 ## 요약 — 로컬에서 이어 갈 때 먼저 읽기 (2026-11-05 클라우드 세션 끝)
-**2026-11-06 로컬 확인.** 지시서 6번을 반영했다. 인수 기준선은 백엔드 380건 통과·6건 건너뜀과 별도 실제 SeaweedFS T01-e 1건 통과였다. 6번 작업 브랜치와 fix 반영 전 최종 트리 모두 전체 시험 382건 통과·6건 건너뜀(선택 계약 탐색 5건과 컨테이너 Docker CLI가 필요한 T01-e)·하위시험 28건 통과다. 원격 CI는 미실행이다.
+**2026-11-06 로컬 확인.** 인수 기준선은 백엔드 380건 통과·6건 건너뜀과 별도 실제 SeaweedFS T01-e 1건 통과였다. 지시서 6번 전체 382건, 9번 전체 394건이 작업 브랜치와 fix 반영 전 최종 트리에서 각각 통과했다. 각 실행에서 선택 계약 탐색 5건과 컨테이너 Docker CLI가 필요한 T01-e를 건너뛰었고 하위시험 28건이 통과했다. 원격 CI는 미실행이다.
 
 **검증 상태 (이 브랜치 마지막 커밋 기준, 클라우드 컨테이너에서 실행):** 백엔드 전체 **381건 통과·5건 건너뜀**(건너뜀은 `SCHEMATHESIS_ALL=1`로만 도는 선택 탐색 5개), 마이그레이션 head 0023(이번 병합에 새 마이그레이션 없음 — 0024는 `wip/hot-path-indexes`에만) 임시 DB head→base→head→base 왕복 통과, 계약 검사(158개 작업·중복 키 검사)·Go SDK·웹 타입 재생성 일치, 계약-라우트 일치 시험, 에이전트 `go vet`·`go test -race` 전체 통과·`GOOS=windows go vet`, 웹 lint·typecheck·build·`npm run test:a11y`(로그인 전·역할 6개 × 데스크톱·휴대폰 92개 상태, axe serious·critical 0건), 런타임 의존성 취약점(Trivy 0.58.1) HIGH·CRITICAL 0건, 새 클론에서 `make ci` 통과. 수용시험 표(docs/ACCEPTANCE-STATUS.md) PASS 74 (NOT_IMPLEMENTED 4건은 모두 조건부 15·16번). **이번 마지막 병합 뒤 다시 돌리지 못한 것:** 전체 작업 Schemathesis 탐색(`SCHEMATHESIS_ALL=1`, 그 전에는 구성원·운영자 작업당 25개·열람자·검수자·이용기관 12개 모두 불일치 0건), 수용시험 표 재생성, 실제 스택(Keycloak·SeaweedFS) 확인.
 **원격 CI는 이 브랜치로 돌려 본 적이 없다.** `ci`·`web-e2e`는 `main` push와 `pull_request`에서만, `security`는 main push·주간·수동에서만 돌아서 이 브랜치에 push하는 것만으로는 시작되지 않는다 — **`fix/backup-runtime-pg16` → `main` draft PR을 열어 두면 push마다 돈다** (사람이 연다).
@@ -35,7 +35,7 @@
 
 ### 2. 끊긴 작업 — `wip/*` 브랜치 (원격에 있음, 모두 미완·검토 전)
 기반은 이 브랜치의 옛 커밋이다. 이어 하려면 `git switch -c gpt/<NN>-<이름> --no-track origin/wip/<…>` → `git rebase origin/fix/backup-runtime-pg16`
-(`contracts/openapi.yaml` 충돌은 손으로 풀어 양쪽을 살리고, 생성 파일 `web/src/contract/api.gen.ts`·`agent/internal/contractapi/client.gen.go`는 충돌 부분을 버리고 `npm run gen:api`·`tools/generate_agent_api.py`로 재생성 — 충돌이 없어도 rebase 뒤 `npm run check:api`를 돌린다) → 해당 시험 → 백엔드 전체 시험 → 검토. 상세한 단계는 `docs/GPT-HANDOFF-PROMPT.md` [3]. **번호:** 마이그레이션 0024는 `wip/hot-path-indexes` 몫. ADR-0040은 `wip/agent-policy-overflow`의 코드·계약 주석 41곳이 이미 인용하므로 그 결정(정책 숫자 기술 상한)의 ADR로 쓰고(ADR 파일은 아직 없다), `wip/hot-path-indexes`의 ADR은 0042로 옮긴다(인용 9곳 수정: 코드·시험 8곳 + ADR 파일 제목 1곳).
+(`contracts/openapi.yaml` 충돌은 손으로 풀어 양쪽을 살리고, 생성 파일 `web/src/contract/api.gen.ts`·`agent/internal/contractapi/client.gen.go`는 충돌 부분을 버리고 `npm run gen:api`·`tools/generate_agent_api.py`로 재생성 — 충돌이 없어도 rebase 뒤 `npm run check:api`를 돌린다) → 해당 시험 → 백엔드 전체 시험 → 검토. 상세한 단계는 `docs/GPT-HANDOFF-PROMPT.md` [3]. **번호:** 마이그레이션 0024는 `wip/hot-path-indexes` 몫. 에이전트 정책 숫자 상한은 ADR-0040을 사용한다. `wip/hot-path-indexes`의 ADR은 0042로 옮긴다(인용 9곳 수정: 코드·시험 8곳 + ADR 파일 제목 1곳).
 
 | 브랜치 | 무엇 | 진행 | 남은 것 |
 |---|---|---|---|
@@ -43,7 +43,7 @@
 | `wip/commit-before-response-tests` | 검토 2 **#4** 커밋이 응답 뒤에 일어남 | **재현 시험 2개만**(구현은 첫 시도를 되돌림 — 이 브랜치는 rebase하지 않는다: 첫 커밋 `5220f6b`이 `webhooks.py`에서 충돌. 시험 파일만 `git checkout`으로 가져온다) | 방법 선택(`Depends(get_db, scope="function")` 또는 공용 commit 도우미), 스트리밍·SSE·내보내기 응답이 세션을 계속 쓰는지 확인, 멱등 키 선점(INSERT … ON CONFLICT) |
 | **완료(2026-11-06, -1ac)** `wip/auth-enrollment-codes` | 장비 자격 폐기 뒤 쓰지 않은 등록 코드로 재등록 | 발급·등록·폐기 직렬화, 코드 만료와 감사 기록, 계약 및 생성 검사 통과 | 기본값으로 무효화 구현, 운영 정책은 사람 확인 대기(5장) |
 | `wip/report-scope-leaks` | 보고서 지표 출처 PRIVATE 자산 ID·추적, 다른 기관에 원래 파일명 노출 | 보이는 것만 거르기(서비스·API, 계약) | 시험, `asset_view`의 `original_filename` 처리, 검토 |
-| `wip/agent-policy-overflow` | 06 서버 정책 값 시간 넘침 방어(`heartbeat_interval_s` 등이 매우 크면 `time.Duration` 곱셈이 넘쳐 하트비트가 쉬지 않고 돎) | 17개 파일: 스키마 최댓값·`timex`·에이전트 검사·Go/Python 시험·잘못된 예시 — `Retry-After`·`expires_in`·mvhd 상자 크기 방어도 포함(단 `expires_in`·mvhd는 전용 시험이 없다). **'ADR-0040'을 41곳에서 인용하는데 ADR 파일이 없다** | 전체 검증(`make agent-test agent-lint`, `GOOS=windows go vet`), 기존 정책 호환 확인, 검토. `expires_in`·mvhd 상자 크기 방어의 전용 시험 추가, ADR-0040 파일 작성 |
+| **완료(2026-11-06, -1ad)** `wip/agent-policy-overflow` | 06 서버 정책 값 시간 넘침 방어 | 계약 상한, 구형 저장본 배포 검사, 유효한 이전 정책 유지, Retry-After·토큰·mvhd 회귀시험, ADR-0040 | 범위 밖 구형 정책은 운영자가 정정한 새 버전을 배포 |
 | `wip/hot-path-indexes` | 08 DB 핫패스 인덱스(큐 폴링·보존 만료·계층 이동·테넌트 목록) | 마이그레이션 0024(down 포함)·시험·ADR 초안(파일명 `0040-…`, 상태 'accepted'와 전·후 표가 적혀 있으나 **측정 DB·스크립트가 남아 있지 않아 재현·검토되지 않은 값**) | **믿지 말고 새 임시 DB에 합성해 다시 잰다**(자산 50만·작업 109만·업로드 27만·관측값 177만·감사 150만, `marine`에는 넣지 않는다), 표를 새 값으로, 상태는 `proposed`, ADR을 `0042-…`로 옮기고 인용 9곳(코드·시험 8 + ADR 제목 1) 수정, 쓰이는 색인만 남길 것, 마이그레이션 왕복 시험 |
 
 ### 3. 아직 시작하지 않은 것
@@ -53,7 +53,6 @@
   이 중 **백업(수동·정기)과 보충 수집 두 건은 고쳤다**(`dedupe_active_only`, 0장 -1ab). 남은 것 중 특히:
   `PATCH /v1/events/{id}`·`POST /v1/observations/corrections`의 형식 오류가 500, 기기의 다른 기관 장비 접근 시 감사 미기록(보안 규칙 위반), 긴급 열람 본인 승인 거부 미감사.
   점검하지 못한 두 묶음(`datasets·sharing·deid·assets`, `reports·records·contracts·uploads`)이 있다.
-- 06 에이전트: 서버 응답 `Retry-After`·토큰 `expires_in`·mvhd 상자 크기 방어(위 `wip/agent-policy-overflow`에서 다룬 범위 밖이면 따로).
 - `monitoring.post_webhook`(운영자 알림 웹훅 `ALERT_WEBHOOK_URL`)은 아직 옛 방식(단계별 시간 제한·본문 전체 읽기·프록시 설정 따름·잡 루프에서 실행) —
   운영자가 정한 주소라 신뢰하지만 같은 식으로 루프를 멈출 수 있다.
 - 웹 접근성: 실제 스택 `portal.mjs` 기준을 serious로 맞추기(실제 스택 필요), 회차 타임라인 '회차로 표시된 관측값만' 옵션(제품 결정 후).
@@ -68,6 +67,7 @@
 
 ## 0. 상세 기록 (항목별 — 위 요약이 최신 우선순위다)
 **로컬에서 확인·수정한 것과 다음 우선순위**
+-1ad. **지시서 9번 — 정책 숫자와 에이전트 시간 계산 넘침 방어 (2026-11-06, `gpt/09-agent-policy-overflow`, ADR-0040).** 계약에 기술 상한을 두고 구형 범위 밖 정책은 필드 위치와 함께 422로 차단한다. 에이전트는 유효한 이전 정책을 유지하고 POLICY_INVALID를 기록한다. 초안에 이전 값을 표시해 정정 후 적용할 수 있다. 범위 밖 하트비트 주기는 서버 상태·경보 계산에서 60초를 사용한다. 이전 코드의 토큰 중복 발급·짧은 mvhd 촬영시각 오독, WIP의 구형 정책 200 응답·0값 적용·Retry-After 퍼즈 기대값 실패를 재현했다. 관련 백엔드 17건, 전체 394건, Go race 12개 패키지·상위 시험 및 퍼즈 70건, Linux·Windows 대상 vet 및 LF 원본 lint, 계약 158개·웹 타입·Go SDK 검사, 고정 Chromium 접근성 92개 상태를 통과했다. Go MQTT 시험은 브로커 미설정으로 건너뛰었다. 첫 Chrome 실행은 AdGuard 외부 요청·콘솔 오류 28건으로 실패했다. 새 마이그레이션 없음. 다음은 지시서 1번이다.
 -1. **08번 삭제 보호 보완 (2026-11-05, 클라우드):** 유효한 이용 권한(GRANTED)이 있는 데이터셋 버전에 든 자산이 `confirm_affected=true`로 삭제되던 빈틈을 막았다 — 재확인과 무관하게 409·철회 안내(원본 삭제로 파생본에 닿는 경로 포함), 철회 뒤에는 삭제 가능. 증빙·보고서 인용은 그대로 재확인 후 삭제 + 근거 손상(DELETED) 표시를 API 시험으로 확인. 계약 설명 갱신, 수정 전 코드에서 새 시험이 실패(200)하는 것 확인. 백엔드 전체 226건 통과, 계약·Go SDK 일치 검사 통과. 새 마이그레이션 없음. **다음: 03번 작업 17 약정·연계 카드 등록 API.**
 -1b. **03번 작업 17 약정·연계 카드 등록 API 완료 (2026-11-05, 클라우드, ADR-0028):** `GET/POST /v1/agreements`(운영자·다중 인증, 종료는 `/end`로 valid_until을 당김 — 새 상태 코드 없음, 13번 공유 규칙에 바로 반영), `GET/POST /v1/integration-cards`·`/{id}`·`/{id}/versions`(ORG_ADMIN, 부록 A 분야별 기록, 정책 코드만 검사, 장비 local_copy_policy 반영·감사), `set-policy --integration-card`로 장비 정책 연결. 계약 먼저(스키마·예시·실패 예시), Go SDK 재생성 일치. 새 마이그레이션 없음(0002 표). **실제 연계 카드 양식은 확인 필요.**
 -1c. **02번 긴급 열람 완료 (2026-11-05, 클라우드, ADR-0029):** `/v1/break-glass-grants`(요청·`/decision`·`/revoke`·조회), 다른 운영자 승인(설정으로 본인), 대상 기관 ORG_ADMIN 메일, 요청 운영자만 download-url 허용 + `BREAK_GLASS_ACCESS` 감사, 만료 즉시 차단·워커 EXPIRED. Runbook 05 갱신. 새 마이그레이션 없음.
@@ -277,7 +277,8 @@ tools/         validate_contracts.py, check_traceability.py, check_licenses.py, 
 - ADR-0028 약정·연계 카드 API: 약정 종료는 valid_until, 카드는 분야별 자유 기록 + 정책 코드 검사
 - ADR-0018 보고서 내보내기: PDF(WeasyPrint)·XLSX(openpyxl)·HWPX(양식 XML 치환), Pillow·Pyphen 예외 승인 대기
 - ADR-0030~0039 (이번 세션): 웹훅 outbox·전송(0030, 0041로 보강) · 악성코드 검사 포트(0031) · golangci-lint 개발 도구(0032) · 구간 클립(0033, 쿼터·대기 한도·삭제 경쟁 갱신) · Keycloak 역할 MFA acr(0034) · 계약 기반 조회 조건 검사(0035) · Hot/Warm 계층(0036) · 온보딩 정책 초안(0037) · 운영 정책 편집(0038) · 모의 응답 접근성 검사(0039)
-- ADR-0041 웹훅 전송 격리: 전송 전용 스레드·총 기한·IP 고정·구독 상한. **ADR-0040은 아직 파일이 없다** — `wip/agent-policy-overflow`의 코드·계약 주석 41곳이 인용하므로 그 결정(정책 숫자 기술 상한)의 ADR로 쓴다. `wip/hot-path-indexes`의 ADR(지금 파일명 `0040-…`)은 0042로 옮긴다
+- ADR-0040 에이전트 정책 숫자 상한과 범위 밖 정책 배포 거부. `wip/hot-path-indexes`의 ADR은 0042로 옮긴다.
+- ADR-0041 웹훅 전송 격리. 전송 전용 스레드·총 기한·IP 고정·구독 상한.
 
 ## 7. 알아 둘 점
 - **클라우드 컨테이너가 재시작되면** Docker 데몬과 PostgreSQL이 꺼진다 — 백엔드 시험이 한꺼번에 `connection refused`로 실패한다(코드 문제가 아님). `dockerd`를 다시 띄우고 `docker start marine-postgres-1` 한 뒤 `psql … -c 'select 1'`로 확인한다. 로컬 PC에서는 `make up`.

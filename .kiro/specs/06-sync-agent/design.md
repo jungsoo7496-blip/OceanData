@@ -12,6 +12,7 @@
 | `internal/core` | 스캔(쓰기 완료 판정)·fsnotify·해시·매니페스트·업로드·재개·하트비트·정책 갱신 루프 | 2~10 |
 | `internal/sched` | 전송 허용 시간대(자정 넘김 포함)·토큰 버킷 대역폭·지수 백오프 | 6.1, 7.2, 7.3 |
 | `internal/mediameta` | MP4/MOV mvhd creation_time (0·비현실 값은 근거 아님) | 4.2 |
+| `internal/timex` | 외부 정수 초를 넘치지 않는 대기 시간으로 변환 (ADR-0040) | 2.2, 3.1, 6.1, 9.1 |
 | `internal/plugin` | Capture_Plugin·Sensor_Plugin 인터페이스 | 13 |
 | `internal/update` | Ed25519·HTTPS·크기/시간 제한, 원자 교체, 워커 기동 감독·자동 복원·실행 잠금 | 12.1~12.3 |
 | `internal/logx`, `internal/sysinfo` | 크기 순환 로그, 디스크 여유(Windows/Unix) | 11.4, 6.3 |
@@ -21,6 +22,7 @@
 - 서버 RULE_VIOLATION(422)은 "정책 제외"로 기록 — 서버 판단을 따른다 (2.4). QUOTA_EXCEEDED·RATE_LIMITED·STORAGE_UNAVAILABLE·CONFLICT는 백오프 재시도. 그 밖의 4xx는 FAILED.
 - 세션 만료(410)·없음(404)이면 처음부터 다시 만든다. 대기 중 파일이 바뀌면 다시 판정한다.
 - 계약 변경: `agent-heartbeat.schema.json`에 `policy_excluded`(정수) 추가 — 정책 제외 건수 보고 (2.4).
+- 장비 정책의 숫자 기술 상한과 구형 정책 배포 거부를 계약에 정의한다 (ADR-0040). 범위 밖 정책은 유효한 이전 정책을 유지하고 하트비트에 POLICY_INVALID를 기록한다.
 - 개발 편의 CLI (backend): `python -m app.cli set-policy <수집기> <정책.json>`(스키마·매핑 검증, 버전 증가, 감사), `python -m app.cli enrollment-code <수집기>`(운영자 대리 발급, 감사). 정식 화면은 09번.
 - Go 툴체인 1.26.10: 1.24.7 표준 라이브러리 취약점(crypto/x509, net/http)을 govulncheck가 보고해 올렸다.
 

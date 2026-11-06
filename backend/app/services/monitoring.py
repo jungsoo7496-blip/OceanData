@@ -43,6 +43,7 @@ from app.db.models import (
 )
 from app.domain.ids import new_id
 from app.ports.notifier import Notification
+from app.services.contracts import schema_files
 from app.services.observations import OBS
 from app.timefmt import iso
 
@@ -168,6 +169,16 @@ def latest_policies(db: Session, device_ids: list[str]) -> dict[str, dict[str, A
     return {r.device_id: r.policy for r in rows}
 
 
+def policy_heartbeat_interval_s(policy: dict[str, Any]) -> int:
+    """범위 밖인 이전 주기는 기본 정책의 60초를 사용한다 (ADR-0040)."""
+    bounds = schema_files()["device-policy"]["properties"]["heartbeat_interval_s"]
+    interval = policy.get("heartbeat_interval_s", 60)
+    if isinstance(interval, (int, float)) and bounds["minimum"] <= interval <= bounds["maximum"]:
+        if interval == int(interval):
+            return int(interval)
+    return 60
+
+
 def rule_params(db: Session, code: str) -> dict[str, Any]:
     r = db.get(WatchRule, code)
     return dict(r.params) if r else {}
@@ -215,7 +226,7 @@ def device_health(db: Session, devices: list[Device], now: datetime) -> list[dic
             st = statuses.get(d.device_id)
             pol = policies.get(d.device_id, {})
             current = str(pol.get("policy_version", "pv-0"))
-            interval = int(pol.get("heartbeat_interval_s", 60))
+            interval = policy_heartbeat_interval_s(pol)
             last_reg = max([t for t in (by_collector.get(d.device_id), act.last_registered_at if act else None)
                             if t is not None], default=None)
             hb = st.heartbeat if st else {}
@@ -336,7 +347,7 @@ def _heartbeat_missing(ctx: EvalCtx, p: dict[str, Any]) -> Iterable[Violation]:
     for d in ctx.devices():
         if d.kind != "COLLECTOR" or d.status != "ACTIVE":
             continue  # 등록 전 수집기는 아직 보고할 수 없다
-        interval = int(policies.get(d.device_id, {}).get("heartbeat_interval_s", 60))
+        interval = policy_heartbeat_interval_s(policies.get(d.device_id, {}))
         limit = heartbeat_threshold_s(p, interval)
         st = ctx.db.get(AgentStatus, d.device_id)
         last: datetime | None

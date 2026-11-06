@@ -3,12 +3,13 @@ package api
 import (
 	"bytes"
 	"io"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jungsoo7496-blip/oceandata/agent/internal/timex"
 )
 
 // 퍼즈 시험: 오류 응답의 본문(RFC 9457)과 Retry-After 머리는 서버나 중간 장비가 정한다 (06번 요구사항 6).
@@ -32,19 +33,18 @@ func FuzzReadProblem(f *testing.F) {
 		if p.Code == "" && http.StatusText(status) != "" {
 			t.Fatalf("상태 %d의 오류 코드가 비었다", status)
 		}
-		ra := resp.Header.Get("Retry-After")
-		if ra == "" && p.RetryAfter != 0 {
-			t.Fatalf("Retry-After가 없는데 %v를 기다린다", p.RetryAfter)
-		}
-		// delay-seconds(숫자만)는 그 초 그대로 쓰고, time.Duration으로 나타낼 수 없을 만큼 크면 무시한다(백오프 사용)
+		ra := strings.TrimSpace(resp.Header.Get("Retry-After"))
+		want := time.Duration(0)
+		// delay-seconds만 받고, 큰 값은 UnixNano 재시도 시각 계산에 안전한 기술 상한까지 쓴다 (ADR-0040).
 		if ra != "" && strings.Trim(ra, "0123456789") == "" {
-			want := time.Duration(0)
-			if n, err := strconv.ParseInt(ra, 10, 64); err == nil && n <= math.MaxInt64/int64(time.Second) {
-				want = time.Duration(n) * time.Second
+			n, err := strconv.ParseUint(ra, 10, 64)
+			if err != nil || n > timex.MaxSeconds {
+				n = timex.MaxSeconds
 			}
-			if p.RetryAfter != want {
-				t.Fatalf("Retry-After %q: got %v want %v", ra, p.RetryAfter, want)
-			}
+			want = time.Duration(n) * time.Second
+		}
+		if p.RetryAfter != want {
+			t.Fatalf("Retry-After %q: got %v want %v", ra, p.RetryAfter, want)
 		}
 	})
 }

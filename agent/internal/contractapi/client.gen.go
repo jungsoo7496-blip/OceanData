@@ -358,11 +358,17 @@ type ExternalDevicePolicySchemaD0320935 struct {
 		Channel interface{} `json:"channel,omitempty"`
 		Enabled bool        `json:"enabled"`
 	} `json:"auto_update,omitempty"`
-	CollectorDeviceId  ExternalCommonSchemaDefsDeviceIdE5fb5348 `json:"collector_device_id"`
-	HeartbeatIntervalS int                                      `json:"heartbeat_interval_s"`
-	MaxParallelParts   *int                                     `json:"max_parallel_parts,omitempty"`
-	PolicyVersion      string                                   `json:"policy_version"`
-	SizeStableS        int                                      `json:"size_stable_s"`
+	CollectorDeviceId ExternalCommonSchemaDefsDeviceIdE5fb5348 `json:"collector_device_id"`
+
+	// HeartbeatIntervalS 하트비트 주기(초). 상한 2147483647초(32비트 정수, 약 68년)는 제품 한도가 아니라 기술 한도다 — 에이전트가 time.Duration(int64 나노초, 약 292년까지)으로 바꾸거나 서버가 지금 시각에 더해도 넘치지 않는다. 범위 밖 정책은 에이전트가 적용하지 않고 이전 정책을 유지한다 (ADR-0040)
+	HeartbeatIntervalS int `json:"heartbeat_interval_s"`
+
+	// MaxParallelParts 파트 동시 전송 수 (06번 요구사항 5.1). 상한 10000은 업로드 파트 번호 상한(openapi.yaml PartUrl.part_number)과 같은 기술 한도다 — 한 업로드에서 동시에 보낼 파트가 그보다 많을 수 없다 (ADR-0040)
+	MaxParallelParts *int   `json:"max_parallel_parts,omitempty"`
+	PolicyVersion    string `json:"policy_version"`
+
+	// SizeStableS 쓰기 완료 판정: 파일 크기·수정 시각이 이 시간(초) 동안 그대로여야 전송 대상에 넣는다 (06번 요구사항 3.1). 상한은 heartbeat_interval_s와 같은 기술 한도다 (ADR-0040)
+	SizeStableS int `json:"size_stable_s"`
 
 	// Sources 이 수집기가 데이터를 보낼 수 있는 원천 장비와 장비별 정책
 	Sources []struct {
@@ -370,13 +376,15 @@ type ExternalDevicePolicySchemaD0320935 struct {
 		CollectionMode   ExternalCommonSchemaDefsCollectionMode8b570e81 `json:"collection_mode"`
 		DeviceId         ExternalCommonSchemaDefsDeviceIdE5fb5348       `json:"device_id"`
 
-		// ExpectedIntervalS 기대 수집 주기. 수집 정상성 판정에 쓴다 (11번)
-		ExpectedIntervalS         *int                                            `json:"expected_interval_s,omitempty"`
-		LocalCopyPolicy           ExternalCommonSchemaDefsLocalCopyPolicy091c1d0c `json:"local_copy_policy"`
-		LocalRetentionDays        *int                                            `json:"local_retention_days,omitempty"`
-		ObservationMappingVersion *string                                         `json:"observation_mapping_version,omitempty"`
-		ProjectId                 *ExternalCommonSchemaDefsProjectIdC3def932      `json:"project_id,omitempty"`
-		SourceTimezone            *ExternalCommonSchemaDefsIanaTimezoneD29ddc66   `json:"source_timezone,omitempty"`
+		// ExpectedIntervalS 기대 수집 주기. 수집 정상성 판정에 쓴다 (11번). 상한 2147483647초(32비트 정수, 약 68년)는 기술 한도다 — 장비 표 열(PostgreSQL integer)에 들어가고 수집 정상성 판정이 지금 시각에 더해도 넘치지 않는다 (ADR-0040)
+		ExpectedIntervalS *int                                            `json:"expected_interval_s,omitempty"`
+		LocalCopyPolicy   ExternalCommonSchemaDefsLocalCopyPolicy091c1d0c `json:"local_copy_policy"`
+
+		// LocalRetentionDays 현장 보존 기간(일). 상한 24855일은 제품 한도가 아니라 기술 한도다 — 초로 바꿔도(×86400) 다른 시간 항목과 같은 2147483647초(32비트 정수, 약 68년) 안에 들어 에이전트·서버가 기간으로 계산할 때 넘치지 않는다 (ADR-0040)
+		LocalRetentionDays        *int                                          `json:"local_retention_days,omitempty"`
+		ObservationMappingVersion *string                                       `json:"observation_mapping_version,omitempty"`
+		ProjectId                 *ExternalCommonSchemaDefsProjectIdC3def932    `json:"project_id,omitempty"`
+		SourceTimezone            *ExternalCommonSchemaDefsIanaTimezoneD29ddc66 `json:"source_timezone,omitempty"`
 	} `json:"sources"`
 
 	// Timezone Examples: Asia/Seoul, UTC
@@ -385,7 +393,9 @@ type ExternalDevicePolicySchemaD0320935 struct {
 		Days []interface{} `json:"days"`
 
 		// EndLocal start보다 이르면 다음 날까지 이어진다
-		EndLocal   string `json:"end_local"`
+		EndLocal string `json:"end_local"`
+
+		// MaxKbps 이 시간대의 최대 전송 속도(kbps), null이면 제한 없음. 상한 2147483647(32비트 정수)은 기술 한도다 — 에이전트가 바이트/초로 바꿔도 넘치지 않는다 (ADR-0040)
 		MaxKbps    *int   `json:"max_kbps,omitempty"`
 		StartLocal string `json:"start_local"`
 	} `json:"transfer_windows,omitempty"`
@@ -396,7 +406,9 @@ type ExternalDevicePolicySchemaD0320935 struct {
 		Include         *[]string                                 `json:"include,omitempty"`
 
 		// PathPattern Examples: {session}/cam01/*
-		PathPattern    string                                   `json:"path_pattern"`
+		PathPattern string `json:"path_pattern"`
+
+		// Priority 한 파일에 여러 규칙이 맞으면 값이 작은 규칙을 쓴다. 상한 2147483647(32비트 정수)은 기술 한도다 — 에이전트(Go int)·웹(JS 숫자)이 정확히 읽는다. 더 큰 정수는 에이전트가 정책 전체를 읽지 못하게 한다 (ADR-0040)
 		Priority       *int                                     `json:"priority,omitempty"`
 		RuleId         string                                   `json:"rule_id"`
 		SourceDeviceId ExternalCommonSchemaDefsDeviceIdE5fb5348 `json:"source_device_id"`
@@ -1239,6 +1251,9 @@ type ClientInterface interface {
 
 	// GetDevicePolicy 장비 정책 (에이전트가 주기적으로 받아 적용)
 	//
+	// 현재 계약을 통과한 정책만 배포한다. 상한 도입 전에 저장한 정책이나 기본 정책에 범위 밖 값이 있으면 422 RULE_VIOLATION과
+	// 어긋난 필드 위치를 돌려준다. 에이전트는 이전에 적용한 유효 정책을 유지하고, 운영자가 값을 정정해 새 정책을 배포한다 (ADR-0040).
+	//
 	// Corresponds with GET /v1/devices/{device_id}/policy (the `GetDevicePolicy` operationId).
 	GetDevicePolicy(ctx context.Context, deviceId DeviceId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1465,6 +1480,9 @@ func (c *Client) GetObservationMapping(ctx context.Context, deviceId DeviceId, r
 }
 
 // GetDevicePolicy 장비 정책 (에이전트가 주기적으로 받아 적용)
+//
+// 현재 계약을 통과한 정책만 배포한다. 상한 도입 전에 저장한 정책이나 기본 정책에 범위 밖 값이 있으면 422 RULE_VIOLATION과
+// 어긋난 필드 위치를 돌려준다. 에이전트는 이전에 적용한 유효 정책을 유지하고, 운영자가 값을 정정해 새 정책을 배포한다 (ADR-0040).
 //
 // Corresponds with GET /v1/devices/{device_id}/policy (the `GetDevicePolicy` operationId).
 func (c *Client) GetDevicePolicy(ctx context.Context, deviceId DeviceId, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -2256,6 +2274,9 @@ type ClientWithResponsesInterface interface {
 
 	// GetDevicePolicyWithResponse 장비 정책 (에이전트가 주기적으로 받아 적용)
 	//
+	// 현재 계약을 통과한 정책만 배포한다. 상한 도입 전에 저장한 정책이나 기본 정책에 범위 밖 값이 있으면 422 RULE_VIOLATION과
+	// 어긋난 필드 위치를 돌려준다. 에이전트는 이전에 적용한 유효 정책을 유지하고, 운영자가 값을 정정해 새 정책을 배포한다 (ADR-0040).
+	//
 	// Returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with GET /v1/devices/{device_id}/policy (the `GetDevicePolicy` operationId).
@@ -2825,6 +2846,11 @@ type GetDevicePolicyResponse404Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
+// GetDevicePolicyResponse422Headers the declared response headers of an HTTP 422 response for GetDevicePolicy
+type GetDevicePolicyResponse422Headers struct {
+	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
+}
+
 // GetDevicePolicyResponse429Headers the declared response headers of an HTTP 429 response for GetDevicePolicy
 type GetDevicePolicyResponse429Headers struct {
 	RetryAfter *int
@@ -2842,6 +2868,8 @@ type GetDevicePolicyResponse struct {
 	ApplicationproblemJSON403 *Forbidden
 	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
 	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
+	ApplicationproblemJSON422 *Unprocessable
 	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
 	ApplicationproblemJSON429 *TooManyRequests
 	// Headers401 the parsed response headers for an HTTP 401 response
@@ -2850,6 +2878,8 @@ type GetDevicePolicyResponse struct {
 	Headers403 *GetDevicePolicyResponse403Headers
 	// Headers404 the parsed response headers for an HTTP 404 response
 	Headers404 *GetDevicePolicyResponse404Headers
+	// Headers422 the parsed response headers for an HTTP 422 response
+	Headers422 *GetDevicePolicyResponse422Headers
 	// Headers429 the parsed response headers for an HTTP 429 response
 	Headers429 *GetDevicePolicyResponse429Headers
 }
@@ -2872,6 +2902,11 @@ func (r GetDevicePolicyResponse) GetApplicationproblemJSON403() *Forbidden {
 // GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
 func (r GetDevicePolicyResponse) GetApplicationproblemJSON404() *NotFound {
 	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
+func (r GetDevicePolicyResponse) GetApplicationproblemJSON422() *Unprocessable {
+	return r.ApplicationproblemJSON422
 }
 
 // GetApplicationproblemJSON429 returns the response for an HTTP 429 `application/problem+json` response
@@ -3801,6 +3836,9 @@ func (c *ClientWithResponses) GetObservationMappingWithResponse(ctx context.Cont
 
 // GetDevicePolicyWithResponse 장비 정책 (에이전트가 주기적으로 받아 적용)
 //
+// 현재 계약을 통과한 정책만 배포한다. 상한 도입 전에 저장한 정책이나 기본 정책에 범위 밖 값이 있으면 422 RULE_VIOLATION과
+// 어긋난 필드 위치를 돌려준다. 에이전트는 이전에 적용한 유효 정책을 유지하고, 운영자가 값을 정정해 새 정책을 배포한다 (ADR-0040).
+//
 // Returns a wrapper object for the known response body format(s).
 //
 // Corresponds with GET /v1/devices/{device_id}/policy (the `GetDevicePolicy` operationId).
@@ -4486,6 +4524,13 @@ func ParseGetDevicePolicyResponse(rsp *http.Response) (*GetDevicePolicyResponse,
 		}
 		response.ApplicationproblemJSON404 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest Unprocessable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
 		var dest TooManyRequests
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -4526,6 +4571,16 @@ func ParseGetDevicePolicyResponse(rsp *http.Response) (*GetDevicePolicyResponse,
 			headers.XRequestId = &value
 		}
 		response.Headers404 = &headers
+	case rsp.StatusCode == 422:
+		var headers GetDevicePolicyResponse422Headers
+		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
+			var value ExternalCommonSchemaDefsUlid3520d2d2
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XRequestId = &value
+		}
+		response.Headers422 = &headers
 	case rsp.StatusCode == 429:
 		var headers GetDevicePolicyResponse429Headers
 		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {

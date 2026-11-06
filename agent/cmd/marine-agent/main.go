@@ -29,6 +29,7 @@ import (
 	"github.com/jungsoo7496-blip/oceandata/agent/internal/core"
 	"github.com/jungsoo7496-blip/oceandata/agent/internal/logx"
 	"github.com/jungsoo7496-blip/oceandata/agent/internal/state"
+	"github.com/jungsoo7496-blip/oceandata/agent/internal/timex"
 	"github.com/jungsoo7496-blip/oceandata/agent/internal/update"
 )
 
@@ -255,14 +256,16 @@ func updateOptions(dir string, cfg *config.Config, log *slog.Logger) (update.Opt
 	if err != nil {
 		return update.Options{}, err
 	}
-	hc, err := api.NewHTTPClient(cfg.CAFile, time.Duration(cfg.UpdateTimeoutS)*time.Second)
+	// 설정의 정수 초도 넘치지 않게 바꾼다 (ADR-0040). 0 이하는 update.Options 검사가 거부한다
+	timeout := timex.Seconds(int64(cfg.UpdateTimeoutS))
+	hc, err := api.NewHTTPClient(cfg.CAFile, timeout)
 	if err != nil {
 		return update.Options{}, err
 	}
 	return update.Options{Binary: exe, Dir: dir, PublicKey: cfg.UpdatePublicKey,
 		Auto: cfg.AutoUpdate, URL: cfg.UpdateURL, SignatureURL: cfg.UpdateSignatureURL,
-		Interval: time.Duration(cfg.UpdateIntervalS) * time.Second, Timeout: time.Duration(cfg.UpdateTimeoutS) * time.Second,
-		StartupTimeout: time.Duration(cfg.UpdateStartupTimeoutS) * time.Second, Stable: time.Duration(cfg.UpdateStableS) * time.Second,
+		Interval: timex.Seconds(int64(cfg.UpdateIntervalS)), Timeout: timeout,
+		StartupTimeout: timex.Seconds(int64(cfg.UpdateStartupTimeoutS)), Stable: timex.Seconds(int64(cfg.UpdateStableS)),
 		MaxBytes: cfg.UpdateMaxBytes, Client: hc, Log: log, WorkerArgs: []string{"worker-run", "--dir", dir}}, nil
 }
 
