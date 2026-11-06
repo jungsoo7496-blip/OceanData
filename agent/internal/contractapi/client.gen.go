@@ -1230,6 +1230,7 @@ type ClientInterface interface {
 	// 조회, `GET /v1/me`(자기 확인). 그 밖의 작업(보고서·실증 기록·회차·관측값·이벤트·사용량·장애 조회, 실증 기록 작성 등)은
 	// 토큰의 scope와 관계없이 403 FORBIDDEN이고, 매핑되지 않은 원천 장비의 자원은 404 NOT_FOUND다.
 	// 기관 API 키 토큰은 발급 기관 범위와 지정 scope 안의 동작만 할 수 있다 (02번 요구사항 6.3).
+	// 토큰 교환 호출은 출발지 IP와 IP·client_id 조합 각각에 한도를 적용한다. 한도에 도달하면 429와 Retry-After를 반환한다.
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -1245,6 +1246,7 @@ type ClientInterface interface {
 	// 조회, `GET /v1/me`(자기 확인). 그 밖의 작업(보고서·실증 기록·회차·관측값·이벤트·사용량·장애 조회, 실증 기록 작성 등)은
 	// 토큰의 scope와 관계없이 403 FORBIDDEN이고, 매핑되지 않은 원천 장비의 자원은 404 NOT_FOUND다.
 	// 기관 API 키 토큰은 발급 기관 범위와 지정 scope 안의 동작만 할 수 있다 (02번 요구사항 6.3).
+	// 토큰 교환 호출은 출발지 IP와 IP·client_id 조합 각각에 한도를 적용한다. 한도에 도달하면 429와 Retry-After를 반환한다.
 	//
 	// Takes a body of the `application/x-www-form-urlencoded` content type.
 	//
@@ -1458,6 +1460,7 @@ func (c *Client) GetAssetReceipt(ctx context.Context, assetId AssetId, reqEditor
 // 조회, `GET /v1/me`(자기 확인). 그 밖의 작업(보고서·실증 기록·회차·관측값·이벤트·사용량·장애 조회, 실증 기록 작성 등)은
 // 토큰의 scope와 관계없이 403 FORBIDDEN이고, 매핑되지 않은 원천 장비의 자원은 404 NOT_FOUND다.
 // 기관 API 키 토큰은 발급 기관 범위와 지정 scope 안의 동작만 할 수 있다 (02번 요구사항 6.3).
+// 토큰 교환 호출은 출발지 IP와 IP·client_id 조합 각각에 한도를 적용한다. 한도에 도달하면 429와 Retry-After를 반환한다.
 //
 // Takes any type of body and a specified content type.
 //
@@ -1483,6 +1486,7 @@ func (c *Client) IssueTokenWithBody(ctx context.Context, contentType string, bod
 // 조회, `GET /v1/me`(자기 확인). 그 밖의 작업(보고서·실증 기록·회차·관측값·이벤트·사용량·장애 조회, 실증 기록 작성 등)은
 // 토큰의 scope와 관계없이 403 FORBIDDEN이고, 매핑되지 않은 원천 장비의 자원은 404 NOT_FOUND다.
 // 기관 API 키 토큰은 발급 기관 범위와 지정 scope 안의 동작만 할 수 있다 (02번 요구사항 6.3).
+// 토큰 교환 호출은 출발지 IP와 IP·client_id 조합 각각에 한도를 적용한다. 한도에 도달하면 429와 Retry-After를 반환한다.
 //
 // Takes a body of the `application/x-www-form-urlencoded` content type.
 //
@@ -2307,6 +2311,7 @@ type ClientWithResponsesInterface interface {
 	// 조회, `GET /v1/me`(자기 확인). 그 밖의 작업(보고서·실증 기록·회차·관측값·이벤트·사용량·장애 조회, 실증 기록 작성 등)은
 	// 토큰의 scope와 관계없이 403 FORBIDDEN이고, 매핑되지 않은 원천 장비의 자원은 404 NOT_FOUND다.
 	// 기관 API 키 토큰은 발급 기관 범위와 지정 scope 안의 동작만 할 수 있다 (02번 요구사항 6.3).
+	// 토큰 교환 호출은 출발지 IP와 IP·client_id 조합 각각에 한도를 적용한다. 한도에 도달하면 429와 Retry-After를 반환한다.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -2322,6 +2327,7 @@ type ClientWithResponsesInterface interface {
 	// 조회, `GET /v1/me`(자기 확인). 그 밖의 작업(보고서·실증 기록·회차·관측값·이벤트·사용량·장애 조회, 실증 기록 작성 등)은
 	// 토큰의 scope와 관계없이 403 FORBIDDEN이고, 매핑되지 않은 원천 장비의 자원은 404 NOT_FOUND다.
 	// 기관 API 키 토큰은 발급 기관 범위와 지정 scope 안의 동작만 할 수 있다 (02번 요구사항 6.3).
+	// 토큰 교환 호출은 출발지 IP와 IP·client_id 조합 각각에 한도를 적용한다. 한도에 도달하면 429와 Retry-After를 반환한다.
 	//
 	// Takes a body of the `application/x-www-form-urlencoded` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -3894,6 +3900,7 @@ func (c *ClientWithResponses) GetAssetReceiptWithResponse(ctx context.Context, a
 // 조회, `GET /v1/me`(자기 확인). 그 밖의 작업(보고서·실증 기록·회차·관측값·이벤트·사용량·장애 조회, 실증 기록 작성 등)은
 // 토큰의 scope와 관계없이 403 FORBIDDEN이고, 매핑되지 않은 원천 장비의 자원은 404 NOT_FOUND다.
 // 기관 API 키 토큰은 발급 기관 범위와 지정 scope 안의 동작만 할 수 있다 (02번 요구사항 6.3).
+// 토큰 교환 호출은 출발지 IP와 IP·client_id 조합 각각에 한도를 적용한다. 한도에 도달하면 429와 Retry-After를 반환한다.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -3915,6 +3922,7 @@ func (c *ClientWithResponses) IssueTokenWithBodyWithResponse(ctx context.Context
 // 조회, `GET /v1/me`(자기 확인). 그 밖의 작업(보고서·실증 기록·회차·관측값·이벤트·사용량·장애 조회, 실증 기록 작성 등)은
 // 토큰의 scope와 관계없이 403 FORBIDDEN이고, 매핑되지 않은 원천 장비의 자원은 404 NOT_FOUND다.
 // 기관 API 키 토큰은 발급 기관 범위와 지정 scope 안의 동작만 할 수 있다 (02번 요구사항 6.3).
+// 토큰 교환 호출은 출발지 IP와 IP·client_id 조합 각각에 한도를 적용한다. 한도에 도달하면 429와 Retry-After를 반환한다.
 //
 // Takes a body of the `application/x-www-form-urlencoded` content type, and returns a wrapper object for the known response body format(s).
 //
