@@ -23,6 +23,22 @@
         }
       }
     },
+    "size_mismatch": {
+      "type": "array",
+      "description": "업로드 완료에서 크기 불일치로 세션을 취소한 경우의 파트별 내역.",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": ["part_number", "expected_size", "actual_size"],
+        "additionalProperties": false,
+        "properties": {
+          "part_number": { "type": "integer", "minimum": 1, "maximum": 10000 },
+          "expected_size": { "type": "integer", "format": "int64", "minimum": 0 },
+          "actual_size": { "type": "integer", "format": "int64", "minimum": 0 }
+        }
+      }
+    },
     "unmet_conditions": {
       "type": "array",
       "items": {
@@ -35,6 +51,7 @@
     }
   },
   "allOf": [
+    { "if": { "required": ["size_mismatch"] }, "then": { "properties": { "code": { "const": "CONFLICT" }, "status": { "const": 409 } } } },
     { "if": { "properties": { "code": { "const": "RULE_VIOLATION" } } }, "then": { "required": ["unmet_conditions"], "properties": { "status": { "const": 422 } } } },
     { "if": { "properties": { "code": { "const": "VALIDATION_ERROR" } } }, "then": { "required": ["errors"], "properties": { "status": { "const": 400 } } } }
   ]

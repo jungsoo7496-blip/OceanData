@@ -27,8 +27,9 @@
 - [x] 24. 하트비트 저장·`GET /v1/agents/{id}/health` (상태: NEVER_SEEN/OK/STALE/ERROR, 지연은 11번) — 요구사항 11.2, 11.3 · 시험 `test_heartbeat_and_health`
 - [x] 25. 자산 목록·상세(감사)·수정(data_role 사유·감사, 위치 정밀도) — contracts assets 태그
 - [x] 26. 원래 좌표계 → EPSG:4326 (PostGIS ST_Transform) — 03번 요구사항 6.3 · 시험 `test_source_location_is_transformed_to_4326`
+- [x] 27. 파트 길이 서명과 완료 전 크기 검증·정리 — 요구사항 1.1, 1.4, 1.5, 3.1, 4.1, 10.1 · `test_upload_release.py`, SeaweedFS 3.80 서명 검증, Go 빈 PUT 회귀 · ADR-0044
 
 ## 확인 필요 (사람 결정)
 - 취소·만료된 C0 시작 세션의 UPLOADING → READY_PRIVATE 역전이를 domain.md 5장 표에 추가할지
 - LineageEdge.relation에 SAMPLE_FRAME이 없다. 현장 샘플 프레임은 THUMBNAIL로 기록 중 — 계약에 값을 추가할지
-- [x] 23. 업로드 취소·만료 정리가 계보 행 때문에 멈추던 것 수정 — 요구사항 3.3, 3.4(정리·예약 해제), 1.5(예약) · `parent_ref` 업로드의 asset_lineage 행을 먼저 지우고, 만료 정리는 세션마다 SAVEPOINT(한 줄 실패가 모든 기관의 정리를 막지 않음). 시험 `test_upload_release.py`. **남음(검토 2, `docs/review-2026-11-05/`):** 선언 크기 강제(#2 높음)·`ALREADY_REGISTERED` 오판(#5)·업로드 중 삭제(#6)·완료·취소 경합(#8)
+- [x] 23. 업로드 취소·만료 정리가 계보 행 때문에 멈추던 것 수정 — 요구사항 3.3, 3.4(정리·예약 해제), 1.5(예약) · `parent_ref` 업로드의 asset_lineage 행을 먼저 지우고, 만료 정리는 세션마다 SAVEPOINT(한 줄 실패가 모든 기관의 정리를 막지 않음). 시험 `test_upload_release.py`. **남음(검토 2, `docs/review-2026-11-05/`):** `ALREADY_REGISTERED` 오판(#5)·업로드 중 삭제(#6)·완료·취소 경합(#8)

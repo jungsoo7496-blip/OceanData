@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 
-import httpx
 import pytest
 from sqlalchemy import select, text
 
@@ -60,44 +59,6 @@ def test_rv_lineage_blocks_abort_and_sweep(ictx) -> None:
     print("GET parent parts ->", r.status_code)
     r = ictx.client.get(f"/v1/uploads/{rc.json()['upload_id']}/parts", headers=h)
     print("GET child parts ->", r.status_code)
-
-
-# 2) declared size is not enforced: 1-byte reservation, multi-MB object stored, quota exceeded afterwards
-def test_rv_oversized_part_bypasses_quota(ictx) -> None:
-    h = ictx.as_user(102)
-    ictx.client.post("/v1/uploads", json=manifest(b"Z"), headers=h)  # creates quota row (1 byte reserved)
-    with ictx.c.sessionmaker.begin() as db:
-        db.get(OrgQuota, ORG_A).quota_bytes = 2 * MB
-    created = []
-    for i in range(3):
-        tiny = bytes([65 + i])  # distinct 1-byte files
-        r = ictx.client.post("/v1/uploads", json=manifest(tiny), headers=h)
-        assert r.status_code == 201, r.text
-        created.append(r.json())
-    q = _quota(ictx.c)
-    print("quota_bytes", q.quota_bytes, "reserved", q.reserved_bytes)
-    big = mp4_bytes(6 * MB, seed=299)
-    for cr in created:
-        assert cr["part_count"] == 1
-        url = cr["parts"][0]["url"]
-        r = httpx.put(url, content=big, timeout=60)
-        print("PUT 6MiB into part declared as 1 byte ->", r.status_code)
-        r2 = ictx.client.post(f"/v1/uploads/{cr['upload_id']}/complete",
-                              json={"parts": [{"part_number": 1, "etag": r.headers["etag"]}]}, headers=h)
-        print("complete ->", r2.status_code, r2.json().get("ingest_status"))
-    for cr in created:
-        with ictx.c.sessionmaker() as db:
-            a = db.get(Asset, cr["asset_id"])
-            info = ictx.c.storage.head_object(ictx.c.settings.bucket_proc, a.storage_key)
-        print("stored object size before verify:", info.size if info else None)
-    drain(ictx)
-    q = _quota(ictx.c)
-    usage = q.used_bytes + q.quarantine_bytes + q.reserved_bytes + q.backup_bytes
-    print("after verify: quota", q.quota_bytes, "usage", usage, "quarantine", q.quarantine_bytes,
-          "over quota by", usage - q.quota_bytes)
-    with ictx.c.sessionmaker() as db:
-        print("states:", [(db.get(Asset, cr["asset_id"]).ingest_status, db.get(Asset, cr["asset_id"]).quarantine_reason)
-                          for cr in created])
 
 
 # 3a) expired-but-unswept session -> ALREADY_REGISTERED for a file whose bytes never arrived

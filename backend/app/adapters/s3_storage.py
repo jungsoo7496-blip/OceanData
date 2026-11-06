@@ -174,11 +174,17 @@ class S3Storage:
         return str(r["UploadId"])
 
     def presign_upload_part(self, bucket: str, key: str, upload_id: str, part_number: int,
-                            expires_s: int) -> str:
+                            expires_s: int, content_length: int | None = None) -> str:
+        """content_length를 주면 Content-Length를 서명에 넣는다 (X-Amz-SignedHeaders=content-length;host).
+
+        서버가 계획한 파트 크기와 다른 본문은 저장소가 서명 불일치로 거부한다 — 신고 크기로 쿼터를 예약한 뒤
+        더 큰 파트를 올리는 우회를 막는다. 완료 시점의 ListParts 크기 검사가 이중 방어다.
+        """
+        params: dict = {"Bucket": bucket, "Key": key, "UploadId": upload_id, "PartNumber": part_number}
+        if content_length is not None:
+            params["ContentLength"] = content_length
         return str(self.presigner.generate_presigned_url(  # type: ignore[attr-defined]
-            "upload_part",
-            Params={"Bucket": bucket, "Key": key, "UploadId": upload_id, "PartNumber": part_number},
-            ExpiresIn=expires_s,
+            "upload_part", Params=params, ExpiresIn=expires_s,
         ))
 
     def list_parts(self, bucket: str, key: str, upload_id: str) -> list[CompletedPart]:
@@ -188,7 +194,8 @@ class S3Storage:
             r = self.client.list_parts(  # type: ignore[attr-defined]
                 Bucket=bucket, Key=key, UploadId=upload_id, PartNumberMarker=marker
             )
-            parts += [CompletedPart(int(p["PartNumber"]), p["ETag"]) for p in r.get("Parts", [])]
+            parts += [CompletedPart(int(p["PartNumber"]), p["ETag"], int(p["Size"]) if "Size" in p else None)
+                      for p in r.get("Parts", [])]
             if not r.get("IsTruncated"):
                 return parts
             marker = int(r["NextPartNumberMarker"])
@@ -202,7 +209,11 @@ class S3Storage:
         )
 
     def abort_multipart_upload(self, bucket: str, key: str, upload_id: str) -> None:
-        self.client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)  # type: ignore[attr-defined]
+        try:
+            self.client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)  # type: ignore[attr-defined]
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") != "NoSuchUpload":
+                raise
 
     # --- 사전 서명 (URL은 로그에 남기지 않는다)
     def presign_put(self, bucket: str, key: str, expires_s: int, content_type: str | None = None) -> str:

@@ -255,6 +255,9 @@ func (c *Client) Do(ctx context.Context, method, path string, in any, headers ma
 
 // PutPart는 사전 서명 URL로 파트를 스토리지에 직접 보낸다. URL은 로그에 남기지 않는다.
 func (c *Client) PutPart(ctx context.Context, partURL string, r io.Reader, size int64) (string, error) {
+	if size == 0 {
+		r = http.NoBody // PUT에 명시적인 Content-Length: 0을 보내 서명과 맞춘다.
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, partURL, r)
 	if err != nil {
 		return "", errors.New("파트 URL 형식 오류")

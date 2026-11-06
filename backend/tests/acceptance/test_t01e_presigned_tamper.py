@@ -1,7 +1,7 @@
 """T01-e: 사전 서명 URL의 객체 키·만료·서명을 바꾸면 저장소가 거부하고 원본이 드러나지 않는다 (docs/ACCEPTANCE.md, 04·13번).
 
 모의 S3(moto)는 서명을 검사하지 않으므로, 운영 compose와 같은 SeaweedFS(chrislusf/seaweedfs:3.80)를 일회용 컨테이너로 띄우고
-플랫폼의 `S3Storage.presign_get`이 만든 URL을 변조해 본다. docker나 이미지가 없으면 건너뛴다 (값은 모두 합성).
+플랫폼의 사전 서명 다운로드 URL 변조와 멀티파트 업로드 크기를 검증한다. docker나 이미지가 없으면 건너뛴다 (값은 모두 합성).
 """
 
 from __future__ import annotations
@@ -106,3 +106,27 @@ def test_t01e_tampered_presigned_urls_are_rejected(seaweed: tuple[str, str, str]
     time.sleep(2.5)
     r = httpx.get(short, timeout=10)
     assert r.status_code in (400, 403) and BODY_A not in r.content, r.text[:200]
+
+
+@pytest.mark.parametrize("body", [b"synthetic-planned-part", b""], ids=["nonempty", "empty"])
+def test_presigned_upload_part_enforces_content_length(seaweed: tuple[str, str, str], body: bytes) -> None:
+    endpoint, access, secret = seaweed
+    storage = S3Storage(make_settings(s3_endpoint_url=endpoint, s3_access_key_id=access, s3_secret_access_key=secret))
+    key = "synthetic-multipart/part-size"
+    upload_id = storage.create_multipart_upload(BUCKET, key)
+    try:
+        url = storage.presign_upload_part(BUCKET, key, upload_id, 1, 300, content_length=len(body))
+        with httpx.Client(timeout=10) as client:
+            valid = client.put(url, content=body, headers={"Content-Length": str(len(body))})
+            assert valid.is_success, (valid.status_code, valid.text[:240])
+            parts = storage.list_parts(BUCKET, key, upload_id)
+            assert [part.part_number for part in parts] == [1]
+
+            wrong_bodies = (body + b"x", body[:-1]) if body else (b"x",)
+            wrong_responses = [client.put(url, content=wrong_body) for wrong_body in wrong_bodies]
+            for wrong_body, response in zip(wrong_bodies, wrong_responses, strict=True):
+                assert response.request.headers["Content-Length"] == str(len(wrong_body))
+                assert response.status_code in (400, 403), (len(wrong_body), response.status_code, response.text[:240])
+            assert storage.list_parts(BUCKET, key, upload_id) == parts
+    finally:
+        storage.abort_multipart_upload(BUCKET, key, upload_id)

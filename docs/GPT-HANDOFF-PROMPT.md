@@ -119,9 +119,9 @@ CI 결과가 필요하면 사용자에게 "fix/backup-runtime-pg16 → main draf
 
 **권장 실행 순서** (사용량이 모자랄 수 있으니 끝내기 쉬운 것·가장 중요한 것을 먼저 합치고, 모든 라우터를 건드리는 5번은 마지막에 한다. S 반나절 미만 · M 하루 · L 이틀 이상):
 
-    1(M) → 2(M) → 4(S) → 3(M) → 8(M) → 7(M) → 13(S) → 10(L) → 11(L) → 12(L) → 5(L)
+    2(M) → 4(S) → 3(M) → 8(M) → 7(M) → 13(S) → 10(L) → 11(L) → 12(L) → 5(L)
 
-6번과 9번은 완료했다(`HANDOFF.md` 0장 -1ac·-1ad).
+6번·9번·1번은 완료했다(`HANDOFF.md` 0장 -1ac·-1ad·-1ae).
 
 12번은 HANDOFF에서 '먼저 확인할 것'이다. 웹훅 격리·기기 범위처럼 보안에 닿는 병합분은 사용량이 남으면 앞당겨도 된다.
 
@@ -140,12 +140,7 @@ wip가 없는 항목은 `git switch -c gpt/<NN>-<주제> --no-track origin/fix/b
 
 ### A. 업로드·보관 정합성 (같은 파일을 만지므로 4 → 3 순서로, 1·2는 먼저)
 
-**1) `wip/ingest-size-enforcement` 마무리·검증 (M)** — 선언 크기를 강제한다(1바이트로 선언하고 파트마다 최대 5GiB를 올려 쿼터를 넘기는 우회 막기).
-구현은 이미 브랜치에 있다: 파트 URL에 Content-Length 서명(`s3_storage.presign_upload_part`), 완료 때 ListParts로 파트별 크기 확인 — 어긋나면 409 CONFLICT(`size_mismatch`) + 세션 취소·예약 해제(`ingest._check_part_sizes`),
-격리 용량을 더할 때·뺄 때 모두 자산 `byte_size`로 계산, `completeUpload` 계약 설명, 시험 2개(`test_upload_release.py`). **한 번도 실행하지 않았다.** 남은 일:
-① 그 시험과 백엔드 전체 통과. ② 서명이 진짜 저장소에서 통하는지 — moto는 서명을 보지 않아 지금 시험은 'content-length가 SignedHeaders에 있다'만 본다. 일회용 SeaweedFS(3.80) 컨테이너로
-(가) 계획한 크기의 PUT은 2xx (나) 다른 크기는 거부, 둘 다 확인하는 시험을 더한다(`backend/tests/acceptance/test_t01e_presigned_tamper.py` 방식, docker 필요). (가)가 막히면 업로드가 전부 깨지므로 가장 중요하다.
-③ 정상 클라이언트(Go 에이전트, 웹 업로드 `web/src/pages/Upload.tsx`, 예제 `examples/python/marine_client.py`)가 서버가 준 파트 크기로 정확히 자르는지 확인. ④ `size_mismatch` 응답 필드를 계약에 보강하고 취소 방식(세션 ABORTED)이 맞는지 검토.
+**1) 업로드 선언 크기 강제 (완료, 2026-11-06).** Content-Length 서명과 완료 전 크기·ETag 확인, 불일치 정리 및 예약 보호를 반영했다. 실제 SeaweedFS 3.80 서명·브라우저 재개와 백엔드 전체 시험을 확인했다(ADR-0044, `HANDOFF.md` 0장 -1ae).
 재현 원본 `docs/review-2026-11-05/repro/older-code-review/test_rv_uploads.py`의 `test_rv_oversized_part_bypasses_quota`는 단언이 없는 참고용이다. WIP의 `test_complete_rejects_parts_larger_than_declared`가 정식판이니 끝나면 repro 사본은 지운다.
 
 **2) 검토 2 #5 — `ALREADY_REGISTERED` 오판 (M, 가장 중요: 현장 데이터 유실 가능)** — 바이트가 없는 파일에도 서버가 `ALREADY_REGISTERED`를 돌려준다.
@@ -155,7 +150,7 @@ Go 에이전트는 이 응답을 받으면 영수증(`GET /v1/assets/{id}/receip
 '등록됨'은 자산이 RECEIVED 이상이고 QUARANTINED가 아닐 때만. (가)는 그 자리에서 기존 만료 세션을 정리하고 새 세션을 연다(C0 자산은 이미 구현된 UPLOADING→READY_PRIVATE 역전이 — HANDOFF 5장 첫 행 — 를 따른다).
 (나)는 `domain.md` 5장 상태 표·7장에 없는 전이와 `uq_assets_idem_live`(기관·장비·checksum 유일 제약)에 걸릴 가능성이 높다 — **그 부분은 구현하지 말고** 선택지와 추천을 `HANDOFF.md` 5장에 올리고 (가)만 끝낸다.
 
-**4) 검토 2 #8 — 완료와 취소(또는 만료 정리)가 겹치면 쿼터 밖 고아 객체 (S)** — `load_upload`·`complete`·`abort`가 업로드 행을 잠그지 않는다. 업로드 행 `SELECT … FOR UPDATE`로 직렬화한다(새 상태 값을 만들지 않는다 — domain.md).
+**4) 검토 2 #8 — 완료와 취소(또는 만료 정리) 경합 독립 확인 (S)** — 1번에서 완료·취소 경로의 업로드 행 잠금을 추가했다(ADR-0044). 기존 고아 객체 재현을 실제 동시 회귀 시험으로 정리하고 만료까지 잠금 규칙을 검증한다. 3번이 이 잠금 규칙을 쓰므로 3번보다 먼저 한다.
 재현: `repro/older-code-review/test_rv_uploads.py::test_rv_complete_abort_race_orphans_object`. 3번이 이 잠금 규칙을 쓰므로 3번보다 먼저 한다.
 
 **3) 검토 2 #6 — 업로드 중 삭제는 거짓 삭제 증명 (M)** — 업로드 중인 자산·회차를 삭제하면 삭제 증명이 나오고, 완료 뒤 객체가 고아로 남는다(`backend/app/services/retention.py` `delete_assets`, `backend/app/api/lifecycle.py` 삭제 경로).
