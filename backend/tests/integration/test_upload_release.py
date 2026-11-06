@@ -11,12 +11,16 @@ from dataclasses import replace
 
 import httpx
 import pytest
-from sqlalchemy import select, text
+from botocore.exceptions import ClientError
+from sqlalchemy import event, select, text
+from sqlalchemy.engine import Connection
 
-from app.db.models import Asset, AssetLineage, OrgQuota, Upload
-from app.seed import ORG_A
+from app.db.models import Asset, AssetLineage, Device, OrgQuota, Upload
+from app.seed import DEV_A_CAMERA, ORG_A
 from app.services.ingest import IngestService
-from tests.integration.test_ingest import MB, manifest, mp4_bytes
+from tests.conftest import Ctx
+from tests.contract.openapi_contract import assert_matches_contract as check
+from tests.integration.test_ingest import MB, drain, manifest, mp4_bytes, put_parts
 
 pytestmark = pytest.mark.integration
 
@@ -95,6 +99,96 @@ def test_sweep_releases_expired_uploads_with_lineage(ictx) -> None:  # type: ign
     assert sweep(ictx.c) == 0
 
 
+@pytest.mark.parametrize("metadata_only", [False, True], ids=["new-asset", "keep-c0-asset"])
+def test_reregister_replaces_expired_upload(ictx: Ctx, metadata_only: bool) -> None:
+    headers = ictx.as_user(102)
+    data = mp4_bytes(128)
+    payload = manifest(data, variant="ORIGINAL" if metadata_only else "CLIP")
+    if metadata_only:
+        with ictx.c.sessionmaker.begin() as db:
+            db.get(Device, DEV_A_CAMERA).collection_mode = "C0_METADATA_ONLY"
+        registered = ictx.client.post("/v1/uploads", json=payload, headers=headers)
+        assert registered.status_code == 201, registered.text
+        assert registered.json()["status"] == "METADATA_ONLY_REGISTERED"
+        with ictx.c.sessionmaker.begin() as db:
+            db.get(Device, DEV_A_CAMERA).collection_mode = "C3_APPROVED_FULL"
+
+    created = ictx.client.post("/v1/uploads", json=payload, headers=headers)
+    assert created.status_code == 201, created.text
+    old = created.json()
+    if metadata_only:
+        assert old["asset_id"] == registered.json()["asset_id"]
+    put_parts(old, data)
+    original = _upload(ictx, old["upload_id"])
+    with ictx.c.sessionmaker.begin() as db:
+        db.get(OrgQuota, ORG_A).quota_bytes = len(data)  # 예약을 하나만 수용한다.
+    assert _quota(ictx).reserved_bytes == len(data)
+    _expire(ictx, old["upload_id"], 1)
+
+    replacement = ictx.client.post("/v1/uploads", json=payload, headers=headers)
+    assert replacement.status_code == 201, replacement.text
+    check(replacement, "POST", "/v1/uploads")
+    new = replacement.json()
+    assert new["status"] == "UPLOAD_CREATED" and new["upload_id"] != old["upload_id"]
+    assert (new["asset_id"] == old["asset_id"]) is metadata_only
+    with ictx.c.sessionmaker() as db:
+        old_session = db.get(Upload, old["upload_id"])
+        assert (old_session.status, old_session.reserved_bytes) == ("EXPIRED", 0)
+        asset_ids = db.scalars(select(Asset.asset_id).where(Asset.checksum_sha256 == hashlib.sha256(data).hexdigest())).all()
+        assert asset_ids == [new["asset_id"]]
+    assert _quota(ictx).reserved_bytes == len(data)
+    with pytest.raises(ClientError) as missing:
+        ictx.c.storage.list_parts(original.bucket, original.object_key, original.s3_upload_id)
+    assert missing.value.response["Error"]["Code"] == "NoSuchUpload"
+    gone = ictx.client.get(f"/v1/uploads/{old['upload_id']}/parts", headers=headers)
+    assert gone.status_code == 410 and gone.json()["code"] == "GONE"
+    check(gone, "GET", "/v1/uploads/{upload_id}/parts")
+
+    completed = ictx.client.post(f"/v1/uploads/{new['upload_id']}/complete", headers=headers,
+                                 json={"parts": put_parts(new, data)})
+    assert completed.status_code == 202, completed.text
+    drain(ictx)
+    receipt = ictx.client.get(f"/v1/assets/{new['asset_id']}/receipt", headers=headers)
+    assert receipt.status_code == 200, receipt.text
+    check(receipt, "GET", "/v1/assets/{asset_id}/receipt")
+    assert receipt.json()["byte_size"] == len(data)
+    assert receipt.json()["checksum_sha256"] == hashlib.sha256(data).hexdigest()
+    assert _quota(ictx).reserved_bytes == 0
+
+
+def test_reregister_expired_upload_retries_when_old_session_locked(ictx: Ctx) -> None:
+    headers = ictx.as_user(102)
+    data = mp4_bytes(128)
+    payload = manifest(data)
+    created = ictx.client.post("/v1/uploads", json=payload, headers=headers)
+    assert created.status_code == 201, created.text
+    upload_id = created.json()["upload_id"]
+    _expire(ictx, upload_id, 1)
+
+    def limit_statement_time(conn: Connection) -> None:
+        conn.exec_driver_sql("SET LOCAL statement_timeout = '3s'")
+
+    with ictx.c.sessionmaker.begin() as holder:
+        old = holder.get(Upload, upload_id, with_for_update=True)
+        assert old is not None
+        event.listen(ictx.c.engine, "begin", limit_statement_time)
+        try:
+            retry = ictx.client.post("/v1/uploads", json=payload, headers=headers)
+        finally:
+            event.remove(ictx.c.engine, "begin", limit_statement_time)
+    assert retry.status_code == 409, retry.text
+    assert retry.json()["code"] == "CONFLICT"
+    check(retry, "POST", "/v1/uploads")
+    assert _upload(ictx, upload_id).status == "UPLOADING"
+    assert _quota(ictx).reserved_bytes == len(data)
+    assert ictx.c.storage.list_parts(old.bucket, old.object_key, old.s3_upload_id) == []
+
+    replacement = ictx.client.post("/v1/uploads", json=payload, headers=headers)
+    assert replacement.status_code == 201, replacement.text
+    assert replacement.json()["upload_id"] != upload_id
+    assert _quota(ictx).reserved_bytes == len(data)
+
+
 def test_sweep_continues_past_failing_upload(ictx, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
     """한 세션 정리가 실패해도 같은 묶음의 다른 세션은 정리되고 정리 작업이 예외로 멈추지 않는다."""
     from app.services.ingest import IngestService
@@ -154,8 +248,6 @@ def _upload_oversized_legacy_part(ictx, headers: dict) -> tuple[dict, Upload, st
 
 def test_complete_rejects_parts_larger_than_declared(ictx) -> None:  # type: ignore[no-untyped-def]
     """1바이트로 신고하고 더 큰 파트를 올려 완료하면 409, 세션 취소·예약 해제, 객체를 만들지 않는다."""
-    from tests.contract.openapi_contract import assert_matches_contract as check
-
     h = ictx.as_user(102)
     cr, _, etag = _upload_oversized_legacy_part(ictx, h)
     r2 = ictx.client.post(f"/v1/uploads/{cr['upload_id']}/complete",
@@ -180,8 +272,6 @@ def test_complete_rejects_parts_larger_than_declared(ictx) -> None:  # type: ign
 def test_complete_preserves_reservation_when_size_cannot_be_verified_or_cleaned(
     ictx, monkeypatch: pytest.MonkeyPatch, storage_failure: str,  # type: ignore[no-untyped-def]
 ) -> None:
-    from tests.contract.openapi_contract import assert_matches_contract as check
-
     h = ictx.as_user(102)
     cr, up, etag = _upload_oversized_legacy_part(ictx, h)
     with monkeypatch.context() as patch:
