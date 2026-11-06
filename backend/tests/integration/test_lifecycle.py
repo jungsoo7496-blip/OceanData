@@ -181,7 +181,10 @@ def test_deletion_aborts_active_upload_without_certifying_uncreated_object(ictx:
 
     with ictx.c.sessionmaker() as db:
         ended = db.get(Upload, upload.upload_id)
-        assert (ended.status, ended.reserved_bytes) == ("ABORTED", 0)
+        assert (ended.status, ended.reserved_bytes, ended.asset_id) == ("ABORTED", 0, None)
+        deleted = db.get(Asset, upload.asset_id)
+        assert deleted.deleted_at is not None and deleted.storage_key is None
+        assert deleted.deletion_certificate_id == cert["certificate_id"]
         quota = db.get(OrgQuota, ORG_A)
         assert (quota.reserved_bytes, quota.used_bytes) == (0, prior_used if scope == "ASSET" else 0)
     with pytest.raises(ClientError) as missing:
@@ -323,6 +326,46 @@ def test_retention_expiry_skips_received_upload(ictx: Ctx) -> None:
         pending = db.get(Asset, upload.asset_id)
         assert (pending.ingest_status, pending.deleted_at) == ("RECEIVED", None)
         assert db.get(OrgQuota, ORG_A).reserved_bytes == len(data)
+
+
+def test_session_deletion_retries_after_partial_abort(ictx: Ctx, monkeypatch: pytest.MonkeyPatch) -> None:
+    headers = ictx.as_user(102)
+    first, _ = _start_video_upload(ictx, mp4_bytes(128, seed=805), headers)
+    second, _ = _start_video_upload(ictx, mp4_bytes(128, seed=806), headers)
+    first, second = sorted((first, second), key=lambda up: up.upload_id)
+    abort = ictx.c.storage.abort_multipart_upload
+
+    def fail_second(bucket: str, key: str, upload_id: str) -> None:
+        if upload_id == second.s3_upload_id:
+            raise TimeoutError("합성 멀티파트 중단 시간 초과")
+        abort(bucket, key, upload_id)
+
+    template = DELETION_PATHS["SESSION"]
+    path = template.format(session_id=SES_A)
+    admin = ictx.as_user(101, mfa=True)
+    body = {"reason": "멀티파트 일부 중단 뒤 재시도 합성 시험"}
+    with monkeypatch.context() as patch:
+        patch.setattr(ictx.c.storage, "abort_multipart_upload", fail_second)
+        response = ictx.client.post(path, json=body, headers=admin)
+    assert response.status_code == 503, response.text
+    assert response.headers["Retry-After"] == "30"
+    check(response, "POST", template)
+    with pytest.raises(ClientError) as missing:
+        ictx.c.storage.list_parts(first.bucket, first.object_key, first.s3_upload_id)
+    assert missing.value.response["Error"]["Code"] == "NoSuchUpload"
+    assert len(ictx.c.storage.list_parts(second.bucket, second.object_key, second.s3_upload_id)) == 1
+    with ictx.c.sessionmaker() as db:
+        assert db.get(OrgQuota, ORG_A).reserved_bytes == first.reserved_bytes + second.reserved_bytes
+        assert db.scalars(select(DeletionCertificate)).all() == []
+        assert all(db.get(Upload, up.upload_id).status == "UPLOADING" for up in (first, second))
+
+    response = ictx.client.post(path, json=body, headers=admin)
+    assert response.status_code == 200, response.text
+    check(response, "POST", template)
+    assert response.json()["objects"] == []
+    with ictx.c.sessionmaker() as db:
+        assert db.get(OrgQuota, ORG_A).reserved_bytes == 0
+        assert all(db.get(Upload, up.upload_id).status == "ABORTED" for up in (first, second))
 
 
 def test_quota_alerts_usage_and_reconcile(ictx) -> None:

@@ -22,6 +22,7 @@ from app.db.models import (
     DeletionCertificate,
     OrgQuota,
     RetentionPolicy,
+    Upload,
     User,
 )
 from app.domain.ids import new_id
@@ -34,6 +35,7 @@ FOREVER = datetime(9999, 12, 31, tzinfo=UTC)
 VARIANT_TARGET = {"ORIGINAL": "RAW", "PROXY": "PROXY", "THUMBNAIL": "THUMBNAIL", "SAMPLE_FRAME": "THUMBNAIL",
                   "CLIP": "CLIP", "DEID": "DEID", "LABEL": "DEID", "SENSOR_EXPORT": "SENSOR_EXPORT"}
 ALERT_STEPS = (80, 90, 100)
+VERIFYING_INGEST_STATES = ("RECEIVED", "VALIDATING")
 
 
 def target_for(asset: Asset) -> str:
@@ -103,7 +105,7 @@ def with_descendants(db: Session, roots: list[Asset], *, lock: bool = False) -> 
     lock이면(삭제) 단계마다 자산 행을 잠그고 최신 값으로 다시 읽은 뒤 그 파생본을 찾는다.
     파생본을 만드는 작업(구간 클립)은 원 자산 행을 잠그고 살아 있는지 확인한 뒤 기록하므로, 그사이 확정된
     파생본이 삭제·삭제 증명에서 빠지지 않는다 (ADR-0033). 기다리는 동안 다른 요청이 지운 자산은 뺀다.
-    잠금 순서는 자산 행 → 기관 쿼터 행 (delete_assets)."""
+    잠금 순서는 자산 행 → 필요한 업로드 행(대기 없이) → 기관 쿼터 행 (delete_assets)."""
     if lock:
         roots = lock_live(db, [a.asset_id for a in roots])
     seen = {a.asset_id: a for a in roots}
@@ -150,6 +152,28 @@ def affected_by(db: Session, assets: list[Asset]) -> list[dict[str, Any]]:
     return out
 
 
+def _abort_pending_uploads(c: Container, db: Session, organization_id: str, assets: list[Asset]) -> set[str]:
+    from app.services.ingest import IngestService
+
+    if any(a.ingest_status in VERIFYING_INGEST_STATES for a in assets):
+        raise DeletionRefused("CONFLICT", "검증 중인 자산이 있습니다. 잠시 뒤 다시 시도하세요")
+    pending = {a.asset_id for a in assets if a.ingest_status == "UPLOADING"}
+    if not pending:
+        return pending
+
+    # 완료·만료는 업로드를 먼저 잠근다. 이미 자산을 잠근 삭제는 그 업로드를 기다리지 않는다.
+    uploads = db.scalars(select(Upload).where(
+        Upload.asset_id.in_(pending), Upload.organization_id == organization_id, Upload.status == "UPLOADING",
+    ).order_by(Upload.upload_id).with_for_update(skip_locked=True)).all()
+    if len(uploads) != len(pending) or {up.asset_id for up in uploads} != pending:
+        raise DeletionRefused("CONFLICT", "진행 중인 업로드를 확인할 수 없습니다. 잠시 뒤 다시 시도하세요")
+
+    service = IngestService(c, db)
+    for up in uploads:
+        service.abort(up, preserve_asset=True)
+    return pending
+
+
 def delete_assets(c: Container, db: Session, *, organization_id: str, assets: list[Asset], scope: str,
                   target_id: str, reason: str | None, requested_by: str, confirm_affected: bool) -> DeletionCertificate:
     held = [a.asset_id for a in assets if a.legal_hold]
@@ -164,6 +188,7 @@ def delete_assets(c: Container, db: Session, *, organization_id: str, assets: li
     if affected and not confirm_affected:  # 영향 목록 확인 후 재확인 (요구사항 5.4)
         raise DeletionRefused("CONFLICT", "인용 중인 증빙·보고서가 있습니다. confirm_affected=true로 다시 요청하세요",
                               affected)
+    aborted = _abort_pending_uploads(c, db, organization_id, assets)
     now = c.clock.now()
     objects: list[dict[str, Any]] = []
     backed_up = False
@@ -174,7 +199,7 @@ def delete_assets(c: Container, db: Session, *, organization_id: str, assets: li
 
     used = tiers.in_use(c, db)
     for a in assets:
-        if a.storage_key and a.storage_zone:
+        if a.asset_id not in aborted and a.storage_key and a.storage_zone:
             # 쓰는 모든 계층에서 지운다: 계층 이동 중 사본·유예 중인 원래 객체도 남기지 않는다 (08번 요구사항 9)
             for place in tiers.zone_places(c, a.storage_zone, used):
                 try:
@@ -191,7 +216,7 @@ def delete_assets(c: Container, db: Session, *, organization_id: str, assets: li
                     q.used_bytes = max(0, q.used_bytes - a.byte_size)
                 if a.backup_requested_at is not None:  # 신청 백업 용량도 뺀다 (백업 사본은 보존 주기 뒤 사라짐)
                     q.backup_bytes = max(0, q.backup_bytes - a.byte_size)
-        if is_backup_target(a):
+        if a.asset_id not in aborted and is_backup_target(a):
             backed_up = True
         a.deleted_at, a.deletion_certificate_id, a.storage_key, a.updated_at = now, cert_id, None, now
     cert = DeletionCertificate(
@@ -215,7 +240,8 @@ def certificate_view(cert: DeletionCertificate) -> dict[str, Any]:
 
 def _expired(db: Session, now: datetime) -> Any:
     return select(Asset).join(RetentionPolicy, RetentionPolicy.policy_id == Asset.retention_policy_id) \
-        .where(Asset.deleted_at.is_(None), Asset.retention_until <= now, RetentionPolicy.expiry_action == "DELETE")
+        .where(Asset.deleted_at.is_(None), Asset.retention_until <= now, RetentionPolicy.expiry_action == "DELETE",
+               Asset.ingest_status.not_in(("UPLOADING", *VERIFYING_INGEST_STATES)))
 
 
 def dry_run(db: Session, now: datetime) -> dict[str, Any]:
