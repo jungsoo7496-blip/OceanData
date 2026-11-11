@@ -117,7 +117,10 @@ class SessionDevice(Base):
 class JobRow(Base):
     __tablename__ = "jobs"
     __table_args__ = (
-        Index("ix_jobs_claim", "status", "priority", "run_after"),
+        Index("ix_jobs_claim", "status", "priority", "run_after"),  # 상태별 조회 (임대 회수·실패 원인·대기 수)
+        # 꺼내기 순서 그대로, QUEUED만 (pg_queue.claim의 ORDER BY, ADR-0042)
+        Index("ix_jobs_claim_queued", text("priority DESC"), "run_after", "created_at",
+              postgresql_where=text("status = 'QUEUED'")),
         Index("uq_jobs_dedupe_key", "dedupe_key", unique=True, postgresql_where=text("dedupe_key IS NOT NULL")),
     )
     job_id: Mapped[str] = mapped_column(ID, primary_key=True)
@@ -258,11 +261,16 @@ class Asset(Base):
         Index("uq_assets_idem_live", "organization_id", "source_system_id", "checksum_sha256", unique=True,
               postgresql_where=text("deleted_at IS NULL")),
         Index("ix_assets_org_status", "organization_id", "ingest_status"),
+        # READY_PRIVATE가 아닌 상태 목록을 커서 순서(asset_id)대로 (대시보드 처리 대기·격리, ADR-0042)
+        Index("ix_assets_not_ready", "organization_id", "ingest_status", "asset_id",
+              postgresql_where=text("ingest_status <> 'READY_PRIVATE'")),
         Index("ix_assets_location", "location", postgresql_using="gist"),
         Index("ix_assets_capture", "organization_id", "capture_start_at"),
         # 계층 이동 후보 찾기 (08번 요구사항 9.2): 계층·존별로 오래된 것부터
         Index("ix_assets_tier_age", "storage_tier", "storage_zone", "ingested_at",
               postgresql_where=text("deleted_at IS NULL")),
+        # 최근 들어온 자산 (11번 감시 규칙·실패 원인, ADR-0042)
+        Index("ix_assets_ingested_at", "ingested_at"),
     )
     asset_id: Mapped[str] = mapped_column(ID, primary_key=True)
     schema_version: Mapped[str] = mapped_column(String(20))
@@ -434,6 +442,12 @@ class Upload(Base):
     """업로드 세션 (전송 작업 단위, 실증회차와 다르다)."""
 
     __tablename__ = "uploads"
+    __table_args__ = (
+        # 만료 정리는 진행 중인 업로드만 본다 / 최근 생성분 실패율 / 최근 실패 원인 (ADR-0042)
+        Index("ix_uploads_uploading_expires", "expires_at", postgresql_where=text("status = 'UPLOADING'")),
+        Index("ix_uploads_created_at", "created_at"),
+        Index("ix_uploads_failed_updated", "updated_at", postgresql_where=text("error_code IS NOT NULL")),
+    )
     upload_id: Mapped[str] = mapped_column(ID, primary_key=True)
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), index=True)
     # 받은 것 없이 취소·만료된 새 자산 기록은 지우고 업로드 기록만 남긴다
@@ -450,7 +464,7 @@ class Upload(Base):
     status: Mapped[str] = mapped_column(String(20))  # UPLOADING / RECEIVED / ABORTED / EXPIRED
     asset_was_metadata_only: Mapped[bool] = mapped_column(Boolean, server_default="false")
     error_code: Mapped[str | None] = mapped_column(String(60))
-    expires_at: Mapped[datetime] = mapped_column(TS, index=True)
+    expires_at: Mapped[datetime] = mapped_column(TS)
     created_at: Mapped[datetime] = mapped_column(TS)
     updated_at: Mapped[datetime] = mapped_column(TS)
 
