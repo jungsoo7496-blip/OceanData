@@ -19,3 +19,4 @@
 - [ ] 16. 실제 하드웨어 어댑터(노드 익스포터·SMART·UPS)와 외부 수집기용 기계 자격 — 요구사항 7.1 (하드웨어 확정 후)
 - [x] 17. Prometheus 메트릭(장비별 지연·규칙별 활성 경보·평가·새 장애) — 요구사항 8.1
 - [x] 18. T07 시험: 에이전트 중지 → 기준 시간 안 경보·장애, 회차 무수집, 관측 지연·시계 오차, 기업 화면 안내 — 요구사항 8.2 · 시험 `tests/acceptance/test_t07_collection_watch.py`
+- [x] 19. 운영자 웹훅 전송 격리 — 요구사항 3.1~3.4 · 워커 커밋 뒤 100건 FIFO 큐, 전송 한 건 전체 기한 5초·헤더만 확인·DNS 데몬 호출 최대 4개, CLI 커밋 뒤 전송 · ADR-0050 · 시험 `test_operator_webhook_transport.py`, `test_operator_webhook_worker.py`

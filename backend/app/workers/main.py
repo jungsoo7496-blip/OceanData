@@ -25,6 +25,7 @@ from app.container import Container, build_container
 from app.logging_setup import configure_logging
 from app.metrics import JOB_DURATION, JOB_FAILURES, JOBS_DONE, JOBS_QUEUED, WORKER_REGISTRY
 from app.ports.queue import Job, PermanentJobError
+from app.services.monitoring import OperatorWebhookDispatcher
 
 log = logging.getLogger("worker")
 
@@ -331,7 +332,7 @@ def maintenance(c: Container) -> None:
                         lambda db: {"overdue": inspections.notify_overdue(c, db, c.clock.now())})
 
 
-def watch(c: Container) -> Any:
+def watch(c: Container, operator_webhooks: OperatorWebhookDispatcher | None = None) -> Any:
     """감시 규칙 평가 (11번)와 근거 손상 감지 (10번). 워커가 여럿이어도 한 번에 하나만 한다."""
     from sqlalchemy import text
 
@@ -342,6 +343,8 @@ def watch(c: Container) -> Any:
         if not db.execute(text("SELECT pg_try_advisory_xact_lock(hashtext('watch_rules'))")).scalar():
             return None
         res = monitoring.evaluate(c, db)
+    if operator_webhooks is not None:
+        operator_webhooks.submit(res.operator_alerts)
     with c.sessionmaker.begin() as db:  # 10번 근거 손상 감지 (Evidence_Integrity_Checker)
         if db.execute(text("SELECT pg_try_advisory_xact_lock(hashtext('evidence_check'))")).scalar():
             flagged = evidence.check_damage(c, db)
@@ -378,12 +381,18 @@ def main() -> None:
     log.info("worker_started", extra={"worker_id": worker_id, "job_types": sorted(HANDLERS),
                                       "resource_classes": settings.worker_resource_classes})
     last_depth = 0.0
+    webhooks_stop = threading.Event()
+    alert_secret = settings.alert_webhook_secret
+    operator_webhooks = (
+        OperatorWebhookDispatcher(settings.alert_webhook_url, alert_secret.get_secret_value() if alert_secret else None,
+                                  webhooks_stop)
+        if settings.alert_webhook_url else None
+    )
     periodic: list[tuple[float, Callable[[], Any], str]] = [
         (300, lambda: sweep(c), "sweep"),
         (settings.job_lease_reap_interval_s, lambda: maintenance(c), "maintenance"),
-        (settings.watch_eval_interval_s, lambda: watch(c), "watch"),  # 11번 감시 규칙
+        (settings.watch_eval_interval_s, lambda: watch(c, operator_webhooks), "watch"),  # 11번 감시 규칙
     ]
-    webhooks_stop = threading.Event()
     webhooks_thread = start_webhook_dispatcher(c, webhooks_stop)  # 04번 웹훅 (작업 루프와 다른 스레드)
     last_run = {name: 0.0 for _, _, name in periodic}
     while not stopping["flag"]:
@@ -403,6 +412,8 @@ def main() -> None:
             time.sleep(settings.worker_poll_interval_s)
     webhooks_stop.set()
     webhooks_thread.join(timeout=settings.webhook_timeout_s * 2)  # 진행 중인 라운드만 마치게 (못 마치면 임대 뒤 재전송)
+    if operator_webhooks is not None:
+        operator_webhooks.join()
     log.info("worker_stopped")
 
 

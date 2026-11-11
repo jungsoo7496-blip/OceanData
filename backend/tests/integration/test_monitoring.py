@@ -136,17 +136,22 @@ def test_volume_drop(ctx) -> None:
 def test_webhook_channel_body(ctx, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict] = []
 
-    def fake_post(url, content, headers, timeout):  # noqa: ANN001
-        calls.append({"url": url, "body": content, "headers": headers})
-        return httpx.Response(204, request=httpx.Request("POST", url))
+    def receive(request: httpx.Request) -> httpx.Response:
+        calls.append({"url": str(request.url), "body": request.content, "headers": request.headers})
+        return httpx.Response(204)
 
-    monkeypatch.setattr(monitoring.httpx, "post", fake_post)
+    client = httpx.AsyncClient
+    monkeypatch.setattr(monitoring.httpx, "AsyncClient",
+                        lambda **kwargs: client(transport=httpx.MockTransport(receive), **kwargs))
     settings = ctx.c.settings.model_copy(update={"alert_webhook_url": "https://ops.example.invalid/hook"})
     c = dataclasses.replace(ctx.c, settings=settings, clock=FixedClock(datetime.now(UTC)))
     with c.sessionmaker.begin() as db:
         db.execute(update(WatchRule).where(WatchRule.rule_code == "SESSION_NO_DATA")
                    .values(channels=["EMAIL", "WEBHOOK"]))
-        monitoring.evaluate(c, db)
+        result = monitoring.evaluate(c, db)
+        assert not calls
+    for payload, now in result.operator_alerts:
+        monitoring.post_webhook("https://ops.example.invalid/hook", None, payload, now)
     assert calls and calls[0]["url"] == "https://ops.example.invalid/hook"
     body = calls[0]["body"].decode()
     assert '"type":"watch.opened"' in body and "http" not in body and "@" not in body

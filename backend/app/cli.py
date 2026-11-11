@@ -214,6 +214,11 @@ def main(argv: list[str] | None = None) -> int:
 
         with c.sessionmaker.begin() as db:
             res = monitoring.evaluate(c, db)
+        if url := c.settings.alert_webhook_url:
+            configured_secret = c.settings.alert_webhook_secret
+            secret = configured_secret.get_secret_value() if configured_secret else None
+            for payload, now in res.operator_alerts:
+                monitoring.post_webhook(url, secret, payload, now)
         print(f"새 경보 {len(res.opened)}건, 재알림 {len(res.reminded)}건, 해제 {len(res.resolved)}건")
         for code, n in sorted(res.active_by_rule.items()):
             print(f"  {code}: {n}")
