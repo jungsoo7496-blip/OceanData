@@ -41,7 +41,15 @@ def get_db(c: Container = Depends(container)) -> Iterator[Session]:
         db.close()
 
 
-def get_principal(request: Request, db: Session = Depends(get_db), c: Container = Depends(container)) -> Principal:
+# 모든 경로가 DB 세션을 이 표시로 받는다. scope="function"이면 경로 함수가 끝난 직후, 응답을 보내기 전에
+# get_db의 마무리(커밋)가 돈다. FastAPI 0.118 이상에서 기본(request 범위)은 응답을 보낸 뒤에 마무리하므로
+# 커밋이 실패해도 클라이언트는 이미 2xx를 받고 작업은 없다. 의존성 캐시 키에 범위가 들어가서 한 곳이라도
+# `Depends(get_db)`로 받으면 같은 요청 안에서 세션이 둘로 갈린다 — 시험이 모든 경로를 훑는다
+# (tests/unit/test_db_dependency_scope.py). ADR-0053.
+DB = Depends(get_db, scope="function")
+
+
+def get_principal(request: Request, db: Session = DB, c: Container = Depends(container)) -> Principal:
     # 요청으로 받은 기관 ID로 범위를 바꾸지 않는다 (02번 요구사항 2.6)
     for name in FORBIDDEN_SCOPE_INPUTS:
         if name in request.query_params:

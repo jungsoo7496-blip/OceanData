@@ -9,6 +9,8 @@ HTTP_ERRORS = Counter("http_errors_total", "HTTP 오류 응답 수 (4xx·5xx)", 
                       registry=REGISTRY)
 HTTP_LATENCY = Histogram("http_request_duration_seconds", "HTTP 처리 시간", ["method", "route"],
                          registry=REGISTRY)
+DB_CONFLICTS = Counter("db_conflict_responses_total", "DB 동시성 오류를 409로 바꿔 돌려준 수", ["sqlstate"],
+                       registry=REGISTRY)
 
 WORKER_REGISTRY = CollectorRegistry(auto_describe=True)
 JOBS_QUEUED = Gauge("worker_jobs_queued", "작업 유형별 대기 수", ["job_type"], registry=WORKER_REGISTRY)

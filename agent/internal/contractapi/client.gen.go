@@ -774,19 +774,19 @@ type Unprocessable = Problem
 
 // PostObservationsParams defines parameters for PostObservations.
 type PostObservationsParams struct {
-	// IdempotencyKey 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관.
+	// IdempotencyKey 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. 같은 키의 앞선 요청이 아직 처리 중이면 그 요청이 확정될 때까지(최대 2초) 기다렸다가 같은 응답을 준다 — 일은 한 번만 한다. 2초를 넘거나 같은 키를 기다리는 요청이 한꺼번에 많으면 기다리지 않고 409 CONFLICT와 Retry-After(곧 같은 요청을 다시 보낸다). 오류로 끝난 요청은 키를 남기지 않는다.
 	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
 }
 
 // CreateUploadParams defines parameters for CreateUpload.
 type CreateUploadParams struct {
-	// IdempotencyKey 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관.
+	// IdempotencyKey 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. 같은 키의 앞선 요청이 아직 처리 중이면 그 요청이 확정될 때까지(최대 2초) 기다렸다가 같은 응답을 준다 — 일은 한 번만 한다. 2초를 넘거나 같은 키를 기다리는 요청이 한꺼번에 많으면 기다리지 않고 409 CONFLICT와 Retry-After(곧 같은 요청을 다시 보낸다). 오류로 끝난 요청은 키를 남기지 않는다.
 	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
 }
 
 // CompleteUploadParams defines parameters for CompleteUpload.
 type CompleteUploadParams struct {
-	// IdempotencyKey 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관.
+	// IdempotencyKey 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. 같은 키의 앞선 요청이 아직 처리 중이면 그 요청이 확정될 때까지(최대 2초) 기다렸다가 같은 응답을 준다 — 일은 한 번만 한다. 2초를 넘거나 같은 키를 기다리는 요청이 한꺼번에 많으면 기다리지 않고 409 CONFLICT와 Retry-After(곧 같은 요청을 다시 보낸다). 오류로 끝난 요청은 키를 남기지 않는다.
 	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
 }
 
@@ -3134,6 +3134,7 @@ type PostObservationsResponse404Headers struct {
 
 // PostObservationsResponse409Headers the declared response headers of an HTTP 409 response for PostObservations
 type PostObservationsResponse409Headers struct {
+	RetryAfter *int
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
@@ -3288,6 +3289,7 @@ type CreateUploadResponse404Headers struct {
 
 // CreateUploadResponse409Headers the declared response headers of an HTTP 409 response for CreateUpload
 type CreateUploadResponse409Headers struct {
+	RetryAfter *int
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
@@ -3445,6 +3447,7 @@ type AbortUploadResponse404Headers struct {
 
 // AbortUploadResponse409Headers the declared response headers of an HTTP 409 response for AbortUpload
 type AbortUploadResponse409Headers struct {
+	RetryAfter *int
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
@@ -3653,6 +3656,7 @@ type CompleteUploadResponse404Headers struct {
 
 // CompleteUploadResponse409Headers the declared response headers of an HTTP 409 response for CompleteUpload
 type CompleteUploadResponse409Headers struct {
+	RetryAfter *int
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
@@ -3803,6 +3807,7 @@ type ListUploadPartsResponse404Headers struct {
 
 // ListUploadPartsResponse409Headers the declared response headers of an HTTP 409 response for ListUploadParts
 type ListUploadPartsResponse409Headers struct {
+	RetryAfter *int
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
@@ -5014,6 +5019,13 @@ func ParsePostObservationsResponse(rsp *http.Response) (*PostObservationsRespons
 		response.Headers404 = &headers
 	case rsp.StatusCode == 409:
 		var headers PostObservationsResponse409Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = &value
+		}
 		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
 			var value ExternalCommonSchemaDefsUlid3520d2d2
 			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
@@ -5193,6 +5205,13 @@ func ParseCreateUploadResponse(rsp *http.Response) (*CreateUploadResponse, error
 		response.Headers404 = &headers
 	case rsp.StatusCode == 409:
 		var headers CreateUploadResponse409Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = &value
+		}
 		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
 			var value ExternalCommonSchemaDefsUlid3520d2d2
 			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
@@ -5337,6 +5356,13 @@ func ParseAbortUploadResponse(rsp *http.Response) (*AbortUploadResponse, error) 
 		response.Headers404 = &headers
 	case rsp.StatusCode == 409:
 		var headers AbortUploadResponse409Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = &value
+		}
 		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
 			var value ExternalCommonSchemaDefsUlid3520d2d2
 			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
@@ -5593,6 +5619,13 @@ func ParseCompleteUploadResponse(rsp *http.Response) (*CompleteUploadResponse, e
 		response.Headers404 = &headers
 	case rsp.StatusCode == 409:
 		var headers CompleteUploadResponse409Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = &value
+		}
 		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
 			var value ExternalCommonSchemaDefsUlid3520d2d2
 			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
@@ -5748,6 +5781,13 @@ func ParseListUploadPartsResponse(rsp *http.Response) (*ListUploadPartsResponse,
 		response.Headers404 = &headers
 	case rsp.StatusCode == 409:
 		var headers ListUploadPartsResponse409Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = &value
+		}
 		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
 			var value ExternalCommonSchemaDefsUlid3520d2d2
 			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {

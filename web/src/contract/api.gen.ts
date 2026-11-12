@@ -5230,10 +5230,11 @@ export interface components {
                 "application/problem+json": components["schemas"]["problem.schema"];
             };
         };
-        /** @description CONFLICT, IDEMPOTENCY_CONFLICT, INVALID_STATE_TRANSITION, QUOTA_EXCEEDED */
+        /** @description CONFLICT, IDEMPOTENCY_CONFLICT, INVALID_STATE_TRANSITION, QUOTA_EXCEEDED. 서버는 요청 트랜잭션을 응답을 보내기 전에 확정하므로, 동시에 들어온 다른 요청과 겹쳐 확정하지 못한 경우(고유·외래 키 위반, 직렬화 실패, 교착)도 2xx가 아니라 CONFLICT다. 다시 보내면 되는 경우(직렬화 실패·교착·같은 Idempotency-Key의 앞선 요청이 처리 중)에는 Retry-After가 붙는다. */
         Conflict: {
             headers: {
                 "X-Request-Id": components["headers"]["RequestId"];
+                "Retry-After": components["headers"]["RetryAfter"];
                 [name: string]: unknown;
             };
             content: {
@@ -5296,7 +5297,7 @@ export interface components {
     parameters: {
         Cursor: string;
         Limit: number;
-        /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. */
+        /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. 같은 키의 앞선 요청이 아직 처리 중이면 그 요청이 확정될 때까지(최대 2초) 기다렸다가 같은 응답을 준다 — 일은 한 번만 한다. 2초를 넘거나 같은 키를 기다리는 요청이 한꺼번에 많으면 기다리지 않고 409 CONFLICT와 Retry-After(곧 같은 요청을 다시 보낸다). 오류로 끝난 요청은 키를 남기지 않는다. */
         IdempotencyKey: string;
         SessionId: components["schemas"]["session_id"];
         RecordId: components["schemas"]["record_id"];
@@ -5691,7 +5692,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. */
+                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. 같은 키의 앞선 요청이 아직 처리 중이면 그 요청이 확정될 때까지(최대 2초) 기다렸다가 같은 응답을 준다 — 일은 한 번만 한다. 2초를 넘거나 같은 키를 기다리는 요청이 한꺼번에 많으면 기다리지 않고 409 CONFLICT와 Retry-After(곧 같은 요청을 다시 보낸다). 오류로 끝난 요청은 키를 남기지 않는다. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -5816,7 +5817,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. */
+                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. 같은 키의 앞선 요청이 아직 처리 중이면 그 요청이 확정될 때까지(최대 2초) 기다렸다가 같은 응답을 준다 — 일은 한 번만 한다. 2초를 넘거나 같은 키를 기다리는 요청이 한꺼번에 많으면 기다리지 않고 409 CONFLICT와 Retry-After(곧 같은 요청을 다시 보낸다). 오류로 끝난 요청은 키를 남기지 않는다. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -6414,7 +6415,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. */
+                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. 같은 키의 앞선 요청이 아직 처리 중이면 그 요청이 확정될 때까지(최대 2초) 기다렸다가 같은 응답을 준다 — 일은 한 번만 한다. 2초를 넘거나 같은 키를 기다리는 요청이 한꺼번에 많으면 기다리지 않고 409 CONFLICT와 Retry-After(곧 같은 요청을 다시 보낸다). 오류로 끝난 요청은 키를 남기지 않는다. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -7113,7 +7114,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. */
+                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. 같은 키의 앞선 요청이 아직 처리 중이면 그 요청이 확정될 때까지(최대 2초) 기다렸다가 같은 응답을 준다 — 일은 한 번만 한다. 2초를 넘거나 같은 키를 기다리는 요청이 한꺼번에 많으면 기다리지 않고 409 CONFLICT와 Retry-After(곧 같은 요청을 다시 보낸다). 오류로 끝난 요청은 키를 남기지 않는다. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -7149,7 +7150,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. */
+                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. 같은 키의 앞선 요청이 아직 처리 중이면 그 요청이 확정될 때까지(최대 2초) 기다렸다가 같은 응답을 준다 — 일은 한 번만 한다. 2초를 넘거나 같은 키를 기다리는 요청이 한꺼번에 많으면 기다리지 않고 409 CONFLICT와 Retry-After(곧 같은 요청을 다시 보낸다). 오류로 끝난 요청은 키를 남기지 않는다. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -7272,7 +7273,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. */
+                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. 같은 키의 앞선 요청이 아직 처리 중이면 그 요청이 확정될 때까지(최대 2초) 기다렸다가 같은 응답을 준다 — 일은 한 번만 한다. 2초를 넘거나 같은 키를 기다리는 요청이 한꺼번에 많으면 기다리지 않고 409 CONFLICT와 Retry-After(곧 같은 요청을 다시 보낸다). 오류로 끝난 요청은 키를 남기지 않는다. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -7526,7 +7527,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. */
+                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. 같은 키의 앞선 요청이 아직 처리 중이면 그 요청이 확정될 때까지(최대 2초) 기다렸다가 같은 응답을 준다 — 일은 한 번만 한다. 2초를 넘거나 같은 키를 기다리는 요청이 한꺼번에 많으면 기다리지 않고 409 CONFLICT와 Retry-After(곧 같은 요청을 다시 보낸다). 오류로 끝난 요청은 키를 남기지 않는다. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -8185,7 +8186,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. */
+                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. 같은 키의 앞선 요청이 아직 처리 중이면 그 요청이 확정될 때까지(최대 2초) 기다렸다가 같은 응답을 준다 — 일은 한 번만 한다. 2초를 넘거나 같은 키를 기다리는 요청이 한꺼번에 많으면 기다리지 않고 409 CONFLICT와 Retry-After(곧 같은 요청을 다시 보낸다). 오류로 끝난 요청은 키를 남기지 않는다. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -8342,7 +8343,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. */
+                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. 같은 키의 앞선 요청이 아직 처리 중이면 그 요청이 확정될 때까지(최대 2초) 기다렸다가 같은 응답을 준다 — 일은 한 번만 한다. 2초를 넘거나 같은 키를 기다리는 요청이 한꺼번에 많으면 기다리지 않고 409 CONFLICT와 Retry-After(곧 같은 요청을 다시 보낸다). 오류로 끝난 요청은 키를 남기지 않는다. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;
@@ -9917,7 +9918,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. */
+                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. 같은 키의 앞선 요청이 아직 처리 중이면 그 요청이 확정될 때까지(최대 2초) 기다렸다가 같은 응답을 준다 — 일은 한 번만 한다. 2초를 넘거나 같은 키를 기다리는 요청이 한꺼번에 많으면 기다리지 않고 409 CONFLICT와 Retry-After(곧 같은 요청을 다시 보낸다). 오류로 끝난 요청은 키를 남기지 않는다. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -10174,7 +10175,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. */
+                /** @description 같은 키·같은 본문은 처음 응답을 다시 준다 (Idempotent-Replayed 헤더). 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 24시간 보관. 같은 키의 앞선 요청이 아직 처리 중이면 그 요청이 확정될 때까지(최대 2초) 기다렸다가 같은 응답을 준다 — 일은 한 번만 한다. 2초를 넘거나 같은 키를 기다리는 요청이 한꺼번에 많으면 기다리지 않고 409 CONFLICT와 Retry-After(곧 같은 요청을 다시 보낸다). 오류로 끝난 요청은 키를 남기지 않는다. */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path?: never;

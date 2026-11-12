@@ -45,6 +45,12 @@ REGISTERED_OR_LATER = frozenset({"REGISTERED", "PROXIED", "READY_PRIVATE"})
 RETRY_STATUSES = frozenset({429, 503})  # 계약: RATE_LIMITED·STORAGE_UNAVAILABLE에 Retry-After가 붙는다
 
 
+def retryable(r: httpx.Response) -> bool:
+    """다시 보내면 되는 응답인가. 409에 Retry-After가 붙으면 같은 Idempotency-Key의 앞선 요청이 처리 중이거나 동시 요청과 겹친 것이다
+    (계약 Conflict 응답). Retry-After가 없는 409(IDEMPOTENCY_CONFLICT·업무 충돌)는 다시 보내도 같다."""
+    return r.status_code in RETRY_STATUSES or (r.status_code == 409 and "retry-after" in r.headers)
+
+
 class ApiError(Exception):
     """RFC 9457 problem+json 오류. 프로그램 분기는 ``code``로 한다 (계약 설명)."""
 
@@ -188,7 +194,7 @@ class MarineClient:
             if r.status_code == 401 and not refreshed and not self._static_token:
                 refreshed, self._token = True, None  # 단기 토큰 만료 → 한 번 다시 받는다
                 continue
-            if r.status_code in RETRY_STATUSES and attempt < self._max_retries:
+            if retryable(r) and attempt < self._max_retries:
                 wait = min(float(r.headers.get("retry-after", "1")), 60.0)
                 log.warning("재시도 대기 %s초 (%s %s → %s)", wait, method, path, r.status_code)
                 self._sleep(wait)

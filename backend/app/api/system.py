@@ -21,7 +21,9 @@ _pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="readyz")
 
 
 @router.get("/healthz", tags=["system"])
-def healthz() -> dict[str, str]:
+async def healthz() -> dict[str, str]:
+    # 입출력이 없으므로 async로 둔다: 동기 경로는 스레드 풀(40)이 가득 차면 이 확인도 기다려
+    # 살아 있는 프로세스가 죽은 것으로 보인다
     return {"status": "ok"}
 
 

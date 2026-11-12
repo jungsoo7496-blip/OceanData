@@ -14,6 +14,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.context import request_id_var
 from app.domain.errors import InvalidStateTransition, RuleViolation
+from app.metrics import DB_CONFLICTS
 
 log = logging.getLogger(__name__)
 PROBLEM_JSON = "application/problem+json"
@@ -135,13 +136,28 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(DBAPIError)
     async def _db(request: Request, exc: DBAPIError) -> JSONResponse:
         # 문자열에 PostgreSQL이 저장할 수 없는 문자(NUL 등)가 있으면 입력 오류다 (Schemathesis M8, 그 밖은 500)
-        code = _pg_code(exc)
+        code = pg_code(exc)
         if code in ("22021", "22P05"):
             return problem_response("VALIDATION_ERROR", request, errors=[{
                 "pointer": "", "code": "invalid_character", "message": "문자열에 쓸 수 없는 문자(NUL 등)가 있습니다"}])
         if code in ("22003", "22007", "22008", "22015"):  # 숫자·시각·간격 범위 초과 (예: 32비트를 넘는 version)
             return problem_response("VALIDATION_ERROR", request, errors=[{
                 "pointer": "", "code": "out_of_range", "message": "숫자나 시각이 저장할 수 있는 범위를 벗어났습니다"}])
+        # 요청 트랜잭션은 응답을 보내기 전에 커밋한다(ADR-0053). 커밋에서야 드러나는 동시 요청 충돌이 이제 클라이언트에
+        # 보인다: 고유·외래 키·배타 제약 위반은 409, 직렬화 실패·교착은 다시 보내면 되니 Retry-After를 붙인 409
+        if code in ("23505", "23503", "23P01", "40001", "40P01"):
+            # 서버 버그로 난 제약 위반도 이제 재시도 가능한 409로 보이므로 조용히 넘기지 않는다:
+            # SQLSTATE·제약 이름·표만 남긴다 (바인딩 값이 든 DETAIL 문구는 남기지 않는다, security.md)
+            fields = pg_fields(exc)
+            log.warning("db_conflict_mapped", extra={"sqlstate": code, "constraint": fields.get("n"),
+                                                     "table": fields.get("t"), "path": request.url.path})
+            DB_CONFLICTS.labels(code).inc()
+        if code in ("23505", "23503", "23P01"):
+            return problem_response("CONFLICT", request,
+                                    detail="동시에 들어온 다른 요청과 충돌해 처리하지 못했습니다. 다시 확인하세요")
+        if code in ("40001", "40P01"):
+            return problem_response("CONFLICT", request, headers={"Retry-After": "1"},
+                                    detail="동시에 들어온 다른 요청과 겹쳐 처리하지 못했습니다. 잠시 뒤 다시 보내세요")
         raise exc
 
     @app.exception_handler(Exception)
@@ -151,7 +167,13 @@ def install_error_handlers(app: FastAPI) -> None:
         return problem_response("INTERNAL", request)
 
 
-def _pg_code(exc: DBAPIError) -> str | None:
-    """pg8000 오류의 SQLSTATE (args[0]['C'])."""
+def pg_fields(exc: DBAPIError) -> dict[str, Any]:
+    """pg8000 오류 필드(args[0]): C=SQLSTATE, n=제약 이름, t=표, M=메시지, D=상세(바인딩 값이 들어 있다)."""
     args = getattr(exc.orig, "args", ())
-    return args[0].get("C") if args and isinstance(args[0], dict) else None
+    return args[0] if args and isinstance(args[0], dict) else {}
+
+
+def pg_code(exc: DBAPIError) -> str | None:
+    """pg8000 오류의 SQLSTATE (args[0]['C'])."""
+    code = pg_fields(exc).get("C")
+    return str(code) if code is not None else None

@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import client_ip, container, get_db, load_scoped, page_params, require
+from app.api.deps import DB, client_ip, container, load_scoped, page_params, require
 from app.api.pagination import paginate
 from app.container import Container
 from app.db.models import ApiKey, AuditLog, Device, DeviceCredential, EnrollmentCode
@@ -38,7 +38,7 @@ def issue_token(request: Request,
                 client_id: Annotated[str, Form(max_length=128)],
                 client_secret: Annotated[str, Form(max_length=256)],
                 scope: Annotated[str | None, Form()] = None,
-                db: Session = Depends(get_db), c: Container = Depends(container)) -> JSONResponse:
+                db: Session = DB, c: Container = Depends(container)) -> JSONResponse:
     source = client_ip(request)
     _auth_limiter.check(f"token-ip:{source}")
     _auth_limiter.check(f"token-client:[{source}]:{client_id}")
@@ -76,7 +76,7 @@ def issue_token(request: Request,
 
 # ---- 등록 코드·에이전트 등록
 @router.post("/v1/devices/{device_id}/enrollment-codes", tags=["agents"], status_code=201)
-def create_enrollment_code(device_id: str, request: Request, db: Session = Depends(get_db),
+def create_enrollment_code(device_id: str, request: Request, db: Session = DB,
                            c: Container = Depends(container),
                            p: Principal = Depends(require("enrollment_code:create"))) -> dict:
     device = load_scoped(db, c, request, Device, device_id, p)
@@ -107,7 +107,7 @@ class EnrollRequest(BaseModel):
 
 
 @router.post("/v1/agents/enroll", tags=["agents"], status_code=201)
-def enroll_agent(body: EnrollRequest, request: Request, db: Session = Depends(get_db),
+def enroll_agent(body: EnrollRequest, request: Request, db: Session = DB,
                  c: Container = Depends(container)) -> JSONResponse:
     _auth_limiter.check(f"enroll:{client_ip(request)}")
     code_hash = hash_secret(body.enrollment_code)
@@ -151,7 +151,7 @@ def enroll_agent(body: EnrollRequest, request: Request, db: Session = Depends(ge
 
 
 @router.post("/v1/devices/{device_id}/credentials/revoke", tags=["agents"])
-def revoke_device_credentials(device_id: str, request: Request, db: Session = Depends(get_db),
+def revoke_device_credentials(device_id: str, request: Request, db: Session = DB,
                               c: Container = Depends(container),
                               p: Principal = Depends(require("device_credential:revoke"))) -> dict:
     device = load_scoped(db, c, request, Device, device_id, p)
@@ -196,7 +196,7 @@ def _key_view(k: ApiKey) -> dict:
 
 
 @router.post("/v1/api-keys", tags=["auth"], status_code=201)
-def create_api_key(body: ApiKeyCreate, request: Request, db: Session = Depends(get_db),
+def create_api_key(body: ApiKeyCreate, request: Request, db: Session = DB,
                    c: Container = Depends(container),
                    p: Principal = Depends(require("api_key:create"))) -> JSONResponse:
     now = c.clock.now()
@@ -215,7 +215,7 @@ def create_api_key(body: ApiKeyCreate, request: Request, db: Session = Depends(g
 
 
 @router.get("/v1/api-keys", tags=["auth"])
-def list_api_keys(db: Session = Depends(get_db), p: Principal = Depends(require("api_key:read")),
+def list_api_keys(db: Session = DB, p: Principal = Depends(require("api_key:read")),
                   page: dict = Depends(page_params)) -> dict:
     stmt = select(ApiKey).where(ApiKey.organization_id == p.organization_id)
     rows, nxt = paginate(db, stmt, ApiKey.api_key_id, page["limit"], page["cursor"])
@@ -223,7 +223,7 @@ def list_api_keys(db: Session = Depends(get_db), p: Principal = Depends(require(
 
 
 @router.post("/v1/api-keys/{api_key_id}/revoke", tags=["auth"])
-def revoke_api_key(api_key_id: str, request: Request, db: Session = Depends(get_db),
+def revoke_api_key(api_key_id: str, request: Request, db: Session = DB,
                    c: Container = Depends(container), p: Principal = Depends(require("api_key:revoke"))) -> dict:
     key = load_scoped(db, c, request, ApiKey, api_key_id, p)
     if key.revoked_at is None:
@@ -235,7 +235,7 @@ def revoke_api_key(api_key_id: str, request: Request, db: Session = Depends(get_
 
 # ---- 감사 기록 조회
 @router.get("/v1/audit-logs", tags=["auth"])
-def list_audit_logs(db: Session = Depends(get_db), p: Principal = Depends(require("audit:read")),
+def list_audit_logs(db: Session = DB, p: Principal = Depends(require("audit:read")),
                     page: dict = Depends(page_params)) -> dict:
     stmt = select(AuditLog)
     if not p.has_role("PLATFORM_OPERATOR"):  # ORG_ADMIN: 자기 기관 데이터 관련 기록만 (02번 요구사항 7.5)

@@ -529,6 +529,10 @@ class IngestService:
         if numbers != list(range(1, up.part_count + 1)):
             raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/parts", "code": "incomplete_parts",
                                                             "message": f"파트 1~{up.part_count}이 모두 필요합니다"}])
+        if self._completed_in_storage(up):
+            # 앞선 완료 요청이 저장소에서 멀티파트를 끝냈는데 DB 커밋이 실패했다 — 같은 요청의 재시도다.
+            # 파트를 다시 맞추지 않고 DB 전이만 마친다. (전에는 완료된 멀티파트를 조회하지 못해 재시도가 503만 받았다)
+            return self._mark_received(p, up)
         stored = self._check_part_sizes(up)
         verified = []
         mismatch = "파트 목록이 저장소와 맞지 않습니다 (GET .../parts로 확인)"
@@ -542,6 +546,17 @@ class IngestService:
         except Exception as exc:  # noqa: BLE001 - 잘못된 ETag·누락 파트
             log.warning("complete_multipart_failed", extra={"error_type": type(exc).__name__})
             raise ProblemError("CONFLICT", detail=mismatch) from None
+        return self._mark_received(p, up)
+
+    def _completed_in_storage(self, up: Upload) -> bool:
+        """저장소에 신고 크기의 완성 객체가 이미 있는가. 객체는 멀티파트가 완료돼야 생기고 그 키는 이 업로드만 쓴다."""
+        try:
+            info = self.c.storage.head_object(up.bucket, up.object_key)
+        except Exception:  # noqa: BLE001 - 확인하지 못하면 보통 경로가 파트 목록 조회로 판단한다
+            return False
+        return info is not None and info.size == up.declared_size
+
+    def _mark_received(self, p: Principal, up: Upload) -> dict[str, Any]:
         asset = self.db.get(Asset, up.asset_id)
         assert asset is not None
         asset.ingest_status = states.transition("ingest_status", asset.ingest_status, "RECEIVED", actor_roles(p))
