@@ -1146,6 +1146,8 @@ export interface paths {
         /**
          * 회차 지정·data_role 변경(ORG_ADMIN, 사유 필수)·위치 공개 정밀도
          * @description sharing_scope는 여기서 바꿀 수 없다 (share-requests 사용).
+         *     session_id는 자산과 같은 실증사업의 회차여야 한다. 다른 실증사업의 회차면 422 RULE_VIOLATION
+         *     (unmet_conditions의 condition `session.project_id=asset.project_id`).
          */
         patch: operations["patchAsset"];
         trace?: never;
@@ -1202,6 +1204,8 @@ export interface paths {
         /**
          * 처리 단계 재실행 (PLATFORM_OPERATOR, 다중 인증). 새 파생 자산을 계보에 연결한다
          * @description 05번 요구사항 7.2. 원본 자산에만 요청한다. FAILED 자산은 실패 직전 단계부터 다시 시작한다.
+         *     무결성 검증 중에 실패한 자산(실패 직전 단계 VALIDATING)은 검증부터 다시 하고, 등록되면 보통 처리 순서를 처음부터 돈다.
+         *     이때 job_ids는 검증 작업이다.
          */
         post: operations["reprocessAsset"];
         delete?: never;
@@ -1224,7 +1228,7 @@ export interface paths {
         put?: never;
         /**
          * 공유 등급 변경 신청 — 상향은 domain.md 4장 조건 검사, 하향은 언제든 (ORG_ADMIN만)
-         * @description L1 이상 결정은 ORG_ADMIN만 할 수 있다 (그 밖의 역할은 403). 원본(variant=ORIGINAL)과 CORE는 L1을 넘을 수 없다. 하향에는 existing_grant_handling이 필요하다.
+         * @description L1 이상 결정은 ORG_ADMIN만 할 수 있다 (그 밖의 역할은 403). 원본(variant=ORIGINAL)과 CORE는 L1을 넘을 수 없다. 하향에는 existing_grant_handling이 필요하다. 목표 등급이 지금 sharing_scope와 같으면 409 INVALID_STATE_TRANSITION. 같은 Idempotency-Key에 다른 본문이면 409 IDEMPOTENCY_CONFLICT, 같은 키의 앞선 요청이 아직 처리 중이면 409 CONFLICT와 Retry-After (IdempotencyKey 설명).
          */
         post: operations["createShareRequest"];
         delete?: never;
@@ -1304,7 +1308,10 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** 운영자의 민감도·개인정보 비해당 지정 (근거 점검 기록 참조 필수, 감사) */
+        /**
+         * 운영자의 민감도·개인정보 비해당 지정 (근거 점검 기록 참조 필수, 감사)
+         * @description 지정 뒤 이 자산이나 그 파생본(원 자산들의 가장 엄격한 sensitivity_class를 물려받는다)이 지금 sharing_scope의 분류 조건 (domain.md 4장의 sensitivity_class·privacy_status 조건, asset-metadata 불변식)을 충족하지 못하거나 이번 변경으로 다른 조건을 새로 충족하지 못하게 되면, 그 자산들의 sharing_scope를 조건을 충족하는 가장 높은 등급으로 함께 내리고 그 자산이 든 데이터셋 버전의 이용 권한을 즉시 철회한다(REVOKE_NOW). 예: L2 이상에서 SECURITY → L1, L4에서 RESTRICTED → L3 또는 L2. 분류 조건은 지정 전부터 어긋나 있었어도 맞춘다. 분류와 무관한 조건(2단 약정 만료 등)이 지정 전부터 어긋나 있던 것만으로는 내리지 않는다. 내린 자산(끊은 이용 권한 ID 포함)은 감사 기록 ASSET_CLASSIFIED에, 끊은 권한마다 GRANT_REVOKED를 이 요청과 함께 확정한다 (ADR-0074).
+         */
         patch: operations["classifyAsset"];
         trace?: never;
     };
@@ -2041,6 +2048,8 @@ export interface paths {
          * 이 영상에서 요청한 구간 클립 작업과 결과 (자기 기관 ORG 역할, 최근 요청부터)
          * @description 09번 요구사항 7.2. DONE이면 clip_asset_id가 결과 파생 자산이다(계보 relation=CLIP, provenance.clip_range_s).
          *     결과 자산이 그 뒤 삭제됐으면 clip_asset_id가 없다. FAILED면 error_code에 원인 코드가 있다.
+         *     요청 시각(requested_at)이 최근인 것부터, 같으면 작업 ID 역순으로 정렬한다. 한 페이지는 limit건(기본 100, 최대 500)이고,
+         *     다음 페이지는 next_cursor를 cursor로 전달한다(마지막 페이지는 null). 형식이 틀린 cursor·limit은 400 (ADR-0077).
          */
         get: operations["listAssetClips"];
         put?: never;
@@ -2450,6 +2459,8 @@ export interface paths {
          * 데이터셋 버전 계보 — 항목별 원본·처리 모델 버전·검수자 (PLATFORM_OPERATOR, 제공기관은 자기 항목만)
          * @description 13번 요구사항 5.3, 14번 요구사항 3.1 (T06-b). 이용기관은 볼 수 없다 (원본 ID·검수자는 내부 정보).
          *     제공기관이 보면 다른 기관 항목은 hidden_item_count로 개수만 준다.
+         *     계보는 다 만든(READY) 버전만 준다. 아직 만드는 중(BUILDING)이거나 만들지 못한(FAILED) 버전은 409 CONFLICT (13번 작업 32).
+         *     볼 수 없는 버전은 상태와 관계없이 404다.
          */
         get: operations["getDatasetVersionLineage"];
         put?: never;
@@ -2561,7 +2572,10 @@ export interface paths {
         /** 이용 신청 (이용기관은 자기 신청, 제공기관은 결정할 신청, 운영자는 전체) */
         get: operations["listAccessRequests"];
         put?: never;
-        /** 이용 신청 (데이터셋 버전 하나) */
+        /**
+         * 이용 신청 (데이터셋 버전 하나)
+         * @description 기간의 시작·끝 날짜는 달력에 있는 날짜여야 한다(2월 30일·13월은 400). 이용 기간은 끝 날짜 다음 날 0시(UTC)에 끝나므로 끝 날짜는 9999-12-30까지이고 9999-12-31은 400이다. 끝 날짜가 시작 날짜보다 빠르면 422.
+         */
         post: operations["createAccessRequest"];
         delete?: never;
         options?: never;
@@ -2580,7 +2594,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 제공기관 ORG_ADMIN 승인·거절 → 운영자 최종 승인 */
+        /**
+         * 제공기관 ORG_ADMIN 승인·거절 → 운영자 최종 승인
+         * @description 응답 기한(deadline_at)이 지난 신청의 승인(제공기관·운영자)은 409 INVALID_STATE_TRANSITION이다. 거절은 받는다. 승인 없이 기한이 지난 신청은 정비 주기에 기본값 거부(DENIED)로 바뀐다. 운영자 승인 때 데이터셋 버전의 현재 등급이 L3(APPROVED_PARTNERS)에 못 미치면 422 RULE_VIOLATION이다 (예: 제공기관 승인 뒤 KEEP_UNTIL_EXPIRY로 자산 등급을 낮춘 경우). 이때 결정은 기록하지 않고 신청은 PROVIDER_APPROVED로 남는다.
+         */
         post: operations["decideAccessRequest"];
         delete?: never;
         options?: never;
@@ -7444,6 +7461,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
             429: components["responses"]["TooManyRequests"];
         };
     };
@@ -7593,6 +7611,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             /** @description 조건 미충족 (RULE_VIOLATION, unmet_conditions) */
             422: {
                 headers: {
@@ -9203,7 +9222,10 @@ export interface operations {
     };
     listAssetClips: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
             header?: never;
             path: {
                 asset_id: components["parameters"]["AssetId"];
@@ -9220,9 +9242,12 @@ export interface operations {
                 content: {
                     "application/json": {
                         items: components["schemas"]["ClipJob"][];
+                        /** @description 다음 페이지 커서. 마지막 페이지는 null */
+                        next_cursor: string | null;
                     };
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -10039,6 +10064,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             429: components["responses"]["TooManyRequests"];
         };
     };
@@ -10276,6 +10302,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
             429: components["responses"]["TooManyRequests"];
         };
     };
