@@ -349,8 +349,12 @@ def _requeue_verify(c, args: argparse.Namespace) -> int:  # type: ignore[no-unty
                          ensure_ascii=False, indent=1))
         return 0
     report = verify_requeue.requeue(c, [r["asset_id"] for r in stuck], reason=reason)
+    # 표준 출력은 결과 JSON 하나만 — 경고·실패 안내는 표준 오류로 (Runbook 11이 결과를 읽게 한다)
     print(json.dumps({"dry_run": False, "malware_scanner": scanner, "requeued": report.requeued,
                       "skipped": skipped + report.skipped, "failed": report.failed}, ensure_ascii=False, indent=1))
+    if report.failed:
+        print(f"검증 작업을 넣지 못한 자산 {len(report.failed)}건 (failed). 원인을 확인한 뒤 다시 돌립니다 — "
+              "넣은 자산은 다시 고르지 않습니다", file=sys.stderr)
     return 1 if report.failed else 0
 
 

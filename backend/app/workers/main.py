@@ -87,8 +87,18 @@ def _asset_failed(c: Container, job: Job, code: str) -> None:
         mark_failed(c, job.payload["asset_id"], code)
 
 
+def _verify_failed(c: Container, job: Job, code: str) -> None:
+    """검증 작업이 재시도를 다 썼다. 큐는 FAILED를 먼저 확정하고 이것을 나중에 부른다 — 그 틈에 운영자가 다시
+    넣은 검증 작업(requeue-verify, ADR-0071)이 자산을 VALIDATING이나 등록까지 옮겼으면 이 작업은 낡았으므로
+    자산은 새 작업에 맡긴다."""
+    from app.services.pipeline import mark_failed
+
+    if job.payload.get("asset_id"):
+        mark_failed(c, job.payload["asset_id"], code, job=job)
+
+
 register("noop", lambda c, job: None)
-register("integrity_verify", _integrity_verify, _asset_failed)  # 04번
+register("integrity_verify", _integrity_verify, _verify_failed)  # 04번
 for _step in ("media_probe", "make_proxy", "make_thumbnail"):  # 05번
     register(_step, _pipeline_step(_step), _asset_failed)
 register("sensor_parse", _pipeline_step("sensor_parse"))  # 07번 (실패해도 원본 자산 상태는 그대로)

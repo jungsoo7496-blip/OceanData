@@ -14,7 +14,8 @@ ADR-0058은 `VALIDATING`에 멈추는 경우를 고쳤고, `RECEIVED`에 멈추�
    `IntegrityVerifier.verify`의 첫 트랜잭션이 `RECEIVED → VALIDATING` 전이 **전에** `ScannerUnavailable`을 던진다. 트랜잭션은 되돌아가 자산은 그대로다.
 2. 작업 루프(`run_once`)는 이 예외를 알려진 오류로 보지 않아 오류 코드 `INTERNAL`로 기록하고 지수 백오프(15·30·60·120초)로 다시 시도한다.
    `job_policies`의 `integrity_verify`는 최대 5회라 약 4분 뒤 작업이 `FAILED`가 된다.
-3. 재시도를 다 쓰면 `_asset_failed → pipeline.mark_failed(c, asset_id, "INTERNAL")`가 불린다. 자산 행을 잠근 뒤
+3. 재시도를 다 쓰면 `run_once`는 작업의 `FAILED`를 먼저 확정하고(`queue.fail`), 로그를 남긴 뒤 끝 처리
+   `_asset_failed → pipeline.mark_failed(c, asset_id, "INTERNAL")`를 부른다. 자산 행을 잠근 뒤
    `states.can_transition("ingest_status", "RECEIVED", "FAILED", {"SERVICE"})`를 보는데, 코드의 표는 `VALIDATING·REGISTERED·PROXIED → FAILED`만 허용하므로
    **아무것도 바꾸지 않고 확정한다**: ingest_status는 `RECEIVED`, `ingest_context`에 `failed_from`·`error_code`도 남지 않고, 업로드 행의 `reserved_bytes`와
    기관 쿼터의 `reserved_bytes`도 그대로다. domain.md 5장 표('처리 단계 → FAILED')와 맞는 동작이라 버그로 보지 않고 바꾸지 않는다.
@@ -25,9 +26,14 @@ ADR-0058은 `VALIDATING`에 멈추는 경우를 고쳤고, `RECEIVED`에 멈추�
    백오프만큼 미뤄지고, 다 쓰면 `FAILED`라 세지 않는다. 남는 신호는 워커 로그 `job_failed`, 지표 `worker_job_failures_total{job_type="integrity_verify",error_code="INTERNAL"}`,
    수집 상태(`GET /v1/ingest-status`)의 24시간 실패 원인 상위(`PROCESSING`/`INTERNAL`)뿐이고, 어느 것도 자산을 가리키거나 '멈췄다'고 말하지 않는다.
 
-같은 끝 상태(대기·실행 중인 검증 작업 없이 `RECEIVED`)는 다른 원인으로도 생긴다: 스토리지 장애로 객체를 읽지 못해 재시도를 다 쓴 경우, 그리고 코드로 보면
-완료 요청의 작업 등록은 따로 커밋되므로(`_mark_received`) 요청 커밋이 실패한 뒤 재시도 전에 워커가 그 작업을 돌리면 작업은 `DONE`(자산이 아직 UPLOADING)으로 끝나고,
-재시도의 등록은 같은 키의 `DONE` 작업을 돌려받는다. 마지막 경우는 이번에 재현하지 않았다(아래 '감수할 점').
+같은 끝 상태(대기·실행 중인 검증 작업 없이 `RECEIVED`)는 검증의 첫 트랜잭션에서 전이 **전에** 나는 다른 예외로도 생긴다: 활성 품질 규칙을 읽지 못하는 경우
+(`load_rules`의 `QualityRuleError`), 알 수 없는 `MALWARE_SCANNER` 값(`scanner_for`의 `ValueError`). 그리고 코드로 보면 완료 요청의 작업 등록은 따로 커밋되므로(`_mark_received`)
+요청 커밋이 실패한 뒤 재시도 전에 워커가 그 작업을 돌리면 작업은 `DONE`(자산이 아직 UPLOADING)으로 끝나고, 재시도의 등록은 같은 키의 `DONE` 작업을 돌려받는다.
+마지막 경우는 이번에 재현하지 않았다(아래 '감수할 점').
+
+**스토리지 장애는 이 끝 상태를 만들지 않는다.** 첫 트랜잭션이 `RECEIVED → VALIDATING`을 확정한 뒤에 객체를 읽으므로(`iter_object`는 트랜잭션 밖), 읽기 실패로 재시도를
+다 쓰면 끝 처리가 `VALIDATING → FAILED`(`failed_from=VALIDATING`)로 만든다. 이 자산은 이 명령의 대상이 아니고, 그때도 업로드·쿼터 예약은 풀리지 않는다 — 이 변경
+전부터 있던 다른 빈틈이다(아래 '감수할 점').
 
 ## 결정
 
@@ -41,7 +47,9 @@ ADR-0058은 `VALIDATING`에 멈추는 경우를 고쳤고, `RECEIVED`에 멈추�
    워커 검증의 첫 트랜잭션(`RECEIVED → VALIDATING`)과 같은 행 잠금이라 둘이 겹치지 않고, 다른 실행·요청이 잡고 있으면 기다리지 않고 `LOCKED`로 건너뛴다.
    잠근 뒤 상태와 진행 중인 작업을 다시 본다. 새 작업의 dedupe 키는 `integrity_verify:{asset}:requeue`에 `dedupe_active_only`다 — 대기·실행 중이면 막고, 끝난 재투입 작업은
    키를 놓아 다음 재투입을 막지 않는다(DB 유일 색인이 두 번째 방어다). 작업과 감사는 같은 트랜잭션(`connection=`)으로 함께 확정·취소한다.
-   payload는 `{asset_id, upload_id, requeued: true}`이고 **자산 행은 바꾸지 않는다**. 한 자산이 실패하면 기록하고 다음 자산으로 간다(종료 코드 1).
+   payload는 `{asset_id, upload_id, requeued: true}`이고 **자산 행은 바꾸지 않는다**. 한 자산이 실패하면 결과의 `failed`(자산·예외 종류)에 남기고 다음 자산으로
+   간다(종료 코드 1, 표준 오류에 안내). 서비스는 이때 로그를 남기지 않는다 — 명령의 로그 처리기는 표준 출력으로 쓰므로 결과 JSON 앞에 로그 줄이 섞여 읽을 수 없게 되고,
+   `failed`가 같은 내용을 담는다. 표준 출력은 결과 JSON 하나다.
 4. **등록·예약 정산은 기존 검증이 한다.** 검증의 두 번째 트랜잭션이 자산 행을 잠그고 `VALIDATING`인지 다시 보므로(ADR-0058) 겹쳐 돌아도 등록·무결성 로그·정산은 한 번이다.
 5. **감사는 자산마다 `INTEGRITY_VERIFY_REQUEUED`**: 주체 `SYSTEM`/`cli`(다른 운영자 CLI 명령과 같다), 대상 `Asset`, 사유, `details`에 새 작업 ID·앞 작업(상태·시도·오류)·묶인 예약.
    다른 CLI 명령은 사유를 받지 않지만 같은 성격의 API(재처리, `REPROCESS_REQUESTED`)가 사유를 요구해 맞췄다 — 실행할 때 `--reason`이 필수이고(2~500자),
@@ -49,7 +57,13 @@ ADR-0058은 `VALIDATING`에 멈추는 경우를 고쳤고, `RECEIVED`에 멈추�
 6. **탐지는 목록과 Runbook으로.** 감시 규칙 코드는 도메인 데이터라 새로 만들지 않는다. `--all-stuck --dry-run`이 목록을 보이고,
    `docs/runbook/11-verify-stuck-received.md`에 신호·확인·재투입·완료 확인 절차를 적었다. 명령이 본 `MALWARE_SCANNER`가 `none`인데 검사가 필요한 기관의 자산이 있으면
    표준 오류로 경고한다 — 명령(`migrate` 컨테이너)과 워커의 환경이 다를 수 있어 거부하지는 않는다.
-7. `_asset_failed`·`pipeline.mark_failed`는 바꾸지 않는다(맥락 3).
+7. **`RECEIVED`에 대한 끝 처리는 바꾸지 않는다**(맥락 3, 표와 맞다). 다만 이 명령이 처음으로 '한 자산에 검증 작업 둘'을 만들므로, 검증 작업의 끝 처리만
+   낡은 작업을 알아보게 했다. 큐는 앞 작업의 `FAILED`를 확정한 뒤 끝 처리를 부르는데, 명령은 `FAILED`가 확정되면 바로 새 작업을 넣을 수 있다. 그 틈에 검사기가 있는
+   워커가 새 작업으로 `RECEIVED → VALIDATING`(또는 등록까지)을 확정하면, 늦게 도는 앞 작업의 `mark_failed`가 `VALIDATING → FAILED`(영상은 `REGISTERED → FAILED`)로
+   만들고 새 검증은 `FAILED`를 보고 그냥 끝난다 — 예약은 묶인 채 자산이 재투입 대상에서도 빠진다. 그래서 `integrity_verify`의 끝 처리를 `_verify_failed`로 따로 두고,
+   `mark_failed(..., job=)`이 자산 행을 잠근 뒤 **같은 자산의 다른 검증 작업이 대기·실행 중이거나 이 작업보다 나중에 생겼으면** 자산을 바꾸지 않는다(로그
+   `asset_failed_skipped_newer_job`). 새 작업은 명령이 자산 행 잠금 아래에서 넣고 확정한 뒤에야 실행되므로 잠근 뒤 보면 놓치지 않는다. 더 새 검증 작업이 없으면(재투입이 없던
+   모든 경우 — 격리 보완 뒤 재검증 작업도 앞 작업이 끝난 뒤에 생겨 그 자신이 가장 새 작업이다) 전과 같다. 다른 처리 단계(`media_probe` 등)의 끝 처리 `_asset_failed`는 그대로다.
 
 버린 대안:
 - `RECEIVED → FAILED(예약 해제)` 전이 추가 — 상태표 변경이라 사람 결정이다(ADR-0058 '감수할 점').
@@ -58,11 +72,15 @@ ADR-0058은 `VALIDATING`에 멈추는 경우를 고쳤고, `RECEIVED`에 멈추�
 - 워커가 주기적으로 스스로 다시 넣기 — 검사기 부재가 길면 몇 분마다 실패를 되풀이해 로그·지표를 채운다. 원인을 없앤 뒤 언제 다시 넣을지는 운영자가 정한다.
 - 잠금을 기다리기(`SKIP LOCKED` 없이) — 검증 중인 자산이나 긴 요청 뒤에서 명령이 멈춘다. 건너뛰고 다시 돌리게 한다.
 - 감시 규칙(예: 'RECEIVED 장기 체류') 추가 — 규칙 코드는 domain 데이터라 사람 결정으로 제안만 한다.
+- 명령에서 마지막 작업이 끝난 지 일정 시간이 지난 자산만 '멈춤'으로 보기 — 앞 작업의 끝 처리와 겹치는 틈을 좁힐 뿐 닫지 못한다(끝 처리가 DB 연결을 기다리며 멈출 수 있다).
+  끝 처리 쪽에서 자산 행 잠금 아래 새 작업을 확인하면 틈이 닫힌다.
+- 끝 처리에서 '대기·실행 중인 다른 작업'만 보기 — 새 작업이 이미 등록까지 마친(`DONE`) 영상 자산은 `REGISTERED → FAILED`가 표에 있어 막지 못한다. 생성 시각이 더 늦은 작업도 본다.
 
 ## 결과
 
-좋아지는 점: 검사기(또는 스토리지)가 돌아온 뒤 DB를 만지지 않고 멈춘 자산을 등록까지 보낼 수 있고, 묶인 예약이 한 번만 정산된다. 운영자가 바꾸기 전에 대상을 본다.
-여러 번·동시에 돌려도 자산마다 대기·실행 중인 검증 작업은 하나이고, 넣은 것마다 사유와 함께 감사가 남는다. 정상 진행 중인 자산과 다른 상태의 자산은 건드리지 않는다.
+좋아지는 점: 검사기가 돌아온 뒤(또는 규칙 오류처럼 전이 전에 멈추게 한 원인을 없앤 뒤) DB를 만지지 않고 멈춘 자산을 등록까지 보낼 수 있고, 묶인 예약이 한 번만 정산된다.
+운영자가 바꾸기 전에 대상을 본다. 여러 번·동시에 돌려도 자산마다 대기·실행 중인 검증 작업은 하나이고, 넣은 것마다 사유와 함께 감사가 남는다. 정상 진행 중인 자산과
+다른 상태의 자산은 건드리지 않는다. 앞 작업의 끝 처리가 늦게 돌아도 새 작업의 검증을 `FAILED`로 만들지 않는다.
 
 감수할 점·남은 일:
 - **자동으로 드러나지 않는다.** 운영자가 dry-run을 돌리거나 실패 신호를 보고 찾아야 한다. 감시 규칙을 둘지는 사람 결정이다.
@@ -70,21 +88,34 @@ ADR-0058은 `VALIDATING`에 멈추는 경우를 고쳤고, `RECEIVED`에 멈추�
 - 실제 검사기 제품은 결정 대기다(ADR-0031). 지금 어댑터는 `none`과 시험용 `mock-eicar`뿐이라, 운영에서 '검사기가 돌아온다'는 제품 어댑터가 생긴 뒤의 일이다(**확인 필요**).
 - 명령은 자기 환경의 `MALWARE_SCANNER`만 안다. 워커를 다시 띄웠는지는 따로 확인한다(Runbook 11).
 - 감사 기록이 자산 행 잠금을 쥔 채 전역 감사 잠금을 기다린다. 자산 하나씩 짧게 확정하므로 영향은 작다. 교착이 나면 그 자산만 실패로 보고된다.
-- 완료 요청의 작업 등록이 요청 트랜잭션과 따로 커밋되는 틈(맥락 끝 문단)은 코드로 본 것이고 재현·수정하지 않았다. 생기면 이 명령으로 복구된다.
+- 완료 요청의 작업 등록이 요청 트랜잭션과 따로 커밋되는 틈(맥락 셋째 문단)은 코드로 본 것이고 재현·수정하지 않았다. 생기면 이 명령으로 복구된다.
+- **스토리지 읽기 실패로 재시도를 다 쓴 자산은 `FAILED`(`failed_from=VALIDATING`)가 되고 예약이 풀리지 않는다**(맥락 넷째 문단). 이 명령의 대상이 아니고 고치지 않았다.
+  재처리 API는 원 영상·센서 파일만 받아 그 밖의 유형은 되돌릴 길이 없다. `FAILED` 자산의 예약 정리와 검증 재시도 경로는 따로 정할 일이다.
+- 검증 끝 처리의 '더 새 작업' 판단은 작업 생성 시각(`created_at`, 넣는 쪽의 시계)도 쓴다. 명령을 돌리는 곳과 워커의 시계가 앞 작업이 생긴 뒤 지난 시간(재시도를 다 쓰는 데
+  최소 약 4분)보다 크게 어긋나면 '등록까지 마친 새 작업' 경우를 놓칠 수 있다. 대기·실행 중인 새 작업은 시계와 상관없이 알아본다.
 
 되돌리는 방법: `app/services/verify_requeue.py`와 `app/cli.py`의 `requeue-verify`(파서·`_requeue_verify`)를 지우고 Runbook 11과 색인 줄, 07번의 안내 줄을 지운다.
+`workers/main.py`의 `integrity_verify` 끝 처리를 `_asset_failed`로 되돌리고 `pipeline.mark_failed`의 `job` 인자를 지운다(재투입 작업이 남아 있지 않을 때).
 이미 넣은 재투입 작업은 보통 작업처럼 끝나고 감사 행은 남는다. 마이그레이션·계약 변경 없음.
 
 ## 시험
 
-`tests/integration/test_verify_requeue.py` 3개 (실제 S3 API `ictx`, 합성 CSV):
+`tests/integration/test_verify_requeue.py` 6개(7건, 실제 S3 API `ictx`, 합성 CSV·MP4):
 - 검사기 없이 5회 실패 → 작업 `FAILED`, 자산 `RECEIVED`·예약 유지·`mark_failed`가 아무것도 바꾸지 않음 → dry-run 목록(앞 작업 `FAILED`/5회/`INTERNAL`, 예약, 검사 요구) → 사유 없이는 거부 →
   검사기 없이 다시 넣으면 새 작업과 경고 → 두 번 돌려도 일을 더 만들지 않음 → 또 실패한 뒤 검사기가 돌아오면 다시 넣기(끝난 재투입 작업이 키를 쥐지 않음) → 워커 검증 →
   `READY_PRIVATE`·무결성 로그 1건·예약 한 번 정산 → 그 뒤에는 대상이 아님 → 감사 2건(주체·사유·새 작업·앞 작업).
 - 정상 처리된 자산·`RUNNING`·`QUEUED`(재시도 대기 포함) 자산은 그대로이고 작업이 `DONE`인 `RECEIVED` 자산과 작업이 없는 자산만 대상, `--org` 범위, 기존 작업·자산 행은 하나도 바뀌지 않음,
   `--asset`으로 고른 진행 중·다른 상태 자산은 까닭만 보이고, 없는 자산·다른 기관으로 한정한 자산은 종료 코드 1.
-- 동시 실행: 앞선 실행이 자산 행을 쥔 동안 뒤 실행은 `LOCKED`로 건너뛰고, 그다음 실행은 `VERIFY_JOB_ACTIVE` — 작업·감사 하나.
+- 동시 실행: 앞선 실행이 자산 행을 쥔 동안 뒤 실행(명령)은 `LOCKED`로 건너뛰고, 그다음 실행은 `VERIFY_JOB_ACTIVE`, 서비스를 바로 불러도 잠근 뒤 다시 봐서 넣지 않음 — 작업·감사 하나.
+- 늦은 끝 처리(두 경우): 앞 작업이 5회째 `FAILED`로 확정된 뒤 끝 처리 전에 재투입·새 워커 실행이 끼어든다. 새 작업이 `VALIDATING`을 확정하고 객체를 읽는 중(CSV)이거나
+  등록까지 마친 뒤(영상, `REGISTERED`)에 앞 작업의 끝 처리가 돌아도 자산은 `READY_PRIVATE`/`REGISTERED`, `failed_from` 없음, 예약 한 번 정산, 작업은 `FAILED`·`DONE`.
+- 스토리지 읽기 실패로 5회: 자산 `FAILED`(`failed_from=VALIDATING`), 예약 그대로, dry-run 목록에 없음·`--asset`은 `NOT_RECEIVED` (맥락 넷째 문단을 고정하고, 새 작업이 없을 때 끝 처리가 그대로 도는지 본다).
+- 한 자산의 재투입 실패: 종료 코드 1, 표준 출력은 JSON 하나(`failed`에 자산·예외 종류), 다른 자산은 넣고 감사도 그 자산만, 실패한 자산은 작업·감사 없음, 다시 돌리면 남은 자산만 넣음.
 
-수정 전 코드에서 3개 모두 실패하는 것을 확인했다(명령이 없어 `argument cmd: invalid choice: 'requeue-verify'`로 `SystemExit: 2`, 모듈이 없어 `ImportError`).
+처음 3개는 수정 전 코드(origin/main)에서 모두 실패하는 것을 확인했다(명령이 없어 `argument cmd: invalid choice: 'requeue-verify'`로 `SystemExit: 2`, 모듈이 없어 `ImportError`).
 첫 시험의 앞부분(5회 실패 뒤 `RECEIVED`·예약 유지·`mark_failed` 무변화)은 수정 전 코드에서 그대로 통과해 맥락 1~3을 확인한다.
 재투입 키에서 `dedupe_active_only`를 빼면 첫 시험이 끝난 재투입 작업 ID를 돌려받아 실패하는 것도 확인했다.
+검토 지적 뒤 더한 시험은 명령이 처음 들어간 커밋(24b9457)에서 돌려 확인했다: 늦은 끝 처리 두 경우가 `assert 'FAILED' == 'READY_PRIVATE'`·`assert 'FAILED' == 'REGISTERED'`
+(`failed_from`이 `VALIDATING`·`REGISTERED`)로, 재투입 실패 시험이 표준 출력의 로그 줄 때문에 `json.decoder.JSONDecodeError: Extra data`로 실패했다. 스토리지 시험은 지금 동작을
+고정하는 것이라 그때도 통과한다. 끝 처리에서 생성 시각 조건을 빼면(대기·실행 중만 보면) 영상 경우가 `assert 'FAILED' == 'REGISTERED'`로, 재투입의 '잠근 뒤 다시 보기'를
+빼면 동시 실행 시험의 마지막 서비스 호출이 작업을 다시 넣어 실패하는 것도 확인했다.

@@ -8,11 +8,12 @@
 
 여기서는 상태 전이를 더하지 않는다. '대기·실행 중인 검증 작업이 없는 RECEIVED 자산'을 찾아 검증 작업을 새로 넣을 뿐이다.
 등록·예약 정산은 워커의 검증(ADR-0058: 이어 하기·한 번만 등록)이 한다. 자산 행은 바꾸지 않는다.
+앞 작업의 끝 처리(on_exhausted)는 큐가 FAILED를 확정한 뒤에 돌아 새 작업과 겹칠 수 있다 — 검증 작업의 끝 처리는
+더 새 검증 작업이 있으면 자산을 바꾸지 않는다(`workers.main._verify_failed` → `pipeline.mark_failed(job=)`).
 """
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -25,7 +26,6 @@ from app.timefmt import iso
 if TYPE_CHECKING:
     from app.container import Container
 
-log = logging.getLogger(__name__)
 VERIFY_JOB = "integrity_verify"
 ACTIVE = ("QUEUED", "RUNNING")  # 재시도 대기(실행 시각이 미래인 QUEUED)와 임대 중인 RUNNING도 진행 중으로 본다
 AUDIT_ACTION = "INTEGRITY_VERIFY_REQUEUED"
@@ -123,12 +123,13 @@ def _requeue_one(c: Container, asset_id: str, reason: str, report: RequeueReport
 def requeue(c: Container, asset_ids: list[str], *, reason: str) -> RequeueReport:
     """자산마다 자기 트랜잭션에서 잠그고 다시 확인한 뒤 검증 작업과 감사를 함께 확정한다 (ADR-0059와 같은 방식).
 
-    한 자산이 실패해도 기록하고 다음 자산으로 간다. 여러 번·동시에 돌려도 대기·실행 중인 검증 작업은 자산마다 하나다."""
+    한 자산이 실패해도 `failed`에 남기고 다음 자산으로 간다. 여러 번·동시에 돌려도 대기·실행 중인 검증 작업은
+    자산마다 하나다. 로그는 남기지 않는다 — 명령의 로그는 표준 출력으로 가서 결과 JSON 앞에 섞이고,
+    `failed`가 같은 내용(자산·예외 종류)을 담는다."""
     report = RequeueReport()
     for asset_id in asset_ids:
         try:
             _requeue_one(c, asset_id, reason, report)
         except Exception as exc:  # noqa: BLE001 - 한 자산의 실패가 나머지를 막지 않게 한다
-            log.error("verify_requeue_failed", extra={"asset_id": asset_id, "error_type": type(exc).__name__})
             report.failed.append({"asset_id": asset_id, "error_type": type(exc).__name__})
     return report
