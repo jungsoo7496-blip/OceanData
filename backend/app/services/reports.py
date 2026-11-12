@@ -44,6 +44,15 @@ def kst(dt: datetime | None) -> str:
     return dt.astimezone(KST).strftime("%Y-%m-%d %H:%M KST") if dt else ""
 
 
+def kst_representable(dt: datetime) -> bool:
+    """한국 시각으로 바꿀 수 있는가. 9999-12-31T15:00:00Z 이후는 날짜 범위를 넘는다 (계약 점검 S31)."""
+    try:
+        dt.astimezone(KST)
+    except OverflowError:
+        return False
+    return True
+
+
 def latest_template(db: Session, code: str, version: int | None = None) -> ReportTemplate | None:
     q = select(ReportTemplate).where(ReportTemplate.code == code)
     q = q.where(ReportTemplate.version == version) if version else q.order_by(ReportTemplate.version.desc())

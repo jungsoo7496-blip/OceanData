@@ -14,7 +14,7 @@ from typing import Any
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.db.models import Asset, Event, EventAsset, MetricDefinition, SessionDevice
+from app.db.models import Asset, Device, Event, EventAsset, MetricDefinition, SessionDevice, TrialSession
 from app.services.observations import OBS
 from app.timefmt import iso
 
@@ -116,7 +116,14 @@ def _obs_where(db: Session, s: Scope) -> list[Any]:
                          and_(OBS.c.source_system_id.in_(devices), OBS.c.observed_at >= s.start,
                               OBS.c.observed_at < s.end)) if devices else OBS.c.session_id == s.session_id)
     else:
-        conds += [OBS.c.observed_at >= s.start, OBS.c.observed_at < s.end]
+        # 관측값에는 사업 열이 없다. 사업의 회차로 보낸 관측값과 지금 그 사업에 배정된 장비의 관측값만 사업 것으로
+        # 본다 — 같은 기관의 다른 사업·사업 없는 장비 관측값은 세지 않는다 (계약 점검 S30, ADR-0079)
+        prj_sessions = select(TrialSession.session_id).where(TrialSession.organization_id == s.organization_id,
+                                                             TrialSession.project_id == s.project_id)
+        prj_devices = select(Device.device_id).where(Device.organization_id == s.organization_id,
+                                                     Device.project_id == s.project_id)
+        conds += [OBS.c.observed_at >= s.start, OBS.c.observed_at < s.end,
+                  or_(OBS.c.session_id.in_(prj_sessions), OBS.c.source_system_id.in_(prj_devices))]
     return conds
 
 

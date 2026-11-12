@@ -447,6 +447,12 @@ def create_report(body: ReportCreate, request: Request, db: Session = DB,
             start, end = parse_rfc3339(body.from_), parse_rfc3339(body.to)
         except ValueError:
             raise _bad("/from", "RFC 3339 UTC 시각이어야 합니다") from None
+        # 보고서는 기간을 한국 시각으로 쓴다. 9999-12-31T15:00:00Z부터는 그 날짜가 없다 (계약 점검 S31)
+        late = [ptr for ptr, dt in (("/from", start), ("/to", end)) if not reports.kst_representable(dt)]
+        if late:
+            raise ProblemError("VALIDATION_ERROR", errors=[
+                {"pointer": ptr, "code": "invalid", "message": "한국 시각으로 9999-12-31을 넘는 시각은 쓸 수 없습니다"}
+                for ptr in late])
         if start >= end:
             raise _bad("/to", "끝이 시작보다 늦어야 합니다")
         project_id, title = prj.project_id, f"{tpl.name} — {start.date()} ~ {end.date()}"
