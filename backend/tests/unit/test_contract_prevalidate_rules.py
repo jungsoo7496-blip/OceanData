@@ -31,6 +31,14 @@ def _event(**fields: Any) -> dict[str, Any]:
     return {**_example("event.model-detection.json"), **fields}
 
 
+def _item(**fields: Any) -> dict[str, Any]:
+    return {**_example("observation-batch.ocean-sensor.json")["observations"][0], **fields}
+
+
+def _batch(items: list[dict[str, Any]]) -> dict[str, Any]:
+    return {**_example("observation-batch.ocean-sensor.json"), "observations": items}
+
+
 def _codes(problems: list[Any]) -> list[tuple[str, str]]:
     return [(p.pointer, p.code) for p in problems]
 
@@ -66,14 +74,54 @@ def test_time_order_is_compared_only_when_both_times_are_readable() -> None:
     assert not valid and "time_rule" not in {p.code for p in problems}
 
 
-def test_rule_problems_follow_the_list_limit_and_the_verdict_sees_them_all() -> None:
-    doc = _example("observation-batch.ocean-sensor.json")
-    item = doc["observations"][0]
-    doc["observations"] = [{**item, "metric": f"no_such_metric_{i}"} for i in range(150)]
+def test_rule_problems_alone_follow_the_list_limit() -> None:
+    doc = _batch([_item(metric=f"no_such_metric_{i}") for i in range(150)])
     valid, problems = contracts.prevalidate("observation-batch", doc, subcode_registered=_registered)
     assert not valid and len(problems) == contracts.MAX_PROBLEMS + 1
     assert {p.code for p in problems[:-1]} == {"unknown_metric"} and problems[-1].code == contracts.TRUNCATED_CODE
     assert problems[0].pointer == "/observations/0/metric"
+
+
+def test_rule_problems_come_after_the_problems_validate_document_reports() -> None:
+    """규칙 문제는 스키마·위치·항목 문제 뒤에 붙는다. 포인터 순서로 섞지 않는다 (ADR-0081 결정 5)."""
+    doc = _batch([_item(metric="no_such_metric"), _item(quality_flag="NOPE"), _item(observed_at="2027-05-10T10:00:00")])
+    valid, problems = contracts.prevalidate("observation-batch", doc, subcode_registered=_registered)
+    assert not valid and _codes(problems) == [("/observations/1/quality_flag", "schema.enum"),
+                                              ("/observations/2/observed_at", "timezone_required"),
+                                              ("/observations/0/metric", "unknown_metric")]
+    doc = _event(confidence=7, event_code="NOPE_CATEGORY", ended_at="2000-01-01T00:00:00Z")
+    valid, problems = contracts.prevalidate("event", doc, subcode_registered=_registered)
+    assert not valid and _codes(problems) == [("/confidence", "schema.maximum"),
+                                              ("/event_code", "unknown_event_category"),
+                                              ("/ended_at", "before_start")]
+
+
+def test_rule_problems_past_a_full_list_keep_one_notice_at_the_end() -> None:
+    """validate_document 문제가 이미 100개를 넘으면 규칙 문제는 잘리고 안내는 끝에 하나만 남는다."""
+    doc = _batch([_item(quality_flag="NOPE") for _ in range(150)] + [_item(metric="no_such_metric")])
+    valid, problems = contracts.prevalidate("observation-batch", doc, subcode_registered=_registered)
+    assert not valid and len(problems) == contracts.MAX_PROBLEMS + 1
+    assert [p.code for p in problems] == ["schema.enum"] * contracts.MAX_PROBLEMS + [contracts.TRUNCATED_CODE]
+
+
+def test_a_list_validate_document_cut_short_stays_cut_with_one_notice() -> None:
+    """validate_document가 자른 목록은 100개보다 짧아도(같은 자리의 스키마 오류를 항목 문제가 가린 경우) 다 모으지
+    못한 목록이다. 규칙 문제를 더해도 잘린 목록으로 남고, 안내는 끝으로 옮겨 하나만 둔다."""
+    doc = _batch([_item(observed_at="2027-05-10T10:00:00") for _ in range(60)] + [_item(metric="no_such_metric")])
+    base, _ = validate_document("observation-batch", doc)
+    assert contracts.is_truncated(base) and len(base) < contracts.MAX_PROBLEMS  # 이 시험이 보는 경로의 전제
+    valid, problems = contracts.prevalidate("observation-batch", doc, subcode_registered=_registered)
+    assert not valid
+    assert _codes(problems) == [(f"/observations/{i}/observed_at", "timezone_required") for i in range(60)] + [
+        ("/observations/60/metric", "unknown_metric"), ("", contracts.TRUNCATED_CODE)]
+
+
+def test_verdict_sees_rule_problems_cut_from_the_list() -> None:
+    """경고만으로 목록이 찬 뒤의 규칙 문제는 목록에서 잘려도 판정을 무효로 만든다 (ADR-0081 결정 5)."""
+    doc = _batch([_item(unit="furlong_per_fortnight") for _ in range(150)] + [_item(metric="no_such_metric")])
+    valid, problems = contracts.prevalidate("observation-batch", doc, subcode_registered=_registered)
+    assert [p.code for p in problems] == ["unknown_unit"] * contracts.MAX_PROBLEMS + [contracts.TRUNCATED_CODE]
+    assert not valid
 
 
 def test_rules_are_not_checked_where_validate_document_stops() -> None:
