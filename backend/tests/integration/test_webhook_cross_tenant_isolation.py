@@ -1,11 +1,9 @@
-"""04번 요구사항 8.2·8.3 / ADR-0041 결정 3: 한 기관의 느린 수신 서버가 다른 기관의 웹훅 전송을 늦추지 않는다.
+"""04번 요구사항 8.2·8.3 / ADR-0041 결정 3·ADR-0070: 한 기관의 느린 수신 서버가 다른 기관의 웹훅 전송을 늦추지 않는다.
 
-**알려진 미해결 (지시서 12번 독립 검토 웹훅 F1).** 지금은 `deliver_due`가 한 라운드의 전송이 모두 끝나야 다음 라운드를 시작한다
-(`asyncio.run(_send_all(...))` 뒤에 다음 `_claim`). 응답하지 않는 수신 서버의 구독 하나가 라운드마다 제한 시간을 통째로 쓰므로,
-다른 기관의 같은 시간대 전송이 그만큼 늦어진다 — 기관당·구독당 몫을 나눠도 라운드 장벽은 기관 사이를 막는다.
-고치는 방향(장벽 없이 전송마다 독립 작업으로, 또는 실패한 수신 서버를 구독 단위로 쉬게 하기)은 전송 구조와 '독살 이벤트' 의미(F5)에
-함께 걸려 ADR로 정한 뒤 고친다. 그때까지 이 시험은 strict xfail로 현상을 고정한다 — 고쳐지면 XPASS로 실패하니 표시를 지운다.
-시험 데이터는 합성 값이다.
+검토 2026-11-12 웹훅 W1(지시서 12번 F1)의 재현이다. 예전에는 `deliver_due`가 한 라운드의 전송이 모두 끝나야 다음 라운드를
+시작해(`asyncio.run(_send_all(...))` 뒤에 다음 `_claim`), 응답하지 않는 수신 서버의 구독 하나가 라운드마다 제한 시간을 통째로 썼고
+다른 기관의 같은 시간대 전송이 그만큼 늦어졌다(기관 B 6건: 0.3초 → 6초 남짓). ADR-0070부터는 전송마다 따로 보내고, 한 건을
+기록하면 그 구독의 다음 건을 바로 가져간다. 시험 데이터는 합성 값이다.
 """
 
 from __future__ import annotations
@@ -67,7 +65,6 @@ def test_baseline_a_fast_organization_alone_drains_quickly(ctx, tls) -> None:  #
     assert _seconds_to_drain_org_b(ctx, tls, foreign_tarpit=False) < 3 * TIMEOUT
 
 
-@pytest.mark.xfail(strict=True, reason="웹훅 F1: 라운드 장벽 때문에 다른 기관의 느린 수신 서버가 전송을 늦춘다 (ADR-0041 결정 3과 어긋남)")
 def test_a_foreign_tarpit_does_not_delay_another_organization(ctx, tls) -> None:  # type: ignore[no-untyped-def]
-    # 지금은 라운드(제한 시간 1초)마다 기관 B가 구독당 1건씩만 나가 6건에 6초 남짓 걸린다. 고치면 기준선(0.3초)에 가까워야 한다.
+    # 예전에는 라운드(제한 시간 1초)마다 기관 B가 구독당 1건씩만 나가 6건에 6초 남짓 걸렸다. 이제는 기준선(0.3초)에 가깝다.
     assert _seconds_to_drain_org_b(ctx, tls, foreign_tarpit=True) < 3 * TIMEOUT

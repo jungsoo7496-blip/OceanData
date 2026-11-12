@@ -251,11 +251,12 @@ def sweep(c: Container) -> int:
 
 
 def start_webhook_dispatcher(c: Container, stop: threading.Event) -> threading.Thread:
-    """04번 웹훅 전송 전용 스레드 (ADR-0041).
+    """04번 웹훅 전송 전용 스레드 (ADR-0041·0070).
 
-    작업 처리·임대 회수·정리 주기와 떼어 둬서 느린 수신 서버가 그것들을 멈추지 않게 한다. 보낼 것이 있으면
-    라운드를 이어 돌고, 없거나 실패하면 WEBHOOK_DISPATCH_INTERVAL_S만큼 쉰다. stop이 설정되면 라운드 사이에
-    끝난다(보내던 건은 임대가 끝난 뒤 다른 워커가 다시 보낸다)."""
+    작업 처리·임대 회수·정리 주기와 떼어 둬서 느린 수신 서버가 그것들을 멈추지 않게 한다. deliver_due는 전송마다
+    따로 보내며 보낼 것도 보내는 중인 것도 없을 때 돌아온다. 보낸 것이 있으면 바로 다시 부르고, 없거나 실패하면
+    WEBHOOK_DISPATCH_INTERVAL_S만큼 쉰다. stop이 설정되면 새로 가져오지 않고, 보내던 건(기한 안)을 기록한 뒤
+    끝난다(그 안에 못 마친 건은 임대가 끝난 뒤 다른 워커가 다시 보낸다)."""
     from app.services import webhooks
 
     def run() -> None:
@@ -410,7 +411,7 @@ def main() -> None:
         if not run_once(c, worker_id):
             time.sleep(settings.worker_poll_interval_s)
     webhooks_stop.set()
-    webhooks_thread.join(timeout=settings.webhook_timeout_s * 2)  # 진행 중인 라운드만 마치게 (못 마치면 임대 뒤 재전송)
+    webhooks_thread.join(timeout=settings.webhook_timeout_s * 2)  # 보내던 건만 기록하게 (못 마치면 임대 뒤 재전송)
     if operator_webhooks is not None:
         operator_webhooks.join()
     log.info("worker_stopped")
