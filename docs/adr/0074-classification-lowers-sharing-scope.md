@@ -72,7 +72,7 @@
   분류 말고 다른 사실이 바뀌는 경로(검수 결과 변경 등)도 이번에 손대지 않았다.
 - 하향은 자산별 별도 감사 행이 아니라 `ASSET_CLASSIFIED`(대상은 지정한 자산)의 `details.lowered`에 남는다. 파생본 ID로 찾으려면 details를 본다.
 - 분류 지정은 자신과 모든 파생본 행을 잠근 채 끝까지 간다. 파생본이 많은 원본이면 그동안 그 행을 쓰는 다른 작업(검수 결정, 등급 신청, 삭제)이
-  기다린다. 사실 수집은 L2 이상 자산만이므로 잠금 시간은 파생본 수에 거의 비례하지 않는다(문 수: 파생본 2개와 30개가 같다).
+  기다린다. 사실 수집은 L2 이상 자산만이므로 잠금 시간은 파생본 수에 거의 비례하지 않는다(문 수: 파생본 2개와 30개의 차이가 3 이하).
 - 감사를 요청 트랜잭션에 쓰므로 감사 체인 잠금(`pg_advisory_xact_lock`)을 커밋까지 쥔다. 감사는 처리의 마지막 일이라 곧바로 커밋한다.
 - 다른 여러 행을 쓰는 경로와 겹쳐 교착이나 직렬화 실패가 나면 ADR-0053의 매핑대로 409(Retry-After)가 될 수 있다. 다른 작업과 마찬가지로
   `classifyAsset`의 응답 목록에는 409를 따로 적지 않았다(공통 `Conflict` 설명).
@@ -83,7 +83,7 @@
 된다(원본 → 비식별본은 다른 경로와 같은 순서다). 마이그레이션 없음.
 
 시험:
-- `tests/integration/test_classification_lowers_scope.py` 7개: 비식별본 SECURITY → L1·권한 철회·불변식 계약 검사·`GRANT_REVOKED` 행, 원본 SECURITY →
+- `tests/integration/test_classification_lowers_scope.py` 6개: 비식별본 SECURITY → L1·권한 철회·불변식 계약 검사·`GRANT_REVOKED` 행, 원본 SECURITY →
   파생본 L1, 약정 만료만으로는 내리지 않음, 이미 SECURITY인 비식별본·원본에 다시 지정하면 바로잡음(2개), 커밋이 실패하면 분류·철회 감사가 남지 않음.
 - `tests/integration/test_classification_family_locks.py` 3개: 검수 결정이 첫 행을 잠근 채 분류 지정이 기다리게 해도 둘 다 성공, L0 파생본 30개와
   2개의 문 수 차이 3 이하, 원본 → 프록시 → 썸네일을 계보 단계 순으로 잠금.
