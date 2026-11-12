@@ -26,7 +26,7 @@ from app.db.models import (
     TrialSession,
 )
 from app.domain.ids import new_id
-from app.domain.normalize import parse_rfc3339
+from app.domain.normalize import TimeRuleError, parse_rfc3339
 from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services import evidence, metrics, reports
@@ -67,6 +67,16 @@ class ObsRef(BaseModel):
     metric: str = Field(pattern=r"^[a-z][a-z0-9_]{1,63}$")
     from_: str = Field(alias="from", pattern=UTC_TS.pattern)
     to: str = Field(pattern=UTC_TS.pattern)
+
+    @field_validator("from_", "to")
+    @classmethod
+    def _real_time(cls, v: str) -> str:
+        # 형식만 맞고 없는 시각(2월 30일, 25시, 윤초)도 400이다 — check_refs가 이 값을 다시 해석한다 (계약 점검 S40)
+        try:
+            parse_rfc3339(v)
+        except TimeRuleError:
+            raise ValueError("유효한 날짜와 시각을 입력하세요") from None
+        return v
 
 
 Ref = Annotated[AssetRef | EventRef | ObsRef, Field(discriminator="kind")]
