@@ -67,7 +67,8 @@ def test_patch_null_on_non_nullable_field_is_400_at_that_field(ctx: Ctx, field: 
     assert r.status_code == 400, r.text
     check(r, "PATCH", UPDATE)
     assert r.json()["code"] == "VALIDATION_ERROR"
-    assert [e["pointer"] for e in r.json()["errors"]] == [f"/{field}"]
+    # 세 항목 모두 그 항목 위치와 같은 code로 답한다 (이웃 PATCH /v1/sessions/{id}의 not_nullable과 같은 모양)
+    assert [(e["pointer"], e["code"]) for e in r.json()["errors"]] == [(f"/{field}", "not_nullable")]
     assert _latest_version(ctx, record_id) == 1  # 새 버전을 만들지 않는다
 
 
