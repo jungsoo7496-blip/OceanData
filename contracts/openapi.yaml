@@ -1972,7 +1972,10 @@ paths:
       tags: [sharing]
       operationId: createShareRequest
       summary: 공유 등급 변경 신청 — 상향은 domain.md 4장 조건 검사, 하향은 언제든 (ORG_ADMIN만)
-      description: L1 이상 결정은 ORG_ADMIN만 할 수 있다 (그 밖의 역할은 403). 원본(variant=ORIGINAL)과 CORE는 L1을 넘을 수 없다. 하향에는 existing_grant_handling이 필요하다.
+      description: >-
+        L1 이상 결정은 ORG_ADMIN만 할 수 있다 (그 밖의 역할은 403). 원본(variant=ORIGINAL)과 CORE는 L1을 넘을 수 없다. 하향에는 existing_grant_handling이 필요하다.
+        목표 등급이 지금 sharing_scope와 같으면 409 INVALID_STATE_TRANSITION. 같은 Idempotency-Key에 다른 본문이면 409 IDEMPOTENCY_CONFLICT,
+        같은 키의 앞선 요청이 아직 처리 중이면 409 CONFLICT와 Retry-After (IdempotencyKey 설명).
       x-freeze: G4
       parameters:
         - {$ref: '#/components/parameters/IdempotencyKey'}
@@ -1991,6 +1994,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
         '422':
           description: 조건 미충족 (RULE_VIOLATION, unmet_conditions)
           content:
