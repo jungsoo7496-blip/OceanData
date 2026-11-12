@@ -21,12 +21,12 @@
 | S08 | low | `POST /v1/access-requests` | data-semantics | 사람 결정 | 사람 결정 대기 |
 | S09 | low | `POST /v1/access-requests/{access_request_id}/decisions` | wrong-status | 계약 문구 | 계약 문구 고침 (ADR-0073) |
 | S10 | low | `POST /v1/access-requests/{access_request_id}/decisions` | data-semantics | 구현 | 고침 (ADR-0073) |
-| S11 | high | `PATCH /v1/assets/{asset_id}/classification` | data-semantics | 구현 | 미처리 |
-| S12 | medium | `POST /v1/assets/{asset_id}/share-review` | missing-behavior | 구현 | 미처리 |
-| S13 | medium | `POST /v1/assets/{asset_id}/share-review` | scope-or-permission | 구현 | 검증 의견 갈림 |
-| S14 | medium | `POST /v1/assets/{asset_id}/share-review` | missing-audit | 구현 | 미처리 |
-| S15 | low | `POST /v1/assets/{asset_id}/share-requests` | wrong-status | 계약 문구 | 미처리 |
-| S16 | low | `POST /v1/share-candidates` | wrong-status | 구현 | 미처리 |
+| S11 | high | `PATCH /v1/assets/{asset_id}/classification` | data-semantics | 구현 | 고침 (ADR-0074) |
+| S12 | medium | `POST /v1/assets/{asset_id}/share-review` | missing-behavior | 구현 | 고침 |
+| S13 | medium | `POST /v1/assets/{asset_id}/share-review` | scope-or-permission | 구현 | 고치지 않음 — 검증 의견이 갈렸고 고칠 방향(검수자 범위)은 소유자 결정 |
+| S14 | medium | `POST /v1/assets/{asset_id}/share-review` | missing-audit | 구현 | 고침 |
+| S15 | low | `POST /v1/assets/{asset_id}/share-requests` | wrong-status | 계약 문구 | 계약 문구 고침 |
+| S16 | low | `POST /v1/share-candidates` | wrong-status | 구현 | 고침 |
 | S17 | medium | `GET /v1/deid-reviews/{review_id}/frame` | missing-audit | 구현 | 미처리 |
 | S18 | medium | `POST /v1/deid-reviews/{review_id}/decision` | missing-behavior | 사람 결정 | 사람 결정 대기 |
 | S19 | medium | `GET /v1/deid-reviews/{review_id}/frame` | scope-or-permission | 구현 | 미처리 |
@@ -70,6 +70,12 @@
 - **S07 이용 신청 기간 날짜** — 달력에 없는 날짜(2월 30일·13월·0일)와 끝 날짜 9999-12-31은 500 대신 400 `VALIDATION_ERROR`와 `/period/start_date`·`/period/end_date` 오류를 반환하고 신청·감사를 남기지 않는다. 9999-12-30은 받는다. 계약 설명에 명시했다. ADR-0073.
 - **S09 운영자 승인의 L3 미달** — 제공기관 승인 뒤 자산 등급이 내려가 버전이 L3 아래가 되면 운영자 승인이 422 `RULE_VIOLATION`인 것을 `decideAccessRequest` 계약(응답 목록·설명)에 명시했다. 결정과 이용 권한은 남지 않고 신청은 `PROVIDER_APPROVED`로 남는다.
 - **S10 응답 기한 뒤 결정** — 기한(`deadline_at`)이 지난 신청의 제공기관·운영자 승인은 409 `INVALID_STATE_TRANSITION`(응답 기한 초과)으로 거부하고 결정·이용 권한을 만들지 않는다. 비교는 정비 주기와 같다(`deadline_at < 지금`). 거절은 받고, `DENIED` 전이는 정비 주기가 한다. 계약 설명에 명시했다. ADR-0073.
+- **S11 분류 변경 뒤 공유 등급** — 운영자가 분류를 지정하면 그 자산과 파생본(원 자산의 가장 엄격한 sensitivity_class를 물려받음)을 다시 본다. 분류가 정하는 조건(sensitivity_class ≠ SECURITY·=INTERNAL, privacy_status 두 조건)을 못 맞추거나, 이번 변경으로 다른 조건을 새로 못 맞추게 되면 조건을 충족하는 가장 높은 등급으로 함께 내린다(L2 이상에서 SECURITY → L1, L4에서 RESTRICTED → L3 또는 L2). 수정 전 코드가 남긴 'L2인데 SECURITY' 행도 다시 지정하면 바로잡힌다. 분류와 무관한 조건(약정 만료 등)이 전부터 어긋났다는 것만으로는 내리지 않는다. 그 자산이 든 데이터셋 버전의 이용 권한은 즉시 철회한다. 내린 자산과 끊은 권한은 `ASSET_CLASSIFIED` details와 권한마다 `GRANT_REVOKED`로 남기고, 이 감사는 요청 트랜잭션에 쓴다. 자신·파생본은 계보 단계 순으로 잠그고, 비식별 검수 결정도 원본 → 비식별본으로 잠근다. 그래서 둘이 겹쳐도 교착하지 않는다. 계약 `classifyAsset` 설명에 적었다(ADR-0074). 권한 처리를 즉시 철회로 고정한 것은 소유자 결정 대상이다.
+- **S12 재신청(RESUBMIT)** — REJECTED에서만 받는다. NONE 등에서는 역할과 상관없이 409 `INVALID_STATE_TRANSITION`이다. 심사 처리로 CANDIDATE가 되려면 data_role=BYPRODUCT여야 하고, 아니면 422(`data_role=BYPRODUCT`)다. 공유 후보 지정에서 제외된 CORE 원본은 심사 처리로도 후보가 되지 않는다.
+- **S13 검수자의 공유 심사 접근** — 고치지 않음: 검증 의견이 갈렸다(한쪽은 계약 위반이 아니라고 봄). 고치는 방향도 소유자가 정할 일이다(검수자에게 배정 기반 자산 범위를 줄지, share:read·share:review에서 REVIEWER를 뺄지). 검수자의 QUALITY_REVIEW → REPROCESS는 비식별 검수 결정 경로로 이미 된다.
+- **S14 심사 처리의 전이 주체 403** — share:review 권한은 있지만 그 전이의 주체가 아닌 역할이 받는 403에 `PERMISSION_DENIED` 감사(대상 자산, 동작, 전·후 상태)를 남긴다. 감사는 요청과 따로 확정한다. 표에 없는 전이(409)는 권한 거부로 남기지 않는다.
+- **S15 등급 변경 신청의 409** — `createShareRequest` 계약에 두 409를 명시한다. 하나는 목표 등급이 지금 등급과 같을 때의 `INVALID_STATE_TRANSITION`, 다른 하나는 멱등 키 충돌(`IDEMPOTENCY_CONFLICT`, 처리 중이면 `CONFLICT`)이다. 동작은 그대로다.
+- **S16 공유 후보 지정 본문** — 빈 `asset_ids`(session_id와 함께여도)와 중복 `asset_ids`는 400 `VALIDATION_ERROR`(`/asset_ids`, `too_short`·`unique`)다. 이때 어떤 자산도 후보가 되지 않는다.
 
 ## datasets (버전·배포·카탈로그) — 발견 5건
 
