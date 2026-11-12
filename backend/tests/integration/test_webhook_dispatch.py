@@ -2,14 +2,16 @@
 
 전송마다 따로 보내고, 한 건을 기록하면 그 자리와 그 구독의 다음 건을 바로 가져간다. 그러면서 ADR-0041의 약속을 지킨다:
 구독당 한 번에 한 건, 기관당 보내는 중인 건은 WEBHOOK_MAX_PER_ORG건까지, 모두 WEBHOOK_BATCH_SIZE건까지, 워커 여럿이 같은 건을
-겹쳐 보내지 않음, 멈추면 보내던 건을 기록하고 끝남, 임대는 보내기 + 기록보다 길다. 비활성 알림은 커밋 뒤, 다른 전송을 막지 않는다.
-대상은 공인 IP 리터럴이고 전송 함수를 바꿔 실제로 보내지 않는다. 시험 데이터는 합성 값이다.
+겹쳐 보내지 않음, 멈추면 보내던 건을 기록하고 끝남, 임대는 (실제로 가져온 시각부터) 보내기 + 기록 차례보다 길다. 가져올 건수는
+DB 스레드에서 돌 때 정해 줄 선 기록 뒤의 빈자리를 한꺼번에 채운다. 가져오기가 실패하면 보내던 건을 기록한 뒤 올린다. 비활성 알림은 커밋 뒤,
+다른 전송을 막지 않고, 실패해도 로그만 남긴다. 대상은 공인 IP 리터럴이고 전송 함수를 바꿔 실제로 보내지 않는다. 시험 데이터는 합성 값이다.
 """
 
 from __future__ import annotations
 
 import collections
 import dataclasses
+import logging
 import random
 import threading
 import time
@@ -259,6 +261,154 @@ def test_lease_outlives_a_full_length_send_and_a_slow_record(ctx, monkeypatch) -
     assert len(others) >= 3 and all(not any(s.values()) for s in others)
     d = _deliveries(ctx, webhook_id=wid)[0]
     assert calls == [d.event_id] and (d.status, d.attempts) == ("DELIVERED", 1)
+
+
+def test_lease_counts_from_the_real_claim_when_records_queue_in_the_db_thread(ctx, monkeypatch) -> None:
+    """임대는 DB 스레드에서 실제로 가져온 시각부터 잰다. 동시 건수 상한 4에서 기록마다 기한만큼 늦어 가져오기가
+    기록 셋 뒤에 줄 서고, 그렇게 늦게 가져온 건이 기한 가까이 보내는 동안 다른 건의 기록 셋이 그 앞에 서도, 그 건의
+    기록은 임대 안에 끝나 다른 워커가 다시 보내지 않는다. 가져오기를 넣을 때 시각을 읽으면 줄 선 만큼(기한 × 3)
+    임대가 짧아져 기록 전에 끝나고, 다른 워커가 같은 건을 두 번째로 보냈다 (검토에서 찾음)."""
+    timeout = 0.5
+    c = _with(ctx, webhook_timeout_s=timeout, webhook_max_per_org=10, webhook_batch_size=4)
+    hooks = [_subscribe(c, ORG_A, f"https://1.1.1.1/s{i}") for i in range(8)]
+    _emit(c, ORG_A)  # 구독마다 한 건
+    base = c.clock.now() - timedelta(seconds=60)
+    with ctx.c.engine.begin() as conn:  # 기한을 구독 순서대로: s0~s3을 먼저, s4~s7을 그다음에 가져간다
+        for i, wid in enumerate(hooks):
+            conn.execute(text("UPDATE webhook_deliveries SET next_attempt_at = :t WHERE webhook_id = :w"),
+                         {"t": base + timedelta(seconds=i), "w": wid})
+    original = webhooks._record
+
+    def slow_record(*args, **kwargs):  # type: ignore[no-untyped-def]
+        time.sleep(timeout)  # 기록마다 잠금 대기 한도(기한)만큼 늦다
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(webhooks, "_record", slow_record)
+    lock, all_sent = threading.Lock(), threading.Event()
+    sent: collections.Counter[str] = collections.Counter()
+
+    def send(url: str, body: bytes, headers: dict[str, str], timeout_s: float) -> int:
+        with lock:
+            sent[url.rsplit("/", 1)[1]] += 1
+            if len(sent) == len(hooks):
+                all_sent.set()
+        if url.endswith("/s4"):
+            time.sleep(timeout * 0.9)  # 늦게 가져온 건: 기한 안이지만 거의 다 쓴다 — 그동안 s5~s7의 기록이 앞에 선다
+        return 204
+
+    out: dict[str, dict[str, int]] = {}
+    first = threading.Thread(target=lambda: out.setdefault("first", webhooks.deliver_due(c, send=send)))
+    first.start()
+    assert all_sent.wait(10)  # 여덟 건을 모두 가져가 보냈다 (s4는 아직 보내는 중, s5~s7은 기록 차례)
+    others: list[dict[str, int]] = []
+    while first.is_alive():  # 다른 워커가 남은 기록이 끝날 때까지 가져가 본다
+        others.append(webhooks.deliver_due(c, limit=1, send=send))
+        time.sleep(0.05)
+    first.join()
+    assert set(sent.values()) == {1}, {k: n for k, n in sent.items() if n > 1}  # 고치기 전: s4를 두 번 보냈다
+    assert out["first"] == {"delivered": len(hooks), "retry": 0, "failed": 0, "cancelled": 0}
+    assert len(others) >= 3 and all(not any(s.values()) for s in others)
+    assert {(d.status, d.attempts) for d in _deliveries(ctx)} == {("DELIVERED", 1)}
+
+
+def test_claim_takes_every_slot_freed_while_it_waited_for_the_db_thread(ctx, monkeypatch) -> None:
+    """가져올 건수는 DB 스레드에서 실제로 가져올 때 정한다. 한 건의 기록이 끝나 넣은 가져오기는 이미 줄 선 다른 기록
+    셋 뒤에 도는데, 그때는 네 자리가 모두 비어 있으니 네 건을 가져간다. 그 가져오기가 이미 본 기록으로는 다시 가져오지
+    않아, 가져오기 횟수는 라운드 때와 같다(네 건씩 세 번 + 끝을 확인하는 한 번). 넣을 때 정하면 1건과 3건을 번갈아
+    가져와 가져오기가 두 배 가까이 되고, 대기 행이 많아 가져오기가 비싸면 쌓인 것을 비우는 속도가 라운드 때보다 느렸다."""
+    c = _with(ctx, webhook_max_per_org=10, webhook_batch_size=4)
+    for i in range(4):
+        _subscribe(c, ORG_A, f"https://1.1.1.1/q{i}")
+    _emit(c, ORG_A, 3)  # 구독마다 세 건
+    original_record, original_claim = webhooks._record, webhooks._claim
+    sizes: list[int] = []
+
+    def slow_record(*args, **kwargs):  # type: ignore[no-untyped-def]
+        time.sleep(0.2)  # 기록이 DB 스레드에 줄 선다 (보내기는 바로 끝난다)
+        return original_record(*args, **kwargs)
+
+    def counted(*args, **kwargs):  # type: ignore[no-untyped-def]
+        out = original_claim(*args, **kwargs)
+        sizes.append(len(out[0]))
+        return out
+
+    monkeypatch.setattr(webhooks, "_record", slow_record)
+    monkeypatch.setattr(webhooks, "_claim", counted)
+    assert webhooks.deliver_due(c, send=Receiver())["delivered"] == 12
+    assert sizes == [4, 4, 4, 0], sizes  # 고치기 전: [4, 1, 3, 1, 3, 0, …]
+
+
+def test_claim_error_stops_claiming_and_records_in_flight_before_raising(ctx, monkeypatch) -> None:
+    """가져오기가 DB 오류로 실패하면 더 가져오지 않고, 보내던 건을 끝까지 보내 기록한 뒤 그 오류를 올린다
+    (전용 스레드가 로그를 남기고 간격만큼 쉰 뒤 다시 한다). 보내던 건을 버리고 바로 올리면 그 건은 SENDING으로 남아
+    임대가 끝날 때까지 기다렸다가 다시 나간다."""
+    c = _with(ctx, webhook_timeout_s=1.0)
+    fast = _subscribe(c, ORG_A, "https://1.1.1.1/fast")
+    slow = _subscribe(c, ORG_B, "https://1.1.1.1/slow")
+    _emit(c, ORG_A, 2)
+    _emit(c, ORG_B, 2)
+    original = webhooks._claim
+    calls: list[int] = []
+    raised = threading.Event()
+
+    def failing(*args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(len(calls) + 1)
+        if len(calls) > 1:
+            raised.set()
+            raise RuntimeError("synthetic db outage")
+        return original(*args, **kwargs)
+
+    def send(url: str, body: bytes, headers: dict[str, str], timeout_s: float) -> int:
+        if url.endswith("/slow"):
+            assert raised.wait(5)  # 둘째 가져오기가 실패할 때 아직 보내는 중이다
+        return 204
+
+    monkeypatch.setattr(webhooks, "_claim", failing)
+    with pytest.raises(RuntimeError, match="synthetic db outage"):
+        webhooks.deliver_due(c, send=send)
+    assert calls == [1, 2]  # 실패한 뒤로는 가져오지 않았다
+    for wid in (fast, slow):  # 보내던 건(실패 뒤에 끝난 slow 포함)은 기록했다
+        assert sorted((d.status, d.attempts) for d in _deliveries(ctx, webhook_id=wid)) == [("DELIVERED", 1),
+                                                                                             ("PENDING", 0)]
+    assert _sending_by_org(ctx) == {}
+
+
+class _Collect(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+def test_disable_notice_failure_is_logged_and_other_deliveries_continue(ctx) -> None:
+    """비활성 알림이 실패해도(메일 서버 오류) deliver_due는 정상 결과를 돌려주고 다른 기관의 전송은 모두 나간다.
+    실패는 서버 로그 webhook_notify_failed로만 남는다 (예전에는 예외가 deliver_due 밖으로 나갔다)."""
+    bad = _subscribe(ctx.c, ORG_A, "https://1.1.1.1/bad")
+    _emit(ctx.c, ORG_A)
+    good = _subscribe(ctx.c, ORG_B, "https://1.1.1.1/good")
+    _emit(ctx.c, ORG_B, 3)
+
+    class BrokenMail:
+        def send(self, note: Notification) -> None:
+            raise RuntimeError("synthetic smtp outage")
+
+    c = dataclasses.replace(_with(ctx, webhook_max_attempts=1), notifier=BrokenMail())
+
+    def send(url: str, body: bytes, headers: dict[str, str], timeout_s: float) -> int:
+        return 500 if url.endswith("/bad") else 204
+
+    logger, handler = logging.getLogger(webhooks.__name__), _Collect()
+    logger.addHandler(handler)
+    try:
+        stats = webhooks.deliver_due(c, send=send)
+    finally:
+        logger.removeHandler(handler)
+    assert stats == {"delivered": 3, "retry": 0, "failed": 1, "cancelled": 0}
+    assert _delivered(ctx, good) == 3
+    errors = [r for r in handler.records if r.levelno >= logging.ERROR]
+    assert [(r.getMessage(), getattr(r, "webhook_id", None)) for r in errors] == [("webhook_notify_failed", bad)]
 
 
 def test_dispatch_lag_metric_counts_wait_from_due_time(ctx) -> None:

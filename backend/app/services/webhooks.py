@@ -40,7 +40,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import lru_cache, partial
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.parse import urlsplit
 
@@ -469,9 +469,10 @@ def backoff(settings: Settings, attempts: int) -> timedelta:
 def _lease(settings: Settings, cap: int) -> timedelta:
     """가져온 뒤 결과를 기록할 때까지의 임대 (ADR-0070). cap은 디스패처가 동시에 보내는 건수 상한이다.
 
-    보내기(기한 1번) + 기록 차례(DB 스레드 앞에 보내는 중인 다른 건의 기록이 많아야 cap − 1건, 기록은 건마다 잠금
-    대기 ≤ 기한) + 내 기록(기한 1번) + 여유(기한 1번, 가져오기 한 번 포함) = 기한 × (cap + 2). 라운드가 없어도 한 건의
-    기록 앞에 줄 서는 건수의 상한은 라운드 때와 같아 길이도 같다."""
+    보내기(기한 1번) + 기록 차례(DB 스레드에서 내 기록 앞에 선 것: 보내는 중인 다른 건의 기록 많아야 cap − 1건 —
+    건마다 잠금 대기 ≤ 기한 — 과 가져오기 많아야 한 번) + 내 기록(기한 1번) + 여유(기한 1번, 그 가져오기 포함)
+    = 기한 × (cap + 2). 기준 시각(now)은 DB 스레드에서 가져오기가 실제로 돌 때 읽어야 한다 — 넣을 때 읽으면 그 앞에
+    줄 선 기록(많아야 cap − 1건)만큼 임대가 짧아진다."""
     return timedelta(seconds=settings.webhook_timeout_s * (cap + 2))
 
 
@@ -639,7 +640,8 @@ async def _dispatch(c: Container, now: datetime | None, limit: int, send: Sender
     """deliver_due의 본체 (ADR-0070). 이벤트 루프 하나에서 전송마다 작업(task)을 따로 돌린다.
 
     가져오기·기록(막히는 DB 작업)은 DB 스레드 _DB_THREADS개에서, 비활성 알림은 알림 스레드에서 한다 — 네트워크 작업을
-    막지 않고, 이 디스패처가 동시에 쓰는 DB 연결은 _DB_THREADS개를 넘지 않는다. 가져오기는 한 번에 하나다."""
+    막지 않고, 이 디스패처가 동시에 쓰는 DB 연결은 _DB_THREADS개를 넘지 않는다. 가져오기는 한 번에 하나이고, 마지막
+    가져오기가 돌기 시작한 뒤에 끝난 기록이 있거나 WEBHOOK_DISPATCH_INTERVAL_S가 지났을 때 다시 가져온다."""
     s = c.settings
     loop = asyncio.get_running_loop()
     stats = {"delivered": 0, "retry": 0, "failed": 0, "cancelled": 0}
@@ -648,17 +650,40 @@ async def _dispatch(c: Container, now: datetime | None, limit: int, send: Sender
     tasks: set[asyncio.Task[None]] = set()
     notices: list[asyncio.Future[None]] = []
     freed = asyncio.Event()  # 한 건의 기록이 끝났다 — 그 자리와 그 구독의 다음 건을 바로 가져간다
-    busy = 0  # 가져와서 아직 기록을 마치지 않은 건
+    busy = 0  # 가져와서 아직 기록을 마치지 않은 건 (이벤트 루프가 센다 — 언제 끝낼지 정한다)
+    held = 0  # 같은 것을 DB 스레드가 센다 — 가져올 건수를 정한다
+    recorded = 0  # DB 스레드에서 끝난 기록 수 — 마지막 가져오기가 본 것보다 많으면 다시 가져온다
+    counts = threading.Lock()
 
     def clock() -> datetime:
         return now or c.clock.now()
+
+    # 시각과 가져올 건수는 DB 스레드에서 실제로 돌 때 정한다. 넣을 때 정하면 앞에 줄 선 기록이 끝날 때까지 낡는다:
+    # 임대가 줄 선 만큼 짧아져 기록 전에 끝날 수 있고(다른 워커가 같은 건을 다시 보낸다), 지연 지표와 기록 시각도
+    # 이르다. 건수도 그사이 빈자리를 빼고 정해 1건과 나머지를 번갈아 가져오게 된다 (ADR-0070 결정 3·4)
+    def claim_in_db() -> tuple[list[_Claim], int, int]:
+        nonlocal held
+        with counts:
+            free, mark = limit - held, recorded  # 앞에 줄 섰던 기록은 이 가져오기가 이미 본다
+        claims, cancelled = _claim(c, clock(), free, cap=limit)
+        with counts:
+            held += len(claims)
+        return claims, cancelled, mark
+
+    def record_in_db(cl: _Claim, code: int | None, err: str | None) -> tuple[str | None, Notification | None]:
+        nonlocal held, recorded
+        try:
+            return _record(c, cl, code, err, clock())
+        finally:
+            with counts:
+                held, recorded = held - 1, recorded + 1
 
     async def one(cl: _Claim) -> None:
         nonlocal busy
         try:
             code, err = await _attempt(cl, s, send)
             try:
-                outcome, note = await loop.run_in_executor(db, _record, c, cl, code, err, clock())
+                outcome, note = await loop.run_in_executor(db, record_in_db, cl, code, err)
             except Exception as exc:  # noqa: BLE001 - 기록하지 못한 건은 임대가 끝난 뒤 다시 보낸다 (최소 한 번)
                 log.error("webhook_record_failed", exc_info=exc, extra={"delivery_id": cl.delivery_id})
                 return
@@ -672,14 +697,18 @@ async def _dispatch(c: Container, now: datetime | None, limit: int, send: Sender
             freed.set()
 
     failure: Exception | None = None
+    seen = -1  # 마지막 가져오기가 돌기 시작할 때까지 끝난 기록 수 (-1: 아직 가져오지 않음)
+    timed_out = False
     try:
         while True:
             freed.clear()
             halted = failure is not None or (stop is not None and stop.is_set())
-            if not halted and busy < limit:
+            with counts:
+                fresh = recorded > seen  # 마지막 가져오기가 보지 못한 기록이 있다 — 그 구독의 다음 건이 있을 수 있다
+            if not halted and busy < limit and (fresh or timed_out):
+                timed_out = False
                 try:
-                    claims, cancelled = await loop.run_in_executor(
-                        db, partial(_claim, c, clock(), limit - busy, cap=limit))
+                    claims, cancelled, seen = await loop.run_in_executor(db, claim_in_db)
                 except Exception as exc:  # noqa: BLE001 - DB 장애 등. 보내던 건은 끝까지 보내 기록한 뒤 올린다
                     failure, claims, cancelled = exc, [], 0
                 stats["cancelled"] += cancelled
@@ -689,11 +718,14 @@ async def _dispatch(c: Container, now: datetime | None, limit: int, send: Sender
                     task = asyncio.create_task(one(cl))
                     tasks.add(task)
                     task.add_done_callback(tasks.discard)
-            # 보내는 중인 건이 없고, 가져오는 동안 끝난 건도 없으면 끝 (끝난 건이 있으면 그 구독의 다음 건을 다시 본다)
-            if busy == 0 and (halted or failure is not None or not freed.is_set()):
+                continue
+            # 보내는 중인 건이 없고, 마지막 가져오기 뒤에 끝난 기록도 없으면 끝
+            if busy == 0 and (halted or not fresh):
                 break
-            with contextlib.suppress(TimeoutError):  # 새로 기한이 된 건은 쉴 때와 같은 간격으로 다시 본다
+            try:
                 await asyncio.wait_for(freed.wait(), s.webhook_dispatch_interval_s)
+            except TimeoutError:  # 새로 기한이 된 건은 쉴 때와 같은 간격으로 다시 본다
+                timed_out = True
         await asyncio.gather(*tasks)
         await asyncio.gather(*notices)
     finally:
