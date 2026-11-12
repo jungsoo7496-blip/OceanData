@@ -23,6 +23,8 @@ from app.timefmt import iso
 
 router = APIRouter()
 SE = table("scene_embeddings", column("asset_id"), column("t_offset"), column("model"), column("embedding"))
+# 운영자가 비식별본 프레임을 보는 '심사 중'(domain.md 2장): 원본 공유 심사가 처리·품질 검수·재처리 단계 (ADR-0075)
+UNDER_REVIEW = frozenset({"PROCESSING", "QUALITY_REVIEW", "REPROCESS"})
 
 
 def _operator(p: Principal) -> bool:
@@ -84,6 +86,12 @@ def review_frame(review_id: str, request: Request, t: float = Query(ge=0), which
             _frame_denied(c, request, p, rv, a, which, "no_break_glass_grant")
             raise ProblemError("FORBIDDEN", detail="운영자의 원본 프레임 열람은 유효한 긴급 열람 승인이 있어야 합니다")
         grant_id, grant_expires = grant.grant_id, grant.expires_at
+    elif which == "DEID" and rv.reviewer_id != p.user_id and a.organization_id != p.organization_id:
+        # 배정 검수자가 아닌 운영자: 파생본은 심사 중인 대상만 (domain.md 2장). 공유 철회·반려·승인 뒤에는 보지 않는다
+        orig = db.get(Asset, rv.original_asset_id)
+        if orig is None or orig.share_status not in UNDER_REVIEW:
+            _frame_denied(c, request, p, rv, a, which, "not_under_review")
+            raise ProblemError("FORBIDDEN", detail="운영자는 공유 심사 중인 원본의 비식별본 프레임만 볼 수 있습니다")
     db.expunge(a)
     with local_copy(c, a) as src, tempfile.TemporaryDirectory(prefix="marine-frame-", dir=work_dir(c)) as tmp:
         out = os.path.join(tmp, "f.jpg")
