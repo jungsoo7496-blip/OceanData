@@ -791,6 +791,9 @@ paths:
       tags: [reports]
       operationId: createReportVersion
       summary: 최신 데이터로 새 초안 버전을 만든다 (이전 버전은 보존)
+      description: |
+        데이터 기간(period_from·period_to)은 버전마다 저장한다. 회차 보고서의 새 버전은 회차 끝 시각(진행 중이면 지금)까지를
+        쓰고, 이전 버전(승인·제출본 포함)의 기간은 바뀌지 않는다 (ADR-0080).
       x-freeze: G1
       x-status: draft
       responses:
@@ -5854,8 +5857,12 @@ components:
         organization_id: {$ref: './schemas/common.schema.json#/$defs/organization_id'}
         project_id: {$ref: './schemas/common.schema.json#/$defs/project_id'}
         session_id: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/session_id'}, {type: 'null'}]}
-        period_from: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
-        period_to: {oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]}
+        period_from:
+          oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]
+          description: 이 버전(version)의 데이터 기간 시작. 기간은 버전마다 저장한다
+        period_to:
+          oneOf: [{$ref: './schemas/common.schema.json#/$defs/utc_datetime'}, {type: 'null'}]
+          description: 이 버전(version)의 데이터 기간 끝. 새 버전을 만들어도 이전 버전의 값은 바뀌지 않는다
         title: {type: string}
         template_code: {$ref: '#/components/schemas/TemplateCode'}
         template_version: {type: integer}

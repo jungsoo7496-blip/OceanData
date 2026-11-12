@@ -495,7 +495,7 @@ def new_report_version(report_id: str, request: Request, db: Session = DB,
     tpl = reports.latest_template(db, rep.template_code, rep.template_version)
     if tpl is None:
         raise ProblemError("CONFLICT", detail="보고서 양식을 찾을 수 없습니다")
-    if rep.session_id:  # 회차가 끝났으면 끝 시각, 진행 중이면 지금까지
+    if rep.session_id:  # 회차가 끝났으면 끝 시각, 진행 중이면 지금까지. 앞 버전의 기간은 버전 행에 남는다 (S34)
         s = db.get(TrialSession, rep.session_id)
         rep.period_to = (s.ends_at if s and s.ends_at else c.clock.now())
     v = reports.generate(c, db, rep, tpl, p.principal_id)
