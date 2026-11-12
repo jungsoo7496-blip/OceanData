@@ -147,6 +147,17 @@ def _validate(c: Container, db: Session, asset_ids: list[str], now: datetime) ->
     return assets
 
 
+CARD_MISMATCH = "매니페스트·데이터 카드가 계약과 맞지 않습니다"
+
+
+def _check_card(data_card: dict[str, Any]) -> None:
+    """데이터 카드만 매니페스트 계약의 data_card로 검사한다 (요구사항 6.1). 포인터는 매니페스트 기준(/data_card…)이라
+    요청 안에서 만드는 버전(_materialize)과 같은 RuleViolation이 된다."""
+    problems = contracts.schema_problems("dataset-version-manifest", data_card, fragment="#/properties/data_card")
+    if problems:
+        raise RuleViolation(CARD_MISMATCH, [UnmetCondition("/data_card" + p.pointer, p.message) for p in problems[:20]])
+
+
 def _materialize(c: Container, db: Session, ds: Dataset, vid: str, version: str, assets: list[Asset],
                  data_card: dict[str, Any], now: datetime) -> tuple[dict[str, Any], list[DatasetVersionItem], bytes]:
     """DATASET 존 사본과 매니페스트 (계약 검사). 저장한 매니페스트 본문을 돌려준다."""
@@ -171,8 +182,7 @@ def _materialize(c: Container, db: Session, ds: Dataset, vid: str, version: str,
                 "total_bytes": sum(int(i["byte_size"]) for i in items), "items": items, "data_card": data_card}
     problems = contracts.schema_problems("dataset-version-manifest", manifest)
     if problems:
-        raise RuleViolation("매니페스트·데이터 카드가 계약과 맞지 않습니다",
-                            [UnmetCondition(p.pointer or "/", p.message) for p in problems[:20]])
+        raise RuleViolation(CARD_MISMATCH, [UnmetCondition(p.pointer or "/", p.message) for p in problems[:20]])
     body = json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=1).encode()
     c.storage.put_object(c.settings.bucket_datasets, f"{ds.dataset_id}/{vid}/MANIFEST.json", body, "application/json")
     return manifest, rows, body
@@ -239,9 +249,11 @@ def build_version(c: Container, db: Session, ds: Dataset, version: str, asset_id
 
 def start_build(c: Container, db: Session, ds: Dataset, version: str, asset_ids: list[str],
                 data_card: dict[str, Any], by: str) -> tuple[DatasetVersion, str]:
-    """큰 버전 (13번 작업 32): 조건은 지금 모두 검사하고, 사본·매니페스트는 작업 큐에서 만든다."""
+    """큰 버전 (13번 작업 32): 조건은 지금 모두 검사하고, 사본·매니페스트는 작업 큐에서 만든다.
+    데이터 카드도 여기서 검사한다 — 요청 때 이미 틀린 카드를 받아 두었다가 FAILED로 알리지 않는다."""
     now = c.clock.now()
     assets = _validate(c, db, asset_ids, now)
+    _check_card(data_card)
     vid = new_id("dataset_version")
     v = DatasetVersion(dataset_version_id=vid, dataset_id=ds.dataset_id, version=version,
                        provider_organization_ids=sorted({a.organization_id for a in assets}), item_count=len(assets),

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import func, select
 
+from app.db.models import DatasetVersion
 from app.seed import DEV_A_CAMERA, DEV_B_CAMERA, ORG_A, ORG_B, PRJ_A, PRJ_B
 from app.services import datasets
 from tests.acceptance.test_t08_t15_sharing import CARD, approved_pair, share
@@ -64,3 +66,46 @@ def test_lineage_of_unfinished_version_is_documented_conflict(ictx) -> None:
     lr = ctx.client.get(f"{path}/{vid}/lineage", headers=ctx.as_user(OP))
     assert lr.status_code == 409 and lr.json()["code"] == "CONFLICT", lr.text
     check(lr, "GET", LINEAGE)
+
+
+# ---- S01: 큰 버전도 데이터 카드를 요청 때 검사한다
+
+
+def test_queued_version_checks_data_card_before_building(ictx) -> None:
+    ctx = ictx
+    a, b = _shared_pair(ctx)
+    ds = _dataset(ctx)
+    path = f"/v1/datasets/{ds}/versions"
+    bad = {k: v for k, v in CARD.items() if k != "privacy"}
+    body = {"version": "1.0.0", "data_card": bad, "item_asset_ids": [a["deid"], b["deid"]]}
+    sync = ctx.client.post(path, headers=ctx.as_user(OP), json=body)  # 요청 안에서 만드는 경로: 이미 422
+    assert sync.status_code == 422, sync.text
+
+    r = _post_queued(ctx, path, body)
+    check(r, "POST", VERSIONS)
+    assert r.status_code == 422 and r.json()["code"] == "RULE_VIOLATION", r.text
+    # 두 경로가 같은 오류 본문 (포인터는 /data_card부터)
+    assert (r.json()["detail"], r.json()["unmet_conditions"]) == (sync.json()["detail"], sync.json()["unmet_conditions"])
+    assert {"condition": "/data_card", "actual": "'privacy' is a required property"} in r.json()["unmet_conditions"]
+    # BUILDING 버전도 작업도 남지 않는다
+    assert ctx.c.queue.claim(["dataset_build"], "t", ("CPU",)) is None
+    with ctx.c.sessionmaker() as db:
+        assert db.execute(select(func.count()).select_from(DatasetVersion)
+                          .where(DatasetVersion.dataset_id == ds)).scalar_one() == 0
+    g = ctx.client.get(f"/v1/datasets/{ds}", headers=ctx.as_user(OP))
+    check(g, "GET", "/v1/datasets/{dataset_id}")
+    assert g.json()["versions"] == [] and "data_card" not in g.json()
+    lst = ctx.client.get("/v1/datasets", headers=ctx.as_user(OP))
+    check(lst, "GET", "/v1/datasets")
+
+    # 안쪽 항목이 비어도 같은 포인터 규칙 (/data_card/privacy/…)
+    worse = {**CARD, "privacy": {**CARD["privacy"], "risk_note": ""}}
+    sync = ctx.client.post(path, headers=ctx.as_user(OP), json={**body, "data_card": worse})
+    r = _post_queued(ctx, path, {**body, "data_card": worse})
+    assert r.status_code == sync.status_code == 422, r.text
+    assert r.json()["unmet_conditions"] == sync.json()["unmet_conditions"]
+    assert [u["condition"] for u in r.json()["unmet_conditions"]] == ["/data_card/privacy/risk_note"]
+
+    # 카드가 맞으면 지금처럼 202 BUILDING
+    r = _post_queued(ctx, path, {**body, "data_card": CARD})
+    assert r.status_code == 202 and r.json()["status"] == "BUILDING", r.text
