@@ -121,3 +121,27 @@ def test_clip_list_rejects_bad_paging_input(ctx: Ctx) -> None:
         assert _bad(ctx, aid, f"?cursor={cursor}") == ["/query/cursor"], cursor
     other_org = ctx.client.get(CLIPS.format(asset_id=aid) + "?limit=1", headers=ctx.as_user(ADMIN_B))
     assert other_org.status_code == 404, other_org.text  # 다른 기관은 페이지 조건과 상관없이 404
+
+
+def test_clip_cursor_outside_utc_range_is_400_and_later_requests_still_work(ctx: Ctx) -> None:
+    """시간대가 있어 읽히지만 UTC로 바꾸면 1~9999년 밖으로 나가는 커서 시각.
+
+    전에는 DB 드라이버가 매개변수를 UTC로 바꾸다 OverflowError로 500이 났다.
+    그 연결이 망가진 채 풀로 돌아가 뒤따르는 정상 요청까지 500이 됐다(검토 지적)."""
+    aid = _video(ctx)
+    job_id = _done_jobs(ctx, aid, 1)[0]
+    edges = ("0001-01-01T00:00:00+14:00", "0001-01-01T00:00:00+23:59",
+             "9999-12-31T23:59:59.999999-14:00", "9999-12-31T23:59:59-23:59")
+    got = []
+    for at in edges:
+        r = ctx.client.get(CLIPS.format(asset_id=aid) + f"?cursor={_cursor([at, job_id])}",
+                           headers=ctx.as_user(MEMBER_A))
+        pointers = [e.get("pointer") for e in r.json().get("errors", [])] if r.status_code == 400 else r.text[:80]
+        got.append((at, r.status_code, pointers))
+    plain = [ctx.client.get(path.format(asset_id=aid), headers=ctx.as_user(MEMBER_A)).status_code
+             for path in (CLIPS, "/v1/assets/{asset_id}") * 4]
+    assert got == [(at, 400, ["/query/cursor"]) for at in edges], "UTC 범위 밖 커서 시각이 400이 아닙니다"
+    assert plain == [200] * 8, "범위 밖 커서 뒤의 정상 요청이 실패합니다 (풀의 DB 연결이 망가짐)"
+    assert _bad(ctx, aid, f"?cursor={_cursor([edges[0], job_id])}") == ["/query/cursor"]  # 400도 계약 형식
+    edge_ok = _get(ctx, aid, f"?cursor={_cursor(['0001-01-01T00:00:00+00:00', job_id])}")  # 범위 안 경계는 그대로 200
+    assert edge_ok["items"] == [] and edge_ok["next_cursor"] is None

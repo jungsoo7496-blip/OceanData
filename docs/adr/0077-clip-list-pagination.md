@@ -17,6 +17,9 @@
    200 응답에 `next_cursor`(문자열 또는 null, 필수)를 더한다. 형식이 틀린 limit·cursor는 400 `VALIDATION_ERROR`(`/query/limit`·`/query/cursor`).
 2. **순서는 지금과 같다**: 요청 시각(`jobs.created_at`) 역순, 같으면 작업 ID 역순. 커서는 그 페이지 마지막 작업의 `[요청 시각(시간대 포함 ISO 8601, 마이크로초까지), 작업 ID]`를
    JSON으로 적어 base64url로 감싼 값이다. 다음 페이지는 `(created_at, job_id) < 커서`인 작업이다(키셋). 같은 시각의 작업이 페이지 경계에 걸려도 빠지거나 겹치지 않는다.
+   커서의 시각은 겹치는 자산 커서처럼 `parse_rfc3339`로 읽어 UTC로 바꾼다. 시간대가 없거나, UTC로 바꾸면 1~9999년 밖인 시각(예: `0001-01-01T00:00:00+14:00`)은
+   질의 전에 400이다. 처음 구현은 시간대가 있는지만 봐서 이런 시각이 DB 드라이버까지 갔고, 드라이버가 매개변수를 UTC로 바꾸다 `OverflowError`로 500을 냈다.
+   이 예외는 DB 오류가 아니라서 SQLAlchemy가 연결을 버리지 않았고, 망가진 연결이 풀로 돌아가 뒤따르는 정상 요청까지 500이 됐다(검토 지적).
 3. **기본 페이지 크기는 100**이다(api-conventions.md의 기본 50이 아니다). 전에 말없이 자르던 건수와 같아, limit 없이 부르는 포털(`web/src/pages/Assets.tsx`)과
    기존 클라이언트는 같은 첫 페이지를 받는다. ADR-0052가 겹치는 자산의 기본값을 옛 상한(500)으로 둔 것과 같은 이유다. 최대 500은 규칙대로다.
 4. `QueuePort.jobs_for_asset`에 키워드 인자 `before=(시각, 작업 ID)`를 더한다. 주지 않으면 전과 같은 질의 결과다. 같은 구간의 진행 중 작업을 찾는 `request_clip`은 바꾸지 않는다.
@@ -37,6 +40,9 @@
 되돌리는 방법: 계약에서 listAssetClips의 `parameters`·`400`·`next_cursor`를 지우고, `list_asset_clips`의 limit·cursor와 `_clip_cursor`, `clips.list_clips`의 페이지 처리,
 `jobs_for_asset`의 `before`를 되돌린 뒤 웹·Go 타입을 다시 만든다. 마이그레이션 없음.
 
-시험: `tests/integration/test_clip_list_pagination.py` 2개 — 끝난 작업 105건(세 건씩 같은 요청 시각)에서 조건 없이 100건과 `next_cursor`, 다음 페이지 5건과 null,
+시험: `tests/integration/test_clip_list_pagination.py` 3개 — 끝난 작업 105건(세 건씩 같은 요청 시각)에서 조건 없이 100건과 `next_cursor`, 다음 페이지 5건과 null,
 가장 오래된 작업의 결과 자산, `limit=7`로 끝까지 넘긴 결과가 DB 정렬과 같음, `limit=500` 한 번에 전부. `limit` 0·501과 형식이 틀린 커서 6가지는 400, 다른 기관은 404.
-수정 전 코드에서 두 시험 모두 실패하는 것을 확인했다(첫 페이지에 `next_cursor` 없음, `limit=0`이 200).
+UTC로 바꾸면 범위 밖인 커서 시각 4가지(1년 +14:00·+23:59, 9999년 -14:00·-23:59)는 400 `/query/cursor`이고, 그 뒤 클립 목록·자산 조회 8번이 모두 200이며,
+범위 안 경계(`0001-01-01T00:00:00+00:00`)는 200이다.
+수정 전 코드에서 앞의 두 시험이 실패하는 것을 확인했다(첫 페이지에 `next_cursor` 없음, `limit=0`이 200). 세 번째 시험은 처음 구현에서 실패하는 것을 확인했다
+(범위 밖 커서가 500 `INTERNAL`, 그 뒤 정상 요청도 500).

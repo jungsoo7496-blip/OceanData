@@ -19,7 +19,7 @@ from app.container import Container
 from app.db.models import Asset, Grant, TrialSession
 from app.domain import states
 from app.domain.ids import has_prefix
-from app.domain.normalize import generalize_location
+from app.domain.normalize import generalize_location, parse_rfc3339
 from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services.external import public_env
@@ -294,13 +294,16 @@ def _own_binary(a: Asset, p: Principal) -> None:
 
 
 def _clip_cursor(cursor: str) -> tuple[datetime, str]:
-    """클립 목록 커서 = 앞 페이지 마지막 작업의 [요청 시각(시간대 포함 ISO 8601), 작업 ID] (ADR-0077)."""
+    """클립 목록 커서 = 앞 페이지 마지막 작업의 [요청 시각(시간대 포함 ISO 8601), 작업 ID] (ADR-0077).
+
+    시각은 여기서 UTC로 바꾼다. UTC로 바꾸면 1~9999년 밖인 시각(예: 0001-01-01T00:00:00+14:00)은
+    DB 드라이버가 매개변수를 만들다 OverflowError를 내고 그 연결을 망가뜨리므로, 질의 전에 400으로 거른다."""
     try:
         value = json.loads(decode_cursor(cursor))
         if not isinstance(value, list) or len(value) != 2 or not all(isinstance(v, str) for v in value):
             raise ValueError
-        requested_at, job_id = datetime.fromisoformat(value[0]), value[1]
-        if requested_at.tzinfo is None or not has_prefix(job_id, "job"):
+        requested_at, job_id = parse_rfc3339(value[0]), value[1]
+        if not has_prefix(job_id, "job"):
             raise ValueError
         return requested_at, job_id
     except (ValueError, OverflowError):
