@@ -83,8 +83,8 @@ SKIP LOCKED 청구(4 스레드·구독 15·이벤트 180에서 중복 전송 0)�
 | V4 | 중간 | `^…$` 패턴이 끝의 개행을 통과시켜 체크섬+`\n`이 DB 길이 오류(500)·저장소 거부(503, 재시도)로 이어진다 | **고침** (ADR-0056). 검증용 사본만 `\Z` |
 | V5 | 중간~낮음 | 문제 목록이 무한하고 앱에 요청 본문 크기 제한이 없다(20KB → 2.6MB 응답, 0.4MB 좌표 → 80MB 응답·260MB 메모리) | **고침** (ADR-0068, `test_request_body_limit.py`·`test_request_body_limit_api.py`). ADR-0056의 문제 목록 100개 상한과 좌표·중첩 가드에 더해 앱에도 본문 한도(`MAX_REQUEST_BODY_BYTES`, 기본은 프록시와 같은 20MiB)를 둠. Content-Length가 넘으면 본문을 읽기 전에, chunked는 넘는 순간 413(DB 작업 차례 전). 한도를 프록시보다 줄일지는 사람이 정할 일 |
 | V6 | 중간~낮음 | 제어 문자가 있는 문구로 XLSX 내보내기 500, HWPX는 파서가 못 읽는 파일을 200으로 보냄 | **고침** (ADR-0056, `test_report_control_chars.py`) |
-| V7 | 낮음 | HWPX: 속성 값 안의 따옴표로 속성 삽입 / UTF-8이 아닌 양식이 PUT은 통과하고 내보내기 500 / ZIP 경로 검사가 POSIX만 | 따옴표 **고침**, 나머지 **미완** |
-| V8 | 낮음 | PDF: 한계 크기 기록 1건에 13.7초(동기 엔드포인트, 상한 없음). 기본 URL 가져오기 허용 | **미완** — 워커로 옮기고 시간·기록 수 상한, 가져오기 금지 |
+| V7 | 낮음 | HWPX: 속성 값 안의 따옴표로 속성 삽입 / UTF-8이 아닌 양식이 PUT은 통과하고 내보내기 500 / ZIP 경로 검사가 POSIX만 | **고침** (ADR-0056·0066, `test_report_control_chars.py`·`test_report_export_hardening.py`). 따옴표(ADR-0056)에 더해, 올릴 때 렌더러와 같은 길로 양식의 모든 항목을 조각으로 읽는다(헤더에 적힌 크기까지, 압축 폭탄도 메모리 묶음). UTF-8이 아니거나 읽을 수 없는 양식은 PUT 400, 검사 전에 저장된 양식은 내보내기 409. 항목 이름은 역슬래시·`:`·제어 문자(C0·C1)·보이지 않는 서식 문자도 거부한다 |
+| V8 | 낮음 | PDF: 한계 크기 기록 1건에 13.7초(동기 엔드포인트, 상한 없음). 기본 URL 가져오기 허용 | **완화** (ADR-0066, `test_report_export_hardening.py`). URL 가져오기를 금지했고(언제나 거부하는 fetcher), 프로세스마다 동시 PDF 렌더를 `REPORT_PDF_MAX_CONCURRENT`(기본 2)건으로 묶어 차면 429 + Retry-After. 렌더 하나는 여전히 10초대 — 워커 이전·시간 상한은 미완 |
 | V9 | 낮음 | 위치 오류가 /location 아래 스키마 오류를 모두 가림(두 번째 결함이 가려짐), `timezone_required`가 형식 오류를 대신함, 이벤트 문서에 불필요한 루트 `unevaluatedProperties` 오류, `observations[].location`은 스키마만 검사 | 위치 가림·루트 `unevaluatedProperties`·시각 힌트 **고침** (ADR-0067, `test_contract_problem_list_accuracy.py`). 위치 오류는 자기가 설명하는 geometry 스키마 오류만 가리고, 이벤트 루트 오류는 계약에 없는 속성만 보고하며, 시각 힌트는 그것만 틀렸을 때만 붙는다. `observations[].location` 도메인 검사는 **사람 결정** — 07번 요구사항에 위치 규칙이 없고, 계약 `observation_reject_reason`에 위치 사유가 없으며, 관측값 위치는 저장되지 않음 |
 | V10 | 정보 | 새 시험의 빈틈(끝 개행·운영 형식·비유한 수·제어 문자) | **고침** |
 
