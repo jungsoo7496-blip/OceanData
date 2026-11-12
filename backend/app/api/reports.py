@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Body, Depends, Header, Query, Request, Response
+from fastapi import APIRouter, Body, Depends, Header, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
@@ -339,7 +339,7 @@ def create_template(body: TemplateCreate, request: Request, db: Session = DB,
 
 
 @router.put("/v1/report-templates/{template_code}/versions/{version}/hwpx", tags=["reports"])
-def put_template_hwpx(template_code: str, version: int, request: Request,
+def put_template_hwpx(template_code: str, version: Annotated[int, Path(ge=1)], request: Request,
                       data: bytes = Body(..., media_type="application/octet-stream"),
                       db: Session = DB, c: Container = Depends(container),
                       p: Principal = Depends(require("report_template:write"))) -> dict:

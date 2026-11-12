@@ -55,7 +55,9 @@ def kst_representable(dt: datetime) -> bool:
 
 def latest_template(db: Session, code: str, version: int | None = None) -> ReportTemplate | None:
     q = select(ReportTemplate).where(ReportTemplate.code == code)
-    q = q.where(ReportTemplate.version == version) if version else q.order_by(ReportTemplate.version.desc())
+    # 0도 '최신'이 아니라 그 번호로 찾는다 — None일 때만 최신 (계약 점검 S32)
+    q = q.where(ReportTemplate.version == version) if version is not None else \
+        q.order_by(ReportTemplate.version.desc())
     return db.execute(q.limit(1)).scalar_one_or_none()
 
 
