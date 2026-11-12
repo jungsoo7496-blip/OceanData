@@ -37,9 +37,9 @@
 | S24 | medium | `PATCH /v1/assets/{asset_id}` | missing-audit | 구현 | 고침 (ADR-0076) |
 | S25 | medium | `PATCH /v1/assets/{asset_id}` | missing-audit | 구현 | 고침 (ADR-0076) |
 | S26 | low | `PATCH /v1/assets/{asset_id}` | wrong-status | 계약 문구 | 계약 문구 고침 (ADR-0076) |
-| S27 | medium | `GET /v1/deletion-certificates/{certificate_id}` | missing-audit | 구현 | 미처리 |
-| S28 | medium | `POST /v1/assets/{asset_id}/download-url` | missing-audit | 구현 | 미처리 |
-| S29 | low | `GET /v1/assets/{asset_id}/clips` | data-semantics | 계약 문구 | 미처리 |
+| S27 | medium | `GET /v1/deletion-certificates/{certificate_id}` | missing-audit | 구현 | 고침 |
+| S28 | medium | `POST /v1/assets/{asset_id}/download-url` | missing-audit | 구현 | 고침 |
+| S29 | low | `GET /v1/assets/{asset_id}/clips` | data-semantics | 계약 문구 | 고침 — 계약에 limit·cursor를 더하고 구현 (ADR-0077) |
 | S30 | medium | `POST /v1/reports` | data-semantics | 구현 | 미처리 |
 | S31 | low | `POST /v1/reports` | wrong-status | 구현 | 미처리 |
 | S32 | low | `PUT /v1/report-templates/{template_code}/versions/{version}/hwpx` | wrong-status | 구현 | 미처리 |
@@ -85,6 +85,9 @@
 - **S24 data_role 변경 권한 거부** — ORG_ADMIN이 아닌 사용자의 data_role 변경 403은 `PERMISSION_DENIED`(action `asset:data_role`, from·to, 대상 자산)를 남긴다. 요청이 되돌아가도 남는다. 지금 값과 같은 data_role은 거부도 감사도 없다.
 - **S25 CORE 변경의 하향·철회 감사** — 공유 등급을 내린 자산마다 `SHARE_SCOPE_DOWNGRADED`(from·to·`REVOKE_NOW`·원 자산·끊긴 권한 ID)를, 끊긴 이용 권한마다 `GRANT_REVOKED`(대상 기관은 이용 기관)를 같은 트랜잭션에 남긴다(ADR-0076). 공유 심사 WITHDRAW와 공유 등급 신청의 하향에는 권한별 `GRANT_REVOKED`가 아직 없다.
 - **S26 다른 실증사업 회차 지정** — 422 RULE_VIOLATION(condition `session.project_id=asset.project_id`)을 계약 patchAsset의 응답과 설명에 적었다. 구현은 그대로다.
+- **S27 삭제 증명 조회** — 다른 기관 ORG_ADMIN이 삭제 증명을 조회하면 404를 주고 `CROSS_ORG_ACCESS_ATTEMPT` 감사(대상 `DeletionCertificate`, 소유 기관, 경로)를 남긴다. 소유 기관 ORG_ADMIN과 운영자는 그대로 200이고, 없는 증명은 감사 없이 404다. 증명의 `deleted_at`(삭제한 시각)을 Tenant_Guard가 삭제 표시로 보므로 `load_scoped` 대신 처리기에서 감사한다.
+- **S28 운영자 다운로드 URL** — 유효한 긴급 열람 승인이 없는 운영자 요청(승인 없음·승인 전·만료·승인자가 남의 승인 사용)은 403을 주고 `PERMISSION_DENIED` 감사(`action=asset:download`, `reason=no_active_break_glass`, 대상 자산·소유 기관)를 남긴다. 감사의 요청 ID로 거절 응답을 대조할 수 있다. 같은 빈틈이 있던 비식별 검수 원본 프레임(`deid.py`)은 S17에서 고쳤다.
+- **S29 클립 작업 목록** — `limit`(기본 100, 최대 500)·`cursor`와 응답 `next_cursor`로 100건 이후의 클립 작업도 이어서 본다. 순서는 요청 시각 역순이고, 같으면 작업 ID 역순이다. 형식이 틀린 `limit`·`cursor`는 400이다. 시간대가 없거나 UTC로 바꾸면 1~9999년 밖인 커서 시각도 질의 전에 400이며, 500이나 연결 오염이 나지 않는다(ADR-0077). 포털의 더 보기 버튼은 남았다.
 
 ## datasets (버전·배포·카탈로그) — 발견 5건
 
