@@ -1,0 +1,4 @@
+{"format":"mqtt_json","topic_filter":"site/+/ctd","timestamp":{"field":"ts"},
+ "missing_values":["-999"],
+ "columns":[{"field":"temp","metric":"sea_water_temperature","unit":"degC","depth_m":1.5},
+            {"field":"sal","metric":"sea_water_salinity","unit":"PSU"}]}

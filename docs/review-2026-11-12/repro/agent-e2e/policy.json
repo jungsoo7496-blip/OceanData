@@ -1,0 +1,26 @@
+{
+  "policy_version": "pv-e2e12-1",
+  "collector_device_id": "dev_00000000000000000000000301",
+  "sources": [
+    {"device_id": "dev_00000000000000000000000302", "project_id": "prj_00000000000000000000000201",
+     "collection_mode": "C2_EVENT_CLIPS", "local_copy_policy": "ROTATING", "local_retention_days": null,
+     "allowed_data_roles": ["CORE"], "expected_interval_s": 3600, "source_timezone": "Asia/Seoul",
+     "observation_mapping_version": null},
+    {"device_id": "dev_00000000000000000000000303", "project_id": "prj_00000000000000000000000201",
+     "collection_mode": "C3_APPROVED_FULL", "local_copy_policy": "RETAINED", "local_retention_days": null,
+     "allowed_data_roles": ["CORE"], "expected_interval_s": 3600, "source_timezone": "Asia/Seoul",
+     "observation_mapping_version": null}
+  ],
+  "watch_rules": [
+    {"rule_id": "cam01", "source_device_id": "dev_00000000000000000000000302", "path_pattern": "{session}/cam01/*",
+     "include": ["*.mp4"], "exclude": ["*.tmp"], "data_type": "VIDEO", "variant": "CLIP",
+     "data_role_default": "CORE", "priority": 1},
+    {"rule_id": "sensor_csv", "source_device_id": "dev_00000000000000000000000303",
+     "path_pattern": "{session}/sensor/*", "include": ["*.csv"], "data_type": "SENSOR", "variant": "ORIGINAL",
+     "data_role_default": "CORE", "priority": 2}
+  ],
+  "timezone": "Asia/Seoul",
+  "heartbeat_interval_s": 30,
+  "size_stable_s": 2,
+  "max_parallel_parts": 2
+}

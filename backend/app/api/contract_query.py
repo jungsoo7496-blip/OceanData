@@ -17,10 +17,10 @@ from typing import Any
 
 import yaml
 from fastapi import Request
-from jsonschema import Draft202012Validator, FormatChecker
+from jsonschema import Draft202012Validator
 
 from app.errors import ProblemError
-from app.services.contracts import BASE, contracts_dir, registry
+from app.services.contracts import BASE, contract_validator, contracts_dir, registry
 
 METHODS = ("get", "post", "put", "patch", "delete")
 _NON_STRING = {"integer", "number", "boolean", "array", "object"}
@@ -104,8 +104,7 @@ def _validators() -> dict[tuple[str, str], dict[str, tuple[str, Draft202012Valid
                 schema = _rebase(p["schema"], spec)
                 kind = _schema_type(schema)
                 if kind != "other":
-                    found[p["name"]] = (kind, Draft202012Validator(schema, registry=registry(),
-                                                                   format_checker=FormatChecker()))
+                    found[p["name"]] = (kind, contract_validator(schema))
             if found:
                 out[(method.upper(), path)] = found
     return out

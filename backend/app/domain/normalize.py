@@ -26,6 +26,14 @@ class TimeRuleError(ValueError):
     """시간대 없는 시각 등 거부해야 하는 입력."""
 
 
+class NoOffsetError(TimeRuleError):
+    """시각은 읽히지만 시간대 오프셋이 없다 — 원천 시각이면 source_timestamp로 보낸다."""
+
+
+class TimeRangeError(TimeRuleError):
+    """읽히지만 UTC로 바꾸면 표현 범위를 넘는다 (예: 0001-01-01T00:00:00+23:59)."""
+
+
 def parse_rfc3339(value: str) -> datetime:
     """오프셋이 있는 RFC 3339만 받는다. 'Z' 허용."""
     try:
@@ -33,8 +41,11 @@ def parse_rfc3339(value: str) -> datetime:
     except ValueError as exc:
         raise TimeRuleError(f"시각 형식이 올바르지 않습니다: {value!r}") from exc
     if dt.tzinfo is None or dt.utcoffset() is None:
-        raise TimeRuleError(f"시간대 오프셋이 없는 시각입니다: {value!r}")
-    return dt.astimezone(UTC)
+        raise NoOffsetError(f"시간대 오프셋이 없는 시각입니다: {value!r}")
+    try:
+        return dt.astimezone(UTC)
+    except OverflowError as exc:
+        raise TimeRangeError(f"UTC로 바꿀 수 없는 시각입니다: {value!r}") from exc
 
 
 def resolve_capture_time(start: str | None, end: str | None, quality: dict[str, Any] | None,
@@ -72,29 +83,49 @@ class LocationProblem:
 
 
 def _positions(geometry: dict[str, Any]) -> list[tuple[str, Any]]:
+    """좌표 자리와 그 값. 배열이 아닌 곳은 그 자리 하나만 돌려줘 문자·키마다 문제를 만들지 않는다."""
     t, c = geometry.get("type"), geometry.get("coordinates")
     if t == "Point":
         return [("/coordinates", c)]
+    if t not in ("LineString", "Polygon") or c is None:
+        return []
+    if not isinstance(c, list):
+        return [("/coordinates", c)]
     if t == "LineString":
-        return [(f"/coordinates/{i}", p) for i, p in enumerate(c or [])]
-    if t == "Polygon":
-        return [(f"/coordinates/{r}/{i}", p) for r, ring in enumerate(c or []) for i, p in enumerate(ring)]
-    return []
+        return [(f"/coordinates/{i}", p) for i, p in enumerate(c)]
+    out: list[tuple[str, Any]] = []
+    for r, ring in enumerate(c):
+        if isinstance(ring, list):
+            out += [(f"/coordinates/{r}/{i}", p) for i, p in enumerate(ring)]
+        else:
+            out.append((f"/coordinates/{r}", ring))
+    return out
+
+
+def _number(x: Any) -> bool:
+    return isinstance(x, int | float) and not isinstance(x, bool)
 
 
 def check_location(geometry: dict[str, Any] | None, base_pointer: str = "/location") -> list[LocationProblem]:
-    """GeoJSON 좌표 범위 검사. 위도 자리 값이 ±90을 넘고 경도 자리 값이 ±90 안이면 순서 뒤바뀜으로 본다."""
+    """GeoJSON 좌표 범위 검사. 위도 자리 값이 ±90을 넘고 경도 자리 값이 ±90 안이면 순서 뒤바뀜으로 본다.
+
+    어떤 JSON이 와도 예외를 내지 않고 문제 목록을 돌려준다 (사전 검증 API가 500을 내지 않게)."""
     if geometry is None:
         return []
     if geometry.get("type") not in ("Point", "LineString", "Polygon"):
         return [LocationProblem(base_pointer + "/type", "unsupported_geometry", "Point·LineString·Polygon만 받습니다")]
-    problems = []
+    problems: list[LocationProblem] = []
     for ptr, pos in _positions(geometry):
-        if not isinstance(pos, list) or len(pos) < 2 or not all(isinstance(x, int | float) for x in pos[:2]):
+        if len(problems) >= 200:  # 응답 크기 상한(검증기가 앞 100개만 보여준다)보다 넉넉하면 충분하다
+            break
+        if not isinstance(pos, list) or len(pos) < 2 or not all(_number(x) for x in pos[:2]):
             problems.append(LocationProblem(base_pointer + ptr, "invalid_position",
                                             "좌표는 [경도, 위도] 숫자 배열입니다"))
             continue
-        lon, lat = float(pos[0]), float(pos[1])
+        try:
+            lon, lat = float(pos[0]), float(pos[1])
+        except OverflowError:  # 아주 큰 정수
+            lon = lat = math.inf
         if not (math.isfinite(lon) and math.isfinite(lat)):
             problems.append(LocationProblem(base_pointer + ptr, "invalid_position", "좌표가 유한한 수가 아닙니다"))
         elif abs(lat) > 90 and abs(lon) <= 90:

@@ -161,6 +161,11 @@ services:
     environment:
       <<: *app-env
       BACKUP_DATABASE_URL: ${BACKUP_DATABASE_URL:-${MIGRATION_DATABASE_URL}}
+      # 웹훅 전송·운영자 알림은 워커만 한다 (ADR-0041·0050). 서명 비밀과 전송 간격은 API 컨테이너에 넘기지 않는다
+      ALERT_WEBHOOK_SECRET: ${ALERT_WEBHOOK_SECRET:-}
+      WEBHOOK_DISPATCH_INTERVAL_S: ${WEBHOOK_DISPATCH_INTERVAL_S:-10}
+      WEBHOOK_BACKOFF_BASE_S: ${WEBHOOK_BACKOFF_BASE_S:-30}
+      WEBHOOK_BACKOFF_MAX_S: ${WEBHOOK_BACKOFF_MAX_S:-21600}
     command: ["python", "-m", "app.workers.main"]
     depends_on:
       migrate: {condition: service_completed_successfully}

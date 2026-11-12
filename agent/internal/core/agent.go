@@ -388,18 +388,20 @@ func hashFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// manifest는 업로드 등록 본문과 그 Idempotency-Key를 만든다. 키는 본문(client.local_collection_id 제외)의 정본 JSON을
+// 해시한 값이다 — 서버는 같은 키에 다른 본문이 오면 409 IDEMPOTENCY_CONFLICT로 거부하므로, 키가 본문의 함수여야 같은 파일의
+// 재시도는 처음 응답을 되받고(본문이 같다) 다른 본문(다른 파일 이름·에이전트 버전·정책)은 새 요청이 된다 (ADR-0054, 지시서 12번 F1).
+// 같은 내용이 새로 와도 서버가 체크섬으로 ALREADY_REGISTERED 또는 진행 중 세션을 돌려주므로 중복 자산은 생기지 않는다.
 func (a *Agent) manifest(p *api.Policy, f *state.File, abs string) (map[string]any, string) {
 	rule := findRule(p, f.RuleID)
 	dtype, variant := dataTypeOf(rule, f.RelPath), variantOf(rule)
-	idemSrc := strings.Join([]string{f.SourceDeviceID, f.SHA256, variant, f.SessionLabel, rule.RuleID}, "|")
-	sum := sha256.Sum256([]byte(idemSrc))
-	localID := "lc-" + hex.EncodeToString(sum[:])[:32]
+	client := map[string]any{"kind": "AGENT", "version": a.Version}
 	m := map[string]any{
 		"schema_version": SchemaVersion, "source_system_id": f.SourceDeviceID, "watch_rule_id": rule.RuleID,
 		"data_type": dtype, "variant": variant, "data_role": rule.DataRoleDefault,
 		"file": map[string]any{"original_filename": filepath.Base(abs), "original_relative_path": f.RelPath,
 			"byte_size": f.Size, "checksum_sha256": f.SHA256, "mime_type": rules.MimeType(abs)},
-		"client": map[string]any{"kind": "AGENT", "version": a.Version, "local_collection_id": localID},
+		"client": client,
 	}
 	if f.SessionLabel != "" {
 		m["session_label"] = f.SessionLabel
@@ -413,6 +415,11 @@ func (a *Agent) manifest(p *api.Policy, f *state.File, abs string) (map[string]a
 		}
 	}
 	m["timestamp_quality"] = tq
+	// map은 키 순서로 직렬화되므로 같은 본문은 항상 같은 바이트다. 실패할 수 없는 값만 들어 있다.
+	canon, _ := json.Marshal(m)
+	sum := sha256.Sum256(canon)
+	localID := "lc-" + hex.EncodeToString(sum[:])[:32]
+	client["local_collection_id"] = localID
 	return m, localID
 }
 

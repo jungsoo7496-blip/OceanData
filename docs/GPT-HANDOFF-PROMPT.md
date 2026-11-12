@@ -170,7 +170,7 @@ wip가 없는 항목은 `git switch -c gpt/<NN>-<주제> --no-track origin/fix/b
 **11) 계약 대비 구현 점검 — 완료 (2026-11-12, HANDOFF 0장 -1am)** — 발견 27건 중 1·5번은 이전에 반영했고 이 항목에서 23건을 처리했다. 4번의 명시적 null은 400으로 거부한다. 14·20번의 동시 멱등 요청과 4번의 응답 뒤 롤백은 5번에서 처리한다.
 점검하지 못한 두 묶음(`datasets·sharing·deid·assets`, `reports·records·contracts·uploads`, 작업 약 70개)은 상한이 없는 일이라 **맨 마지막, 사용량이 남을 때만** 같은 방식(계약 설명 ↔ 구현 비교 → 재현 → 수정)으로 한다.
 
-**12) 독립 검토를 못 받은 병합분 검토 (L)** — 웹훅 전송 격리(ADR-0041), 구간 클립 보안 보완(ADR-0033 갱신), 기기 토큰 범위 축소, 계약 검증기, XLSX 수식 방어, 업로드 정리 SAVEPOINT. 문제를 찾으면 재현 시험부터 쓰고 고친다.
+**12) 독립 검토를 못 받은 병합분 검토 — 완료 (2026-11-12, HANDOFF 0장 -1an, `docs/review-2026-11-12/`)** — 실제 Go 에이전트를 격리된 로컬 스택에 붙여 확인했고(기기 범위 축소는 에이전트를 깨지 않았다) 웹훅 전송 격리·구간 클립 권한과 업로드 정리·계약 검증기와 XLSX 방어를 서로 다른 읽기 전용 검토자가 재현으로 검토했다. 재현 시험부터 쓰고 고친 것: 에이전트 멱등 키(ADR-0054), 삭제 순서·법적 보류 경합·C0 유령 객체(ADR-0055), 검증기와 내보내기(ADR-0056), 웹훅 URL 경로 토큰 로그(ADR-0057), 검증 재개·잠금 순서(ADR-0058). 고치지 않은 것(웹훅 라운드 장벽 등)과 사람 결정은 `docs/review-2026-11-12/README.md`. 아래는 당시 지시와 확인 절차다.
 **기기 토큰 범위 축소**(`Permission_Table` 'device' 표시 + Tenant_Guard 기기 범위)는 서버 쪽 시험(`backend/tests/integration/test_device_reach.py`, `test_ingest.py`·`test_agents.py`의 기기 토큰 부분)은 있지만, **실제 Go 에이전트를 실제 서버에 붙여 에이전트 경로 전체(정책·매핑·하트비트·업로드·관측값·이벤트·영수증)를 지나가 보는 시험은 없다** — `tools/go_acceptance.py`는 `go test` 결과를 수용 보고서로 옮길 뿐 실제 서버와 도는 시험이 아니다.
 직접 확인한다: `make up && make seed` → 등록 코드 발급(`docker compose --env-file .env -f deploy/compose/docker-compose.yml run --rm migrate python -m app.cli enrollment-code -h`로 인자 확인) → `make agent-build` →
 `agent/bin/marine-agent enroll --server http://localhost:8000 --code <코드> --watch-root <합성 폴더> --dir <임시 폴더>`(`agent/README.md`) → `run`으로 합성 mp4 한 개를 올려 `GET /v1/me`·정책·매핑·하트비트·업로드·관측값·이벤트·영수증이

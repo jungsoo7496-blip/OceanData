@@ -26,3 +26,4 @@
 - [x] 24. 합성 회차로 T11 시험, 인용 자산 격리 시 근거 손상·알림 시험 — 요구사항 8.1, 8.2 · `tests/acceptance/test_t11_reports.py`
 - [x] 25. 08번 연결: 인용 자산 삭제 시 영향 목록(`retention.affected_by`) — 08번 요구사항 3.6, 5.3, 5.4
 - [x] 26. 제출 보고서와 자산 응답의 근거 공개 범위 적용 — 요구사항 3.2, 5.3, 6.2, 7.1 · 지표·역추적·부모 자산 ID에 Tenant_Guard 적용, 소유 기관의 근거 손상 이력 보존, 타 기관 손상 원인과 PDF·XLSX 안내 필터, 원래 파일명·상대 경로 사용자 제한 · ADR-0047 · 시험 `test_t11_reports.py`, `test_asset_provenance.py`
+- [x] 27. 보고서 내보내기의 XML 제어 문자·속성 따옴표 처리 — 요구사항 4.5 · XLSX 예외(500)와 HWPX 비정상 XML이던 것 · `test_report_control_chars.py` (ADR-0056, 지시서 12번)

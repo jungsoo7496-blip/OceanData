@@ -18,7 +18,8 @@
 | `internal/logx`, `internal/sysinfo` | 크기 순환 로그, 디스크 여유(Windows/Unix) | 11.4, 6.3 |
 
 ## 결정
-- 멱등 키: `Idempotency-Key` = sha256(원천 장비|파일 해시|variant|회차 표시값|규칙)의 앞 32자 (`client.local_collection_id`와 같음).
+- 멱등 키: `Idempotency-Key` = `lc-` + sha256(매니페스트 본문 정본 JSON, `client.local_collection_id` 제외)의 앞 32자 (`client.local_collection_id`와 같음).
+  서버가 같은 키·다른 본문을 409로 거부하므로 키는 본문의 함수다. 같은 내용을 다른 이름으로 복사해도 영구 실패하지 않고 `ALREADY_REGISTERED`로 간다 (ADR-0054).
 - 서버 RULE_VIOLATION(422)은 "정책 제외"로 기록 — 서버 판단을 따른다 (2.4). QUOTA_EXCEEDED·RATE_LIMITED·STORAGE_UNAVAILABLE·CONFLICT는 백오프 재시도. 그 밖의 4xx는 FAILED.
 - 세션 만료(410)·없음(404)이면 처음부터 다시 만든다. 대기 중 파일이 바뀌면 다시 판정한다.
 - 계약 변경: `agent-heartbeat.schema.json`에 `policy_excluded`(정수) 추가 — 정책 제외 건수 보고 (2.4).

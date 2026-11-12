@@ -54,8 +54,11 @@ def _problems_to_400(problems: list[Any], rejected: bool) -> None:
         raise ProblemError("UNSUPPORTED_SCHEMA_VERSION", detail=problems[0].message)
     errors = [x for x in problems if x.severity == "ERROR"]
     if errors:
-        raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": x.pointer, "code": x.code, "message": x.message}
-                                                       for x in errors])
+        shown = [{"pointer": x.pointer, "code": x.code, "message": x.message} for x in errors[:contracts.MAX_PROBLEMS]]
+        if len(errors) > contracts.MAX_PROBLEMS:  # 응답이 요청보다 커지지 않게 앞의 문제만 보여준다
+            notice = contracts.truncation_notice()
+            shown.append({"pointer": notice.pointer, "code": notice.code, "message": notice.message})
+        raise ProblemError("VALIDATION_ERROR", errors=shown)
 
 
 def _source_device(db: Session, c: Container, request: Request, p: Principal, device_id: str) -> Device:
@@ -76,7 +79,13 @@ def post_observations(request: Request, body: Any = Body(...), db: Session = Dep
     if isinstance(body, dict) and isinstance(body.get("observations"), list) and \
             len(body["observations"]) > c.settings.observation_batch_max:
         raise ProblemError("PAYLOAD_TOO_LARGE", detail=f"배치 항목은 {c.settings.observation_batch_max}개까지입니다")
-    problems, rejected = contracts.validate_document("observation-batch", body)
+    # 항목별 판정(REJECTED 사유)에는 모든 항목의 문제가 필요하므로 목록을 100개에서 자르지 않는다.
+    # (잘리면 뒤쪽 잘못된 항목이 검사 없이 통과한다.) 항목 수 한도가 있어 5만 개를 넘는 일은 방어용이다
+    problems, rejected = contracts.validate_document("observation-batch", body, limit=contracts.ITEM_PROBLEM_LIMIT)
+    if contracts.is_truncated(problems):  # 항목별로 가릴 수 없으니 배치 전체를 거부한다
+        _problems_to_400(problems, False)
+        raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "", "code": "too_many_problems",
+                                                        "message": "문제가 너무 많아 배치를 검사하지 못했습니다"}])
     # 항목의 시각·결측 표기·항목 코드 문제는 400이 아니라 항목별 REJECTED (요구사항 1.3, 2.2, 2.4).
     # 그 밖의 형식 오류는 배치 전체 400, 아무것도 저장하지 않는다 (요구사항 1.2)
     item_reasons: dict[int, str] = {}

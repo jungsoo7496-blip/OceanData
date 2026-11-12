@@ -99,6 +99,32 @@ class DeletionRefused(Exception):
         self.code, self.detail, self.affected = code, detail, affected or []
 
 
+class DeletionStorageFailed(Exception):
+    """저장소가 일부 객체를 지우지 못했다 — 삭제를 확정하지 않는다.
+
+    이미 지운 객체는 다시 요청하면 '이미 없음'으로 넘어간다 (ADR-0055)."""
+
+    def __init__(self, failed: list[dict[str, str]]) -> None:
+        super().__init__(f"저장소 객체 {len(failed)}개를 지우지 못했습니다")
+        self.failed = failed
+
+
+def _purge_object(place: Any, key: str, asset_id: str) -> bool:
+    """객체 하나를 지운다. 이미 없으면 지운 것이다. 지웠는지 확인되지 않으면 False.
+
+    삭제 호출이 실패해도 객체가 실제로 없으면(이미 지워졌다) 성공으로 본다. 있거나 확인할 수 없으면 실패다."""
+    try:
+        place.storage.delete_object(place.bucket, key)
+        return True
+    except Exception as exc:  # noqa: BLE001 - 아래에서 실제로 남았는지 확인한다
+        log.warning("delete_object_failed", extra={"asset_id": asset_id, "tier": place.tier,
+                                                   "error_type": type(exc).__name__})
+    try:
+        return bool(place.storage.head_object(place.bucket, key) is None)
+    except Exception:  # noqa: BLE001 - 확인할 수 없으면 지웠다고 말하지 않는다
+        return False
+
+
 def with_descendants(db: Session, roots: list[Asset], *, lock: bool = False) -> list[Asset]:
     """원 자산을 지우면 그 파생본도 함께 지운다 (계보로 찾음).
 
@@ -191,6 +217,7 @@ def delete_assets(c: Container, db: Session, *, organization_id: str, assets: li
     aborted = _abort_pending_uploads(c, db, organization_id, assets)
     now = c.clock.now()
     objects: list[dict[str, Any]] = []
+    purge: list[tuple[Any, str, str]] = []  # (계층, 객체 키, 자산 ID) — DB가 받아들인 뒤에 지운다
     backed_up = False
     q = db.execute(select(OrgQuota).where(OrgQuota.organization_id == organization_id).with_for_update()) \
         .scalar_one_or_none()
@@ -199,17 +226,13 @@ def delete_assets(c: Container, db: Session, *, organization_id: str, assets: li
 
     used = tiers.in_use(c, db)
     for a in assets:
-        if a.asset_id not in aborted and a.storage_key and a.storage_zone:
+        # 바이너리가 없는 자산(C0, 취소된 업로드의 흔적)에는 지울 객체가 없다 — 증명에도 넣지 않는다
+        if a.asset_id not in aborted and a.has_binary and a.storage_key and a.storage_zone:
             # 쓰는 모든 계층에서 지운다: 계층 이동 중 사본·유예 중인 원래 객체도 남기지 않는다 (08번 요구사항 9)
-            for place in tiers.zone_places(c, a.storage_zone, used):
-                try:
-                    place.storage.delete_object(place.bucket, a.storage_key)
-                except Exception as exc:  # noqa: BLE001 - 이미 없는 객체도 삭제 완료로 본다
-                    log.warning("delete_object_failed", extra={"asset_id": a.asset_id, "tier": place.tier,
-                                                               "error_type": type(exc).__name__})
+            purge.extend((place, a.storage_key, a.asset_id) for place in tiers.zone_places(c, a.storage_zone, used))
             objects.append({"asset_id": a.asset_id, "object_key": a.storage_key, "checksum_sha256": a.checksum_sha256,
                             "byte_size": a.byte_size})
-            if q is not None and a.has_binary:
+            if q is not None:
                 if a.storage_zone == "QUARANTINE":
                     q.quarantine_bytes = max(0, q.quarantine_bytes - a.byte_size)
                 else:
@@ -225,7 +248,10 @@ def delete_assets(c: Container, db: Session, *, organization_id: str, assets: li
         # 독립 백업 사본은 백업 보존 주기가 끝나면 사라진다 (요구사항 5.2)
         backup_copies_expire_at=now + timedelta(days=c.settings.backup_retention_days) if backed_up else None)
     db.add(cert)
-    db.flush()
+    db.flush()  # DB 제약(사유의 NUL 등)이 걸리면 여기서 멈춘다 — 저장소 객체는 아직 그대로다
+    failed = [{"asset_id": aid, "tier": place.tier} for place, key, aid in purge if not _purge_object(place, key, aid)]
+    if failed:  # 못 지운 객체를 '지웠다'고 증명하지 않는다. 호출자가 트랜잭션을 되돌린다 (재시도하면 이어서 지운다)
+        raise DeletionStorageFailed(failed)
     return cert
 
 
@@ -287,11 +313,23 @@ def execute_expired(c: Container, db: Session, now: datetime) -> list[DeletionCe
             by_org.setdefault(a.organization_id, []).append(a)
     certs = []
     for org, assets in sorted(by_org.items()):
-        certs.append(delete_assets(c, db, organization_id=org, assets=assets, scope="RETENTION",
-                                   target_id=f"retention-{now.date().isoformat()}", reason="보존 기간 만료",
-                                   requested_by="SERVICE", confirm_affected=False))
+        try:
+            # 기관마다 따로 확정한다: 저장소 삭제가 실패한 기관의 DB 변경만 되돌리고 앞 기관의 삭제는 남긴다 (ADR-0055)
+            with db.begin_nested():
+                cert = delete_assets(c, db, organization_id=org, assets=assets, scope="RETENTION",
+                                     target_id=f"retention-{now.date().isoformat()}", reason="보존 기간 만료",
+                                     requested_by="SERVICE", confirm_affected=False)
+        except DeletionStorageFailed as exc:
+            log.error("retention_delete_failed", extra={"organization_id": org, "objects": len(exc.failed)})
+            c.notifier.send(Notification(
+                kind="retention.delete_failed", organization_id=None, subject="보존 만료 삭제 실패",
+                body=f"기관 {org}: 저장소 객체 {len(exc.failed)}개를 지우지 못해 이번 삭제를 확정하지 않았습니다. "
+                     "저장소가 돌아오면 다음 실행이 이어서 지웁니다",
+                data={"organization_id": org, "objects": len(exc.failed)}))
+            continue
+        certs.append(cert)
         c.audit.record("RETENTION_DELETED", actor_kind="SERVICE", actor_id="retention", organization_id=org,
-                       target_type="DeletionCertificate", target_id=certs[-1].certificate_id,
+                       target_type="DeletionCertificate", target_id=cert.certificate_id,
                        details={"count": len(assets)})
     return certs
 

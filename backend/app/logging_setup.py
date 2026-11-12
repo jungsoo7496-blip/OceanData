@@ -97,6 +97,10 @@ def configure_logging(level: str = "INFO") -> None:
     for noisy in ("uvicorn.access",):
         logging.getLogger(noisy).handlers[:] = []
         logging.getLogger(noisy).propagate = False
+    # httpx는 요청마다 전체 URL을 INFO로 남긴다. 웹훅 URL은 경로에 토큰을 담기도 하는데(Slack 방식) 로그 정리기는 쿼리만
+    # 지우므로, HTTP 라이브러리 로거는 WARNING 이상만 남긴다 (security.md: 토큰을 로그에 남기지 않는다, ADR-0057)
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
     for name in ("uvicorn", "uvicorn.error"):
         logging.getLogger(name).handlers[:] = []
         logging.getLogger(name).propagate = True

@@ -21,3 +21,4 @@
 - [x] 19. oapi-codegen v2.8.2 계약 → Go SDK 생성·재생성 검사·영수증 어댑터 연결 — tech.md 2장 · ADR-0025. 투영 의미 보존/참조 경계 5개·실제 HTTP 인증/재시도·전체 Go 컴파일·재생성 일치 통과. 생성 타입은 전체 JSON Schema 검증을 대신하지 않음
 - [x] 20. 파서 퍼즈 시험 5곳(MP4 mvhd·감시 규칙 경로와 `{session}`·MQTT 매핑·업데이트 서명 검증·서버 오류 응답) + MP4 creation_time 넘침 수정 — 요구사항 4.2, 2.1, 13.2, 12.1 · `make agent-fuzz FUZZTIME=90s`(CI 밖). 찾은 실패 입력은 `testdata/fuzz/`에 남아 `agent-test`의 회귀 시험.
 - [x] 21. 정책 숫자 기술 상한·이전 정책 유지·Retry-After와 토큰 시간 변환·mvhd 크기 검사 — 요구사항 2.2, 3.1, 4.2, 5.1, 6.1, 7.3, 9.1 · 정책 저장·조회·초안 호환 시험 `test_device_policy_bounds.py`, 에이전트 회귀시험 `policy_bounds_test.go`, `client_test.go`, `mp4_test.go` · ADR-0040
+- [x] 22. Idempotency-Key를 매니페스트 본문에서 만든다 — 요구사항 4.3, 5.4 · 같은 내용을 다른 이름으로 복사하면 키는 같고 본문(파일명·경로)이 달라 409 IDEMPOTENCY_CONFLICT로 영구 실패하던 문제(지시서 12번 E2E 발견 F1). 시험 `TestSameContentUnderNewNameIsNotAnIdempotencyConflict`, `TestIdempotencyKeyFollowsTheRequestBody` (ADR-0054)

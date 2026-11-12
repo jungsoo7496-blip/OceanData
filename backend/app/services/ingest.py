@@ -414,6 +414,8 @@ class IngestService:
             if up.asset_was_metadata_only:
                 # 바이너리 없는 C0 자산으로 되돌린다 (domain.md 5장 표에 없는 역전이 — 확인 필요, tasks 참고)
                 asset.ingest_status, asset.has_binary, asset.variant = "READY_PRIVATE", False, "ORIGINAL"
+                # 객체는 만들어진 적이 없다 — 저장 위치를 남기면 삭제 증명에 없는 객체가 올라간다
+                asset.storage_zone, asset.storage_key = None, None
             else:
                 # 받은 것이 없는 새 자산 기록은 지운다. 같은 파일을 다시 올릴 수 있게 한다.
                 # parent_ref로 만든 계보 행(이 자산이 파생본이거나, 진행 중인 다른 업로드가 이 자산을 원본으로
@@ -597,7 +599,10 @@ class IntegrityVerifier:
         with self.c.sessionmaker.begin() as db:
             asset = db.execute(select(Asset).where(Asset.asset_id == asset_id).with_for_update()).scalar_one()
             revalidate = asset.ingest_status == "VALIDATING" and asset.storage_zone == "QUARANTINE"
-            if asset.ingest_status != "RECEIVED" and not revalidate:
+            # 앞선 시도가 VALIDATING을 확정한 뒤 죽었거나 실패했으면(임대 만료·스트림 오류) 이어서 끝낸다.
+            # 검증은 객체를 다시 읽는 작업이고 등록·정산은 아래 두 번째 트랜잭션 한 번이라 되풀이해도 안전하다(ADR-0058)
+            resume = asset.ingest_status == "VALIDATING" and not revalidate
+            if asset.ingest_status != "RECEIVED" and not revalidate and not resume:
                 return asset.ingest_status  # 이미 처리됨 (작업 재실행)
             # 규칙 오류로 RECEIVED 자산이 VALIDATING에 남지 않도록 전이 전에 한 버전을 고정한다.
             rules = load_rules(db)
@@ -634,6 +639,8 @@ class IntegrityVerifier:
         scanned = scan.finish() if scan is not None else None
         with self.c.sessionmaker.begin() as db:
             asset = db.execute(select(Asset).where(Asset.asset_id == asset_id).with_for_update()).scalar_one()
+            if asset.ingest_status != "VALIDATING":
+                return asset.ingest_status  # 겹쳐 돈 다른 실행이 먼저 등록·격리했다 (임대 만료로 작업이 겹칠 수 있다)
             reason = None
             if scanned is not None:  # 검사 기록 (엔진·결과만, 내용은 남기지 않는다)
                 asset.ingest_context = {**(asset.ingest_context or {}), "malware_scan": {
@@ -662,17 +669,20 @@ class IntegrityVerifier:
                     # 쌓이지 않는다. 완료 시점에 파트 크기를 신고 크기와 맞춰 보므로 받은 객체 크기와도 같다
                     quota.settle(asset.organization_id, reserved, to="quarantine", actual=asset.byte_size)
                 return "QUARANTINED"
-            if revalidate:  # 격리 존에서 정식 위치(HOT)로 되돌리고 격리 사용량을 사용량으로 옮긴다
+            if revalidate:  # 격리 존에서 정식 위치(HOT)로 되돌린다
                 asset.quarantine_reason = None
                 tiers.relocate(self.c, asset, zone=zone_for(asset.variant), key=object_key(asset))
-                q = quota._row(asset.organization_id)
-                q.quarantine_bytes = max(0, q.quarantine_bytes - asset.byte_size)
-                q.used_bytes += asset.byte_size
             asset.ingest_status = states.transition("ingest_status", "VALIDATING", "REGISTERED", {"SERVICE"})
             apply_rules(asset, rules, self.c.clock.now())
             asset.updated_at = self.c.clock.now()
             append_integrity(db, asset, self.c.clock.now())
-            if not revalidate:  # 재검증은 위에서 격리 사용량을 사용량으로 옮겼다
+            # 잠금 순서는 다른 파생 작업(record_derived)과 같게 '무결성 로그 → 쿼터 행'이다.
+            # 재검증이 쿼터 행을 먼저 잡으면 교착이 나고, 피해자가 되면 객체는 옮겨졌는데 DB는 되돌아간다 (ADR-0058)
+            if revalidate:  # 격리 사용량을 사용량으로 옮긴다
+                q = quota._row(asset.organization_id)
+                q.quarantine_bytes = max(0, q.quarantine_bytes - asset.byte_size)
+                q.used_bytes += asset.byte_size
+            else:
                 quota.settle(asset.organization_id, reserved, to="used", actual=asset.byte_size)  # 통과면 size와 같다
             if asset.data_type != "VIDEO":  # 프록시가 필요 없는 유형 (05번이 영상 프록시를 만든다)
                 asset.ingest_status = states.transition("ingest_status", "REGISTERED", "READY_PRIVATE", {"SERVICE"})

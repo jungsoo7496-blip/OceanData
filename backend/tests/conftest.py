@@ -42,11 +42,19 @@ def user_token(subject: str, *, mfa: bool = False, org: str | None = None, exp_s
 
 
 class FakeStorage:
+    """객체 저장소가 필요 없는 시험용. 어떤 객체도 없는 저장소처럼 동작한다(삭제는 성공, 조회는 '없음')."""
+
     def __init__(self) -> None:
         self.ok = True
 
     def check(self) -> bool:
         return self.ok
+
+    def delete_object(self, bucket: str, key: str) -> None:
+        return None
+
+    def head_object(self, bucket: str, key: str) -> None:
+        return None
 
 
 class StaticIdentity(KeycloakIdentity):

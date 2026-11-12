@@ -35,3 +35,5 @@
 - 취소·만료된 C0 시작 세션의 UPLOADING → READY_PRIVATE 역전이를 domain.md 5장 표에 추가할지
 - LineageEdge.relation에 SAMPLE_FRAME이 없다. 현장 샘플 프레임은 THUMBNAIL로 기록 중 — 계약에 값을 추가할지
 - [x] 23. 업로드 취소·만료 정리가 계보 행 때문에 멈추던 것 수정 — 요구사항 3.3, 3.4(정리·예약 해제), 1.5(예약) · `parent_ref` 업로드의 asset_lineage 행을 먼저 지우고, 만료 정리는 세션마다 SAVEPOINT(한 줄 실패가 모든 기관의 정리를 막지 않음). 시험 `test_upload_release.py`. **남음(검토 2, `docs/review-2026-11-05/`):** 체크섬 격리 재수집 정책(#5)·업로드 중 삭제(#6)
+- [x] 30. 무결성 검증 재개와 재검증 잠금 순서 — 요구사항 4.2, 4.4, 4.6 · VALIDATING 확정 뒤 워커가 죽거나 스트림 오류가 나면 자산이 영구히 VALIDATING에 남고 예약이 새던 것, 겹친 실행은 한 번만 등록, 재검증의 무결성 로그 → 쿼터 행 순서 · `test_verify_resume.py` (ADR-0058, 지시서 12번). `RECEIVED` 정지(검사기 부재 5회 실패)는 domain.md 변경이라 사람 결정
+- [ ] 31. 웹훅 전송의 기관 간 격리(라운드 장벽 제거) — 요구사항 8.2, 8.3 · 한 기관의 응답 없는 수신 서버가 모든 기관의 전송을 라운드마다 제한 시간만큼 늦춘다. 재현 `test_webhook_cross_tenant_isolation.py`(strict xfail). 독살 이벤트·구독 비활성화 의미와 함께 ADR로 정한 뒤 고친다 (지시서 12번 웹훅 F1·F5)

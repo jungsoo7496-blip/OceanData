@@ -54,13 +54,14 @@ type fakeServer struct {
 	seq         int
 	receipts    map[string]api.Receipt
 	receiptGets int
+	idemBody    map[string]string // Idempotency-Key → 본문 해시 (실제 서버의 run_idempotent처럼 다른 본문이면 409)
 	// override가 true를 돌려주면 그 요청에는 override가 응답한 것이다 (시험별 응답 주입, f.mu를 잡은 채 부른다)
 	override func(w http.ResponseWriter, r *http.Request) bool
 }
 
 func newFake(t *testing.T) *fakeServer {
 	f := &fakeServer{t: t, uploads: map[string]*fakeUpload{}, bySHA: map[string]string{}, putCount: map[string]int{},
-		failPutOnce: map[int]bool{}, receipts: map[string]api.Receipt{}}
+		failPutOnce: map[int]bool{}, receipts: map[string]api.Receipt{}, idemBody: map[string]string{}}
 	f.policy = api.Policy{PolicyVersion: "pv-1", CollectorDeviceID: collector, Timezone: "Asia/Seoul",
 		HeartbeatIntervalS: 60, SizeStableS: 1, MaxParallelParts: 2,
 		Sources: []api.Source{{DeviceID: camera, CollectionMode: "C3_APPROVED_FULL", AllowedDataRoles: []string{"CORE"}},
@@ -138,6 +139,17 @@ func (f *fakeServer) handle(w http.ResponseWriter, r *http.Request) {
 	case p == "/v1/uploads" && r.Method == "POST":
 		var m map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&m)
+		if key := r.Header.Get("Idempotency-Key"); key != "" {
+			// 실제 서버(backend/app/services/idempotency.py)와 같게: 같은 키로 다른 본문이 오면 409 IDEMPOTENCY_CONFLICT.
+			canon, _ := json.Marshal(m)
+			sum := sha256.Sum256(canon)
+			h := hex.EncodeToString(sum[:])
+			if prev, seen := f.idemBody[key]; seen && prev != h {
+				f.json(w, 409, map[string]any{"status": 409, "code": "IDEMPOTENCY_CONFLICT"})
+				return
+			}
+			f.idemBody[key] = h
+		}
 		file := m["file"].(map[string]any)
 		sha := file["checksum_sha256"].(string)
 		if _, ok := f.bySHA[sha]; ok {

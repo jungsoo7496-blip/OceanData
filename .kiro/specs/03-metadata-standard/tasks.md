@@ -18,3 +18,4 @@
 - [x] 16. 장비 정책 조회 (저장본 없으면 장비 표로 기본 정책) — 요구사항 1.3 일부 · 원천 매핑 전 빈 기본 정책과 저장 정책의 원천 제약은 test_empty_default_device_policy.py · ADR-0051
 - [x] 17. 약정·연계 카드 등록 API — 요구사항 1.4, 1.5 · `GET/POST /v1/agreements`, `POST /v1/agreements/{id}/end`, `GET/POST /v1/integration-cards`, `GET /v1/integration-cards/{id}`, `POST …/versions`, `set-policy --integration-card` · 시험 `tests/integration/test_onboarding.py` · ADR-0028 (화면은 09번, 실제 카드 양식은 확인 필요)
 - [x] 18. 품질 집계 `GET /v1/quality-reports`(회차·기간, 기관 범위, 상위 사유 10개) — 요구사항 10.1 · G1 계약에 있었지만 라우트가 없어 404만 돌려주던 것을 구현. 시험 `tests/integration/test_quality_reports.py`, 같은 누락을 막는 계약-라우트 일치 시험 `tests/contract/test_route_parity.py`
+- [x] 19. 계약 검증기 보강 — 요구사항 13.1, 13.2 · 유한한 수만 number, 끝 개행을 통과시키던 `$` 패턴, 운영 이미지에서 꺼져 있던 `date-time`, 어떤 JSON에도 예외 없이 문제로 돌려주기, 문제 목록 100개 상한 (사전 검증과 운영 업로드가 같은 결과) · `test_contract_validator_hardening.py`·`test_contract_validator_api.py` (ADR-0056, 지시서 12번)

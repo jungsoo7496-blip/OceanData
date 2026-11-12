@@ -18,6 +18,25 @@ METRIC_STATUS = {"OK": "확정", "NO_DATA": "데이터 없음", "NEEDS_VERIFICAT
 MIME = {"PDF": "application/pdf", "XLSX": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "HWPX": "application/hwp+zip"}
 PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z0-9_.]+)\s*\}\}")
+# XML 1.0이 글자로 허용하지 않는 코드 포인트(NUL·탭/줄바꿈/CR을 뺀 C0 제어 문자·U+FFFE·U+FFFF·낱개 서로게이트).
+# XLSX(openpyxl)는 이런 문자가 있으면 예외를 내고, HWPX(양식 XML 치환)는 파서가 못 읽는 파일이 된다 (ADR-0056).
+_XML_ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+_ATTR_ENTITIES = {'"': "&quot;", "'": "&apos;"}  # 양식의 속성 값 안에 값이 들어가도 속성을 끼워 넣지 못하게
+
+
+def xml_safe(text: str) -> str:
+    return _XML_ILLEGAL.sub("", text)
+
+
+def _clean(node: Any) -> Any:
+    """렌더링 모델의 모든 문자열에서 XML이 담을 수 없는 문자를 뺀다 (보이지 않는 제어 문자라 내용은 달라지지 않는다)."""
+    if isinstance(node, str):
+        return xml_safe(node)
+    if isinstance(node, dict):
+        return {k: _clean(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_clean(v) for v in node]
+    return node
 
 
 def metric_text(m: dict[str, Any]) -> str:
@@ -98,6 +117,7 @@ def render_xlsx(doc: dict[str, Any]) -> bytes:
     from openpyxl import Workbook
     from openpyxl.styles import Font
 
+    doc = _clean(doc)
     wb = Workbook()
     ws = wb.active
     ws.title = "보고서"
@@ -191,7 +211,7 @@ def render_hwpx(template: bytes, doc: dict[str, Any]) -> bytes:
     values = hwpx_values(doc)
 
     def sub(m: re.Match[str]) -> str:
-        return xml_escape(values.get(m.group(1), m.group(0)))
+        return xml_escape(xml_safe(values.get(m.group(1), m.group(0))), _ATTR_ENTITIES)
 
     src = zipfile.ZipFile(io.BytesIO(template))
     out = io.BytesIO()

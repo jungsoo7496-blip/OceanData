@@ -121,6 +121,10 @@ class LegalHold(BaseModel):
 def set_legal_hold(asset_id: str, body: LegalHold, request: Request, db: Session = Depends(get_db),
                    c: Container = Depends(container), p: Principal = Depends(require("legal_hold:set"))) -> dict:
     a = load_scoped(db, c, request, Asset, asset_id, p)
+    # 삭제와 같은 순서로 자산 행을 잠근다: 겹치면 먼저 잡은 쪽이 끝난 뒤 다른 쪽이 최신 값으로 판단한다.
+    # (잠그지 않으면 삭제가 먼저 끝난 자산에 보류가 '성공'하거나, 보류가 확정되기 전에 삭제가 지나갔다)
+    if not retention.lock_live(db, [a.asset_id]):  # 기다리는 사이 삭제됐다 — 삭제된 자산은 보이지 않는다
+        raise ProblemError("NOT_FOUND")
     a.legal_hold, a.legal_hold_reason, a.updated_at = body.hold, body.reason if body.hold else None, c.clock.now()
     c.audit.record("LEGAL_HOLD_SET" if body.hold else "LEGAL_HOLD_RELEASED", principal=p,
                    organization_id=a.organization_id, target_type="Asset", target_id=a.asset_id, reason=body.reason,
@@ -146,6 +150,10 @@ def _delete(c: Container, db: Session, request: Request, p: Principal, assets: l
                                        confirm_affected=body.confirm_affected)
     except retention.DeletionRefused as exc:
         raise ProblemError("CONFLICT", detail=exc.detail, extra={"affected": exc.affected}) from None
+    except retention.DeletionStorageFailed:  # 못 지운 객체가 있다 — 삭제는 확정되지 않았다. 다시 요청하면 이어서 지운다
+        raise ProblemError("STORAGE_UNAVAILABLE", headers={"Retry-After": "30"},
+                           detail="저장소가 일부 객체를 지우지 못해 삭제를 확정하지 않았습니다. "
+                                  "잠시 뒤 같은 요청을 다시 보내세요") from None
     c.audit.record("ASSET_DELETED", principal=p, organization_id=p.organization_id, target_type=scope.title(),
                    target_id=target_id, reason=body.reason, source_ip=client_ip(request),
                    details={"certificate_id": cert.certificate_id, "assets": len(roots)})
