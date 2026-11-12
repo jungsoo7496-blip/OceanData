@@ -8,6 +8,7 @@
 1. 워커 상태: `$COMPOSE ps worker`, `$COMPOSE logs --tail 200 worker`.
 2. 멈춤이면 `$COMPOSE restart worker`. 반복되면 실패 작업 유형(`worker_job_failures_total{job_type,error_code}`)을 보고 해당 스펙 문서로.
 3. GPU 적체: `GPU_ENABLED`와 `job_policies.gpu_fallback` 확인(05번). 우선순위 조정은 `python -m app.cli set-policy`.
-4. 큰 적체가 풀린 뒤 FAILED 자산 재처리(운영자).
+4. 큰 적체가 풀린 뒤 FAILED 자산 재처리(운영자). 검증 작업이 FAILED인데 자산이 `RECEIVED`에 남은 것은 재처리 대상이 아니다 —
+   [11-verify-stuck-received.md](11-verify-stuck-received.md)의 `requeue-verify`로 다시 넣는다.
 
 **완료 확인:** `worker_jobs_queued`가 줄고 PROCESSING_BACKLOG 경보 해제, 새 업로드가 READY_PRIVATE까지 진행.
