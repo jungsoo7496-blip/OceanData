@@ -85,7 +85,7 @@ SKIP LOCKED 청구(4 스레드·구독 15·이벤트 180에서 중복 전송 0)�
 | V6 | 중간~낮음 | 제어 문자가 있는 문구로 XLSX 내보내기 500, HWPX는 파서가 못 읽는 파일을 200으로 보냄 | **고침** (ADR-0056, `test_report_control_chars.py`) |
 | V7 | 낮음 | HWPX: 속성 값 안의 따옴표로 속성 삽입 / UTF-8이 아닌 양식이 PUT은 통과하고 내보내기 500 / ZIP 경로 검사가 POSIX만 | 따옴표 **고침**, 나머지 **미완** |
 | V8 | 낮음 | PDF: 한계 크기 기록 1건에 13.7초(동기 엔드포인트, 상한 없음). 기본 URL 가져오기 허용 | **미완** — 워커로 옮기고 시간·기록 수 상한, 가져오기 금지 |
-| V9 | 낮음 | 위치 오류가 /location 아래 스키마 오류를 모두 가림(두 번째 결함이 가려짐), `timezone_required`가 형식 오류를 대신함, 이벤트 문서에 불필요한 루트 `unevaluatedProperties` 오류, `observations[].location`은 스키마만 검사 | 시각 힌트만 **고침**, 나머지 **미완** |
+| V9 | 낮음 | 위치 오류가 /location 아래 스키마 오류를 모두 가림(두 번째 결함이 가려짐), `timezone_required`가 형식 오류를 대신함, 이벤트 문서에 불필요한 루트 `unevaluatedProperties` 오류, `observations[].location`은 스키마만 검사 | 위치 가림·루트 `unevaluatedProperties`·시각 힌트 **고침** (ADR-0067, `test_contract_problem_list_accuracy.py`). 위치 오류는 자기가 설명하는 geometry 스키마 오류만 가리고, 이벤트 루트 오류는 계약에 없는 속성만 보고하며, 시각 힌트는 그것만 틀렸을 때만 붙는다. `observations[].location` 도메인 검사는 **사람 결정** — 07번 요구사항에 위치 규칙이 없고, 계약 `observation_reject_reason`에 위치 사유가 없으며, 관측값 위치는 저장되지 않음 |
 | V10 | 정보 | 새 시험의 빈틈(끝 개행·운영 형식·비유한 수·제어 문자) | **고침** |
 
 XLSX 잔여(정보): 저장 형식을 CSV로 바꿔 열면 `quotePrefix`가 사라져 `=…` 필드가 수식으로 해석될 수 있다(스프레드시트 앱 동작). 전각 `＝＋－＠`는 Excel(ko/ja)에서 평가 여부 **확인 필요**.
