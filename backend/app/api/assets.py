@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import DB, client_ip, container, load_scoped, page_params, require
 from app.api.pagination import paginate
 from app.container import Container
-from app.db.models import Asset, TrialSession
+from app.db.models import Asset, Grant, TrialSession
 from app.domain import states
 from app.domain.normalize import generalize_location
 from app.domain.principal import Principal
@@ -130,8 +130,14 @@ def patch_asset(asset_id: str, body: AssetPatch, request: Request, db: Session =
                                                         "message": "바꿀 항목이 하나 이상 필요합니다"}])
     a = load_scoped(db, c, request, Asset, asset_id, p)
     now = c.clock.now()
+    old_role = a.data_role
+    downgraded: list[tuple[Asset, str, list[str]]] = []  # CORE 변경으로 등급을 내린 자산, 이전 등급, 끊은 권한
     if body.data_role is not None and body.data_role != a.data_role:
         if not p.has_role("ORG_ADMIN"):
+            # 권한 거부 감사 (security.md). 요청이 되돌아가도 남게 따로 커밋한다 — require()의 거부와 같다
+            c.audit.record("PERMISSION_DENIED", result="DENIED", principal=p, organization_id=a.organization_id,
+                           target_type="Asset", target_id=a.asset_id, source_ip=client_ip(request),
+                           details={"action": "asset:data_role", "from": a.data_role, "to": body.data_role})
             raise ProblemError("FORBIDDEN", detail="data_role 변경은 ORG_ADMIN만 할 수 있습니다")
         if not body.reason:
             raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/reason", "code": "required",
@@ -141,13 +147,12 @@ def patch_asset(asset_id: str, body: AssetPatch, request: Request, db: Session =
 
             for x in [a, *sharing.descendants(db, a.asset_id)]:
                 if x.sharing_scope not in ("PRIVATE", "PROGRAM_REVIEW"):
-                    sharing.downgrade(c, db, x, "PROGRAM_REVIEW", "REVOKE_NOW", p.principal_id,
-                                      f"data_role CORE 변경: {body.reason}")
+                    before = x.sharing_scope
+                    revoked = sharing.downgrade(c, db, x, "PROGRAM_REVIEW", "REVOKE_NOW", p.principal_id,
+                                                f"data_role CORE 변경: {body.reason}")
+                    downgraded.append((x, before, revoked))
                 if x.share_status != "NONE" and x is a:
                     x.share_status = states.transition("share_status", x.share_status, "NONE", p.roles)
-        c.audit.record("DATA_ROLE_CHANGED", principal=p, organization_id=a.organization_id, target_type="Asset",
-                       target_id=a.asset_id, reason=body.reason, source_ip=client_ip(request),
-                       details={"from": a.data_role, "to": body.data_role})
         a.data_role = body.data_role
     if body.location_precision is not None:
         a.location_precision = body.location_precision if a.location else None
@@ -171,7 +176,33 @@ def patch_asset(asset_id: str, body: AssetPatch, request: Request, db: Session =
             raise ProblemError("CONFLICT", detail="등록된 자산의 회차는 바꿀 수 없습니다")
     a.updated_at = now
     db.flush()
+    if a.data_role != old_role:
+        _audit_reclassified(c, db, request, p, a, old_role, body.reason, downgraded)
     return asset_views(db, [a], p)[0]
+
+
+def _audit_reclassified(c: Container, db: Session, request: Request, p: Principal, a: Asset, old_role: str,
+                        reason: str | None, downgraded: list[tuple[Asset, str, list[str]]]) -> None:
+    """data_role 변경과 그에 따른 공유 등급 하향·이용 권한 철회 감사 (security.md, 13번 요구사항 2.2·10.3).
+
+    모든 검사와 flush를 통과한 뒤 요청 트랜잭션에 쓴다. 같은 요청의 회차 지정 등이 실패해 변경이 되돌아가면
+    감사도 남지 않는다 (ADR-0053, ADR-0076)."""
+    conn, ip = db.connection(), client_ip(request)
+    c.audit.record("DATA_ROLE_CHANGED", principal=p, organization_id=a.organization_id, target_type="Asset",
+                   target_id=a.asset_id, reason=reason, source_ip=ip, details={"from": old_role, "to": a.data_role},
+                   connection=conn)
+    for x, before, revoked in downgraded:
+        c.audit.record("SHARE_SCOPE_DOWNGRADED", principal=p, organization_id=x.organization_id,
+                       target_type="Asset", target_id=x.asset_id, reason=reason, source_ip=ip,
+                       details={"from": before, "to": x.sharing_scope, "existing_grant_handling": "REVOKE_NOW",
+                                "cause": "DATA_ROLE_CHANGED", "origin_asset_id": a.asset_id,
+                                "revoked_grant_ids": revoked}, connection=conn)
+        for grant_id in revoked:  # 수동 철회(POST /v1/grants/{id}/revoke)와 같은 행 — 대상 기관은 이용 기관
+            g = db.get(Grant, grant_id)
+            assert g is not None  # noqa: S101 - 방금 철회한 행
+            c.audit.record("GRANT_REVOKED", principal=p, organization_id=g.organization_id, target_type="Grant",
+                           target_id=g.grant_id, reason=reason, source_ip=ip,
+                           details={"cause": "SHARE_SCOPE_DOWNGRADED", "asset_id": x.asset_id}, connection=conn)
 
 
 @router.get("/v1/assets/{asset_id}/receipt")

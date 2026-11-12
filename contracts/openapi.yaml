@@ -1854,7 +1854,10 @@ paths:
       tags: [assets]
       operationId: patchAsset
       summary: 회차 지정·data_role 변경(ORG_ADMIN, 사유 필수)·위치 공개 정밀도
-      description: sharing_scope는 여기서 바꿀 수 없다 (share-requests 사용).
+      description: |
+        sharing_scope는 여기서 바꿀 수 없다 (share-requests 사용).
+        session_id는 자산과 같은 실증사업의 회차여야 한다. 다른 실증사업의 회차면 422 RULE_VIOLATION
+        (unmet_conditions의 condition `session.project_id=asset.project_id`).
       x-freeze: G1
       requestBody:
         required: true
@@ -1872,6 +1875,7 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
 
   /v1/assets/{asset_id}/receipt:
