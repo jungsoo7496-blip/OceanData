@@ -178,9 +178,16 @@ def delete_session_assets(session_id: str, body: DeletionRequest, request: Reque
 
 
 @router.get("/v1/deletion-certificates/{certificate_id}", tags=["assets"])
-def get_certificate(certificate_id: str, db: Session = DB,
+def get_certificate(certificate_id: str, request: Request, db: Session = DB, c: Container = Depends(container),
                     p: Principal = Depends(require("deletion_certificate:read"))) -> dict:
+    # load_scoped는 쓰지 않는다: 증명의 deleted_at(삭제한 시각)을 Tenant_Guard가 '삭제 표시'로 보고 모두 숨긴다.
+    # 범위는 전과 같다 — 자기 기관 ORG_ADMIN과 운영자. 다른 기관 증명은 404와 교차 기관 시도 감사 (02번 요구사항 2.2)
     cert = db.get(DeletionCertificate, certificate_id)
-    if cert is None or (cert.organization_id != p.organization_id and not p.has_role("PLATFORM_OPERATOR")):
+    if cert is None:
+        raise ProblemError("NOT_FOUND")
+    if cert.organization_id != p.organization_id and not p.has_role("PLATFORM_OPERATOR"):
+        c.audit.record("CROSS_ORG_ACCESS_ATTEMPT", result="DENIED", principal=p, organization_id=cert.organization_id,
+                       target_type="DeletionCertificate", target_id=certificate_id, source_ip=client_ip(request),
+                       details={"path": request.url.path})
         raise ProblemError("NOT_FOUND")
     return retention.certificate_view(cert)
