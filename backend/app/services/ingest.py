@@ -120,6 +120,17 @@ class Resolved:
     session_id: str | None
 
 
+class UploadCleanupFailed(ProblemError):
+    """업로드 정리(멀티파트 중단·완성 객체 확인·삭제)를 저장소 오류로 마치지 못했다 (ADR-0065).
+
+    세션·예약·자산 기록은 바꾸지 않는다. 요청에는 503 STORAGE_UNAVAILABLE(Retry-After)로 답하고, 만료 정리기는 기록한 뒤
+    다음 주기에 다시 시도한다. error_type은 저장소 예외의 이름이다(로그용, 주소·멀티파트 ID는 담지 않는다)."""
+
+    def __init__(self, error_type: str) -> None:
+        super().__init__("STORAGE_UNAVAILABLE", headers={"Retry-After": "30"})
+        self.error_type = error_type
+
+
 class IngestService:
     def __init__(self, c: Container, db: Session) -> None:
         self.c, self.db = c, db
@@ -238,7 +249,7 @@ class IngestService:
                 Upload.upload_id == active.upload_id, Upload.status == "UPLOADING").with_for_update(skip_locked=True))
             if locked is None:
                 raise ProblemError("CONFLICT", detail="기존 업로드를 처리 중입니다. 잠시 뒤 다시 시도하세요")
-            self._release(active, "EXPIRED", require_cleanup=True)
+            self._release(active, "EXPIRED")  # 저장소 정리를 확인하지 못하면 503 (새 세션을 열지 않는다)
             if not active.asset_was_metadata_only:
                 existing = None  # 바이너리를 받은 적 없는 신규 자산 기록은 삭제됐다
 
@@ -383,28 +394,34 @@ class IngestService:
         return up
 
     def _expire_if_needed(self, up: Upload) -> None:
+        # 저장소 정리를 확인하지 못하면 _release가 503(UploadCleanupFailed)을 올리고 세션은 UPLOADING으로 남는다
         if up.status == "UPLOADING" and up.expires_at <= self.c.clock.now() and self._release(up, "EXPIRED"):
             self.db.commit()  # 410을 돌려주기 전에 정리를 확정한다 (요구사항 3.3)
             raise ProblemError("GONE", detail="업로드 세션이 만료되었습니다")
         if up.status in ("EXPIRED", "ABORTED"):
             raise ProblemError("GONE", detail="만료되었거나 취소된 업로드입니다")
 
-    def _release(
-        self, up: Upload, final: str, *, require_cleanup: bool = False, preserve_asset: bool = False,
-    ) -> bool:
+    def _release(self, up: Upload, final: str, *, preserve_asset: bool = False) -> bool:
+        """진행 중 세션을 끝낸다(ABORTED·EXPIRED): 저장소 정리 → 예약 해제 → 자산 기록 정리. 이미 끝난 세션이면 False.
+
+        저장소 정리가 끝났다고 확인될 때만 세션을 끝낸다 (ADR-0065). 멀티파트 중단의 NoSuchUpload는 이미 정리된 것이다
+        (어댑터가 성공으로 돌려준다). 이 키에 완성 객체가 있으면(저장소 완료 뒤 DB 확정 전에 요청이 죽었다) 지운다.
+        그 밖의 저장소 실패는 UploadCleanupFailed(503)로 알리고 아무것도 바꾸지 않는다 — 호출자가 트랜잭션을 되돌리면
+        세션·예약이 그대로 남아 다시 시도할 수 있다. 삭제 경로(preserve_asset)는 완성 객체를 지우지 않고 409다
+        (ADR-0046).
+        """
         self.db.refresh(up, with_for_update=True)
         if up.status != "UPLOADING":
             return False
         try:
             self.c.storage.abort_multipart_upload(up.bucket, up.object_key, up.s3_upload_id)
-            completed_object = preserve_asset and self.c.storage.head_object(up.bucket, up.object_key) is not None
-        except Exception as exc:  # noqa: BLE001 - 이미 정리된 멀티파트일 수 있다
-            log.warning("abort_multipart_failed", extra={"error_type": type(exc).__name__})
-            if require_cleanup or preserve_asset:
-                raise ProblemError("STORAGE_UNAVAILABLE", headers={"Retry-After": "30"}) from None
-        else:
-            if completed_object:
+            stored = self.c.storage.head_object(up.bucket, up.object_key)
+        except Exception as exc:  # noqa: BLE001 - 정리됐는지 확인하지 못했다. 세션을 끝내지 않는다
+            raise self._cleanup_failed(up, "abort_multipart", exc) from None
+        if stored is not None:
+            if preserve_asset:
                 raise ProblemError("CONFLICT", detail="저장소에 완료 객체가 있어 업로드 중단을 확인할 수 없습니다")
+            self._remove_completed_object(up)
         self.quota.settle(up.organization_id, up.reserved_bytes, to=None)
         up.status, up.reserved_bytes, up.updated_at = final, 0, self.c.clock.now()
         if preserve_asset:
@@ -425,6 +442,39 @@ class IngestService:
                 self.db.delete(asset)
         self.db.flush()
         return True
+
+    def _remove_completed_object(self, up: Upload) -> None:
+        """끝내는 세션의 키에 남은 완성 객체를 지운다. 지웠다고 확인돼야 돌아온다 (ADR-0065).
+
+        DB가 UPLOADING인데 객체가 있으면 저장소 완료 뒤 DB 확정 전에 요청이 죽은 것이다. 세션을 끝내면 이 업로드의
+        자산 기록은 지워지거나(새 자산) 바이너리 없는 C0 기록으로 돌아가므로, 객체를 남기면 어느 자산도 가리키지 않고
+        쿼터에도 세지 않는 객체가 된다. 다른 살아 있는 자산이 같은 키를 가리키면 그 자산의 객체이므로 지우지 않는다.
+        삭제 호출이 실패해도 객체가 실제로 없으면 지운 것이다(retention._purge_object와 같은 기준, ADR-0055).
+        """
+        holder = self.db.scalar(select(Asset.asset_id).where(
+            Asset.organization_id == up.organization_id, Asset.storage_key == up.object_key,
+            Asset.deleted_at.is_(None), Asset.has_binary.is_(True),
+            # 이 업로드의 자산(UPLOADING)은 아래에서 지우거나 되돌리므로 객체를 가진 것으로 보지 않는다
+            or_(Asset.asset_id != up.asset_id, Asset.ingest_status != "UPLOADING")).limit(1))
+        if holder is not None:
+            log.warning("upload_cleanup_object_kept", extra={"upload_id": up.upload_id, "asset_id": holder})
+            return
+        try:
+            self.c.storage.delete_object(up.bucket, up.object_key)
+        except Exception as exc:  # noqa: BLE001 - 실제로 남았는지 아래에서 확인한다
+            try:
+                gone = self.c.storage.head_object(up.bucket, up.object_key) is None
+            except Exception:  # noqa: BLE001 - 확인할 수 없으면 지웠다고 보지 않는다
+                gone = False
+            if not gone:
+                raise self._cleanup_failed(up, "delete_object", exc) from None
+        log.info("upload_completed_object_removed", extra={"upload_id": up.upload_id})
+
+    @staticmethod
+    def _cleanup_failed(up: Upload, step: str, exc: Exception) -> UploadCleanupFailed:
+        log.warning("upload_cleanup_failed", extra={"upload_id": up.upload_id, "step": step,
+                                                    "error_type": type(exc).__name__})
+        return UploadCleanupFailed(type(exc).__name__)
 
     def upload_status(self, up: Upload) -> dict[str, Any]:
         asset = self.db.get(Asset, up.asset_id) if up.asset_id else None
@@ -489,7 +539,7 @@ class IngestService:
         if not wrong:
             return {part.part_number: part for part in stored}
         log.warning("upload_part_size_mismatch", extra={"upload_id": up.upload_id, "parts": len(wrong)})
-        self._release(up, "ABORTED", require_cleanup=True)
+        self._release(up, "ABORTED")  # 정리를 확인하지 못하면 503, 세션·예약 유지
         self.db.commit()  # 409를 돌려주기 전에 취소·예약 해제를 확정한다
         raise ProblemError("CONFLICT", detail="올린 파트 크기가 신고한 파일 크기(byte_size)와 다릅니다. 업로드를 "
                                               "취소했습니다 — 새 업로드로 다시 보내세요",
@@ -553,6 +603,8 @@ def sweep_expired(c: Container, limit: int = 100) -> int:
     잡은 기관 쿼터 행 잠금을 다음 세션들의 저장소 호출 내내 쥐게 되어 그동안 같은 기관의 새 업로드 예약이 기다린다.
     다른 요청(완료·취소)이나 다른 정리기가 잠근 세션은 기다리지 않고 건너뛴다. 한 세션이 실패해도(기록하고 넘어간다)
     다른 세션 정리와 그 뒤 주기 작업은 막히지 않는다. 돌려주는 값은 정리에 성공한 세션 수다.
+    저장소 정리를 확인하지 못한 세션은 그 트랜잭션을 되돌려 UPLOADING·예약을 그대로 두고, 다음 주기에 다시 시도한다
+    (ADR-0065). 오류 로그에는 업로드 ID와 저장소 예외 이름만 남긴다.
     """
     now = c.clock.now()
     expired = (Upload.status == "UPLOADING", Upload.expires_at <= now)
@@ -567,8 +619,8 @@ def sweep_expired(c: Container, limit: int = 100) -> int:
                                 .with_for_update(skip_locked=True)).one_or_none()
                 released = up is not None and IngestService(c, db)._release(up, "EXPIRED")
         except Exception as exc:  # noqa: BLE001 - 한 세션의 실패가 묶음 전체를 막지 않게 한다
-            log.error("expired_upload_release_failed", extra={"upload_id": upload_id,
-                                                              "error_type": type(exc).__name__})
+            error_type = exc.error_type if isinstance(exc, UploadCleanupFailed) else type(exc).__name__
+            log.error("expired_upload_release_failed", extra={"upload_id": upload_id, "error_type": error_type})
             continue
         done += int(released)
     return done

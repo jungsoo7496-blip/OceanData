@@ -46,7 +46,7 @@ fileMatchPattern: ["backend/app/api/**", "contracts/**", "web/src/api/**", "agen
 | UNSUPPORTED_SCHEMA_VERSION | 422 | 다른 주버전, 또는 서버가 모르는 더 높은 부버전 (스키마 검증 전에 먼저 확인) |
 | RATE_LIMITED | 429 | 호출 제한 (`Retry-After` 헤더) |
 | INTERNAL | 500 | 서버 오류 |
-| STORAGE_UNAVAILABLE | 503 | 스토리지 장애로 업로드 세션을 열 수 없음 (`Retry-After`) |
+| STORAGE_UNAVAILABLE | 503 | 스토리지 장애로 업로드 세션을 열거나 완료·취소·만료 정리를 확인할 수 없음 (`Retry-After`, 세션·예약은 그대로, ADR-0065) |
 | SERVICE_UNAVAILABLE | 503 | 점검·의존 시스템 장애, 과부하(요청이 몰려 DB 작업 차례를 받지 못함, `Retry-After`) — 과부하는 어느 작업에서나 날 수 있다 (ADR-0062) |
 
 ## 요청·응답
