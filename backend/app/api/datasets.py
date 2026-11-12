@@ -44,6 +44,22 @@ def _versions_with_org(org: str) -> Any:
     return select(DatasetVersion.dataset_id).where(DatasetVersion.provider_organization_ids.any(org))  # type: ignore[arg-type]
 
 
+def _not_found(db: Session, c: Container, request: Request, p: Principal, model: type[Grant] | type[AccessRequest],
+               ident: str) -> ProblemError:
+    """역할별 조회(_requests_for·_grants_for)에서 빠진 행. 다른 기관 행이면 교차 기관 시도로 감사한다.
+
+    load_scoped와 같은 기록이다 (security.md, 02번 요구사항 2.2). 행의 기관은 이용기관(organization_id)이고,
+    같은 기관인데 역할 범위 밖이면 교차 기관이 아니다(tenant.get_scoped와 같은 규칙). 응답은 없는 행과 같은
+    404이고, 감사는 되돌려지는 요청 트랜잭션과 따로 확정한다 (ADR-0053)."""
+    pk = model.__mapper__.primary_key[0]
+    owner = db.execute(select(model.organization_id).where(pk == ident)).scalar_one_or_none()
+    if owner is not None and owner != p.organization_id:
+        c.audit.record("CROSS_ORG_ACCESS_ATTEMPT", result="DENIED", principal=p, organization_id=owner,
+                       target_type=model.__name__, target_id=ident, source_ip=client_ip(request),
+                       details={"path": request.url.path})
+    return ProblemError("NOT_FOUND")
+
+
 def _load_dataset(db: Session, p: Principal, dataset_id: str) -> Dataset:
     ds = db.get(Dataset, dataset_id)
     if ds is None:
@@ -297,7 +313,7 @@ def decide_access_request(access_request_id: str, body: Decision, request: Reque
     req = db.execute(_requests_for(db, p).where(AccessRequest.access_request_id == access_request_id)
                      .with_for_update()).scalar_one_or_none()
     if req is None:
-        raise ProblemError("NOT_FOUND")
+        raise _not_found(db, c, request, p, AccessRequest, access_request_id)
     v = db.get(DatasetVersion, req.dataset_version_id)
     assert v is not None  # noqa: S101 - FK
     try:
@@ -351,7 +367,7 @@ def revoke_grant(grant_id: str, body: Revoke, request: Request, db: Session = DB
                  c: Container = Depends(container), p: Principal = Depends(require("grant:revoke"))) -> dict:
     g = db.execute(_grants_for(p).where(Grant.grant_id == grant_id).with_for_update()).scalar_one_or_none()
     if g is None:
-        raise ProblemError("NOT_FOUND")
+        raise _not_found(db, c, request, p, Grant, grant_id)
     datasets.revoke(c, db, g, set(p.roles), p.principal_id, body.reason)
     c.audit.record("GRANT_REVOKED", principal=p, organization_id=g.organization_id, target_type="Grant",
                    target_id=g.grant_id, reason=body.reason, source_ip=client_ip(request))
@@ -364,7 +380,7 @@ def confirm_destruction(grant_id: str, request: Request, db: Session = DB,
                         p: Principal = Depends(require("grant:confirm_destruction"))) -> dict:
     g = db.execute(_grants_for(p).where(Grant.grant_id == grant_id).with_for_update()).scalar_one_or_none()
     if g is None:
-        raise ProblemError("NOT_FOUND")
+        raise _not_found(db, c, request, p, Grant, grant_id)
     if g.status not in ("REVOKED", "EXPIRED") or g.destruction_confirmed_at is not None:
         raise ProblemError("CONFLICT", detail="철회·만료된 권한에 한 번만 제출합니다")
     g.destruction_confirmed_at = c.clock.now()
@@ -385,7 +401,7 @@ def create_distribution(body: DistributionCreate, request: Request, db: Session 
                         p: Principal = Depends(require("distribution:create"))) -> dict:
     g = db.execute(_grants_for(p).where(Grant.grant_id == body.grant_id)).scalar_one_or_none()
     if g is None:
-        raise ProblemError("NOT_FOUND")
+        raise _not_found(db, c, request, p, Grant, body.grant_id)
     try:
         out = datasets.distribute(c, db, g, p.principal_id, body.paths)
     except datasets.GrantInactive as exc:
