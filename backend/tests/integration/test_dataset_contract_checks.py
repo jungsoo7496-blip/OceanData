@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.db.models import DatasetVersion
-from app.seed import DEV_A_CAMERA, DEV_B_CAMERA, ORG_A, ORG_B, PRJ_A, PRJ_B
+from app.seed import DEV_A_CAMERA, DEV_B_CAMERA, ORG_A, ORG_B, PRJ_A, PRJ_B, fid
 from app.services import datasets
 from tests.acceptance.test_t08_t15_sharing import CARD, approved_pair, share
 from tests.contract.openapi_contract import assert_matches_contract as check
@@ -109,3 +109,45 @@ def test_queued_version_checks_data_card_before_building(ictx) -> None:
     # 카드가 맞으면 지금처럼 202 BUILDING
     r = _post_queued(ctx, path, {**body, "data_card": CARD})
     assert r.status_code == 202 and r.json()["status"] == "BUILDING", r.text
+
+
+# ---- S05: item_asset_ids는 계약 형식(asset_id·중복 없음)
+
+
+def test_version_item_ids_follow_contract_format(ictx) -> None:
+    ctx = ictx
+    a, b = _shared_pair(ctx)
+    ds = _dataset(ctx)
+    path = f"/v1/datasets/{ds}/versions"
+    key = {**ctx.as_user(OP), "Idempotency-Key": "dsa-s05-item-ids-0001"}
+
+    r = ctx.client.post(path, headers=key, json={"version": "1.0.0", "data_card": CARD,
+                                                 "item_asset_ids": [a["deid"], b["deid"], a["deid"]]})
+    check(r, "POST", VERSIONS)
+    assert r.status_code == 400 and r.json()["code"] == "VALIDATION_ERROR", r.text
+    assert [(e["pointer"], e["code"]) for e in r.json()["errors"]] == [("/item_asset_ids/2", "unique")]
+
+    r = ctx.client.post(path, headers=ctx.as_user(OP), json={"version": "1.0.0", "data_card": CARD,
+                                                             "item_asset_ids": [a["deid"], "not-an-asset-id"]})
+    check(r, "POST", VERSIONS)
+    assert r.status_code == 400 and r.json()["code"] == "VALIDATION_ERROR", r.text
+    assert [e["pointer"] for e in r.json()["errors"]] == ["/item_asset_ids/1"]
+
+    # 큰 버전(작업 큐) 경로도 같은 검사
+    r = _post_queued(ctx, path, {"version": "1.0.0", "data_card": CARD,
+                                 "item_asset_ids": [a["deid"], b["deid"], b["deid"]]})
+    assert r.status_code == 400 and r.json()["errors"][0]["pointer"] == "/item_asset_ids/2", r.text
+    assert ctx.c.queue.claim(["dataset_build"], "t", ("CPU",)) is None
+
+    # 형식은 맞는데 없는 자산은 지금처럼 422 RULE_VIOLATION (공유 조건 미충족)
+    r = ctx.client.post(path, headers=ctx.as_user(OP), json={"version": "1.0.0", "data_card": CARD,
+                                                             "item_asset_ids": [fid("ast", 999)]})
+    check(r, "POST", VERSIONS)
+    assert r.status_code == 422 and r.json()["code"] == "RULE_VIOLATION", r.text
+
+    # 거부된 본문은 버전도 멱등 키도 남기지 않는다: 같은 키로 올바른 본문을 보내면 새로 만든다
+    g = ctx.client.get(f"/v1/datasets/{ds}", headers=ctx.as_user(OP))
+    assert g.json()["versions"] == []
+    r = ctx.client.post(path, headers=key, json={"version": "1.0.0", "data_card": CARD,
+                                                 "item_asset_ids": [a["deid"], b["deid"]]})
+    assert r.status_code == 201 and r.json()["manifest"]["item_count"] == 2, r.text

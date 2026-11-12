@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import JSONResponse
@@ -111,17 +111,38 @@ def get_dataset(dataset_id: str, db: Session = DB, c: Container = Depends(contai
     return _view(db, c, p, _load_dataset(db, p, dataset_id))
 
 
+ASSET_ID = r"^ast_[0-9A-HJKMNP-TV-Z]{26}$"  # common.schema.json#/$defs/asset_id
+MAX_ITEM_ERRORS = 100
+
+
 class VersionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
-    item_asset_ids: list[str] = Field(min_length=1, max_length=20000)
+    item_asset_ids: list[Annotated[str, Field(pattern=ASSET_ID)]] = Field(min_length=1, max_length=20000)
     data_card: dict[str, Any]
+
+
+def _duplicate_items(ids: list[str]) -> list[dict[str, str]]:
+    """계약의 uniqueItems: 앞에서 이미 나온 ID 자리마다 오류 하나 (앞의 MAX_ITEM_ERRORS개까지)."""
+    seen: set[str] = set()
+    out: list[dict[str, str]] = []
+    for i, x in enumerate(ids):
+        if x in seen:
+            out.append({"pointer": f"/item_asset_ids/{i}", "code": "unique", "message": "자산 ID가 중복됐습니다"})
+            if len(out) == MAX_ITEM_ERRORS:
+                break
+        seen.add(x)
+    return out
 
 
 @router.post("/v1/datasets/{dataset_id}/versions", status_code=201)
 def create_version(dataset_id: str, body: VersionCreate, request: Request, db: Session = DB,
                    c: Container = Depends(container), p: Principal = Depends(require("dataset:write")),
                    idempotency_key: str | None = Header(default=None)) -> JSONResponse:
+    dup = _duplicate_items(body.item_asset_ids)
+    if dup:  # 조용히 합치지 않는다. 멱등 기록을 남기기 전에 거부한다
+        raise ProblemError("VALIDATION_ERROR", errors=dup)
+
     def create() -> tuple[int, dict]:
         ds = db.get(Dataset, dataset_id, with_for_update=True)
         if ds is None:
@@ -129,7 +150,7 @@ def create_version(dataset_id: str, body: VersionCreate, request: Request, db: S
         if db.execute(select(DatasetVersion).where(DatasetVersion.dataset_id == ds.dataset_id,
                                                    DatasetVersion.version == body.version)).scalar() is not None:
             raise ProblemError("CONFLICT", detail="같은 버전이 이미 있습니다 (버전은 바꿀 수 없고 새 번호로 만든다)")
-        ids = sorted(set(body.item_asset_ids))
+        ids = sorted(body.item_asset_ids)  # 중복은 위에서 400
         if len(ids) > c.settings.dataset_sync_max_items:  # 큰 버전은 작업 큐에서 (13번 작업 32)
             bv, job_id = datasets.start_build(c, db, ds, body.version, ids, body.data_card, p.principal_id)
             c.audit.record("DATASET_VERSION_BUILD_STARTED", principal=p, target_type="DatasetVersion",
