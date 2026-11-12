@@ -4433,6 +4433,7 @@ paths:
       tags: [datasets]
       operationId: createAccessRequest
       summary: 이용 신청 (데이터셋 버전 하나)
+      description: 기간의 시작·끝 날짜는 달력에 있는 날짜여야 한다(2월 30일·13월은 400). 이용 기간은 끝 날짜 다음 날 0시(UTC)에 끝나므로 끝 날짜는 9999-12-30까지이고 9999-12-31은 400이다. 끝 날짜가 시작 날짜보다 빠르면 422.
       x-freeze: G5
       parameters:
         - {$ref: '#/components/parameters/IdempotencyKey'}

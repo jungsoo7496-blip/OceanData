@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -249,6 +250,19 @@ class Period(BaseModel):
     model_config = ConfigDict(extra="forbid")
     start_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     end_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def _calendar_date(cls, value: str, info: ValidationInfo) -> str:
+        """형식만 맞고 달력에 없는 날짜(2월 30일·13월)는 400 (계약 format: date). 문자열 그대로 두어 멱등 지문을
+        바꾸지 않는다. 이용 기간 끝은 끝 날짜 다음 날 0시라 date.max는 끝 날짜가 될 수 없다 (계약 점검 S07)."""
+        try:
+            day = date.fromisoformat(value)
+        except ValueError:
+            raise ValueError("달력에 있는 날짜여야 합니다") from None
+        if info.field_name == "end_date" and day == date.max:
+            raise ValueError("끝 날짜는 9999-12-30까지입니다 (이용 기간은 끝 날짜 다음 날 0시에 끝납니다)")
+        return value
 
 
 class AccessCreate(BaseModel):
