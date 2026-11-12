@@ -111,6 +111,21 @@ def max_scope_for(f: Facts) -> str:
     return best
 
 
+def scope_after_change(current: str, before: Facts, after: Facts) -> str:
+    """사실(분류 지정 등)이 바뀐 뒤 둘 수 있는 가장 높은 등급 (지금 등급 이하, ADR-0074).
+
+    이번 변경으로 새로 충족하지 못하게 된 조건만 본다. 바뀌기 전에도 지금 등급에서 충족하지 못하던 조건
+    (2단 약정 만료 등)은 여기서 문제 삼지 않는다 — 그 조건은 이용 권한을 줄 때 따로 본다.
+    승인은 모두 있다고 본다(max_scope_for와 같다).
+    """
+    approvals = {"ORG_ADMIN", "PLATFORM_OPERATOR"}
+    known = {u.condition for u in evaluate(current, before, approvals)}
+    for s in reversed(SCOPES[:LEVEL[current] + 1]):
+        if all(u.condition in known for u in evaluate(s, after, approvals)):
+            return s
+    return SCOPES[0]
+
+
 def dataset_scope(item_scopes: Iterable[str]) -> str:
     """데이터셋 버전의 등급은 항목 중 가장 낮은 등급 (domain.md 4장)."""
     scopes = list(item_scopes)

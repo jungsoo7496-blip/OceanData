@@ -2137,6 +2137,11 @@ paths:
       tags: [sharing]
       operationId: classifyAsset
       summary: 운영자의 민감도·개인정보 비해당 지정 (근거 점검 기록 참조 필수, 감사)
+      description: >-
+        더 엄격한 분류로 이 자산이나 그 파생본(원 자산들의 가장 엄격한 sensitivity_class를 물려받는다)이 지금 sharing_scope의 조건(domain.md 4장)을
+        새로 충족하지 못하게 되면, 그 자산들의 sharing_scope를 조건을 충족하는 가장 높은 등급으로 함께 내리고 그 자산이 든 데이터셋 버전의
+        이용 권한을 즉시 철회한다(REVOKE_NOW). 예: L2 이상에서 SECURITY → L1, L4에서 RESTRICTED → L3 또는 L2. 내린 자산은 감사 기록
+        ASSET_CLASSIFIED에 남긴다. 바뀌기 전부터 충족하지 못하던 조건(2단 약정 만료 등)만으로는 내리지 않는다 (ADR-0074).
       x-freeze: G4
       x-status: draft
       requestBody:

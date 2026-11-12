@@ -169,6 +169,22 @@ def downgrade(c: Container, db: Session, a: Asset, target: str, handling: str, b
     on_downgrade(c, db, a, handling, by, reason)
 
 
+def lower_after_classification(c: Container, db: Session, before: dict[str, rules.Facts], family: list[Asset],
+                               by: str, reason: str, now: datetime) -> list[dict[str, str]]:
+    """분류 지정 뒤 자신·파생본의 등급을 다시 본다 (요구사항 3.6·4.6, domain.md 3장 상속, ADR-0074).
+
+    before는 바꾸기 전에 모은 사실이다. 이번 변경으로 지금 등급의 조건을 새로 충족하지 못하게 된 자산은 조건을 충족하는
+    가장 높은 등급으로 내리고, 그 자산이 든 데이터셋 버전의 이용 권한은 즉시 철회한다 (data_role CORE 변경과 같은 처리).
+    """
+    lowered: list[dict[str, str]] = []
+    for x in family:
+        target = rules.scope_after_change(x.sharing_scope, before[x.asset_id], facts_for(db, x, now))
+        if rules.is_downgrade(x.sharing_scope, target):
+            lowered.append({"asset_id": x.asset_id, "from": x.sharing_scope, "to": target})
+            downgrade(c, db, x, target, "REVOKE_NOW", by, f"분류 변경: {reason}")
+    return lowered
+
+
 # ------------------------------------------------------------------ 공유 후보·심사 흐름 (요구사항 1, 2, 4)
 
 

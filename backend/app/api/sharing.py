@@ -186,7 +186,11 @@ class Classification(BaseModel):
 @router.patch("/v1/assets/{asset_id}/classification")
 def classify_asset(asset_id: str, body: Classification, request: Request, db: Session = DB,
                    c: Container = Depends(container), p: Principal = Depends(require("asset:classify"))) -> dict:
-    """운영자가 근거(점검 기록 참조)와 함께 지정 (요구사항 4.6). 더 엄격하게 바꾸면 파생본 등급은 규칙으로 다시 본다."""
+    """운영자가 근거(점검 기록 참조)와 함께 지정 (요구사항 4.6). 더 엄격하게 바꾸면 파생본 등급은 규칙으로 다시 본다.
+
+    이번 변경으로 지금 등급의 조건을 새로 못 맞추게 된 자산(자신·파생본)은 맞출 수 있는 등급으로 내리고 권한을
+    즉시 철회한다 (ADR-0074).
+    """
     if body.sensitivity_class is None and body.privacy_status is None:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "", "code": "minProperties",
                                                         "message": "sensitivity_class나 privacy_status가 필요합니다"}])
@@ -198,15 +202,25 @@ def classify_asset(asset_id: str, body: Classification, request: Request, db: Se
         if a.variant == "ORIGINAL":
             raise ProblemError("RULE_VIOLATION", detail="처리 결과는 파생본에만 기록합니다",
                                unmet_conditions=[{"condition": "variant ≠ ORIGINAL", "actual": a.variant}])
+    # 자신·파생본(가장 엄격한 sensitivity_class를 물려받는다)의 등급을 함께 내릴 수 있으므로 그 행을 잠그고 다시 읽는다.
+    # 같은 때 들어온 등급 변경 신청이 바뀌기 전 분류로 올리고, 여기서는 올리기 전 등급을 보고 지나치는 일을 막는다.
+    db.refresh(a, with_for_update=True)
+    kids = [x.asset_id for x in sharing.descendants(db, a.asset_id)]
+    family = [a, *db.execute(select(Asset).where(Asset.asset_id.in_(kids)).order_by(Asset.asset_id)
+                             .with_for_update().execution_options(populate_existing=True)).scalars()]
+    now = c.clock.now()
     before = {"sensitivity_class": a.sensitivity_class, "privacy_status": a.privacy_status}
+    facts = {x.asset_id: sharing.facts_for(db, x, now) for x in family}
     if body.sensitivity_class:
         a.sensitivity_class = body.sensitivity_class
     if body.privacy_status:
         a.privacy_status = body.privacy_status
-    a.updated_at = c.clock.now()
+    a.updated_at = now
+    lowered = sharing.lower_after_classification(c, db, facts, family, p.principal_id, body.reason, now)
     c.audit.record("ASSET_CLASSIFIED", principal=p, organization_id=a.organization_id, target_type="Asset",
                    target_id=a.asset_id, reason=body.reason, source_ip=client_ip(request),
                    details={"before": before, "basis_ref": body.basis_ref,
-                            "after": {"sensitivity_class": a.sensitivity_class, "privacy_status": a.privacy_status}})
+                            "after": {"sensitivity_class": a.sensitivity_class, "privacy_status": a.privacy_status},
+                            "lowered": lowered, "existing_grant_handling": "REVOKE_NOW" if lowered else None})
     return {"asset_id": a.asset_id, "sensitivity_class": a.sensitivity_class, "privacy_status": a.privacy_status}
 
