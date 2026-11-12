@@ -57,12 +57,25 @@ def metric_text(m: dict[str, Any]) -> str:
     return f"{m['value']:g}{unit}"
 
 
+_pdf_ok: bool | None = None  # pdf_available()의 결과. 프로세스마다 처음 한 번만 정한다
+
+
 def pdf_available() -> bool:
-    try:
-        import weasyprint  # noqa: F401
-    except Exception:  # noqa: BLE001 - 시스템 라이브러리(pango) 없음 등
-        return False
-    return True
+    """WeasyPrint(와 pango 같은 시스템 라이브러리)를 불러올 수 있는지. 결과는 프로세스마다 한 번만 확인한다.
+
+    실패한 import는 모듈 캐시에 남지 않는다. 그래서 매번 다시 확인하면 부를 때마다 import를 처음부터 다시 실행한다
+    (수십 ms). WeasyPrint는 그때마다 여러 줄 안내를 표준 출력에 찍는다. 기능 상태 조회도 이 함수를 부르므로
+    결과를 기억한다(ADR-0080). 라이브러리를 새로 설치했으면 프로세스를 다시 띄운다(ADR-0018: 서버는 뜨고 PDF만 꺼진다).
+    """
+    global _pdf_ok
+    if _pdf_ok is None:
+        try:
+            import weasyprint  # noqa: F401
+        except Exception:  # noqa: BLE001 - 시스템 라이브러리(pango) 없음 등
+            _pdf_ok = False
+        else:
+            _pdf_ok = True
+    return _pdf_ok
 
 
 def enabled_formats(configured: list[str]) -> list[str]:

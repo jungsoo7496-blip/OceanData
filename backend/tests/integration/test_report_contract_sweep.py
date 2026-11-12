@@ -4,16 +4,19 @@
 - S35 초안 HWPX는 양식에 {{report.status}} 자리가 없으면 '초안' 표시 없이 내보내지 않고 409다.
 - S36 내보내기는 보고서·버전 범위를 먼저 확인한다. 형식이 꺼져 있어도 다른 기관·없는 보고서는 404(+감사)다.
 - S37 /v1/system/capabilities의 report_formats는 내보내기가 받는 형식과 같다 (PDF 렌더러가 없으면 PDF 없음).
+  렌더러를 불러올 수 있는지는 프로세스에서 한 번만 확인한다 (조회마다 실패한 import를 다시 하지 않는다).
 - S38 관리기관 열람자의 latest_version은 제출된 버전 중 최신이다 (제출되지 않은 초안의 수를 드러내지 않는다).
 """
 
 from __future__ import annotations
 
+import builtins
 import io
 import json
 import os
 import zipfile
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -209,6 +212,31 @@ def test_capabilities_list_only_formats_the_export_accepts(ctx: Ctx, monkeypatch
         if r.status_code == 409:
             detail = r.json()["detail"]  # REPORT_FORMATS에는 PDF가 있다: 이유는 렌더러다
             assert "렌더러" in detail and "(REPORT_FORMATS)" not in detail, detail
+
+
+def test_pdf_renderer_check_runs_once_per_process(ctx: Ctx, monkeypatch: pytest.MonkeyPatch) -> None:
+    """불러오지 못한 WeasyPrint는 모듈 캐시에 남지 않는다. 기능 상태 조회마다 import를 다시 하면 조회마다
+    수십 ms가 들고 WeasyPrint가 여러 줄 안내를 찍는다 (검토 지적). 확인은 프로세스에서 한 번이다."""
+    monkeypatch.setattr(ctx.c.settings, "report_formats", ["XLSX", "PDF"])
+    hm = ctx.as_user(MEMBER)
+    rid = _new_report(ctx)
+    monkeypatch.setattr(rr, "_pdf_ok", None, raising=False)  # 이 시험 안에서만 아직 확인하지 않은 상태로
+    tries: list[str] = []
+    real_import = builtins.__import__
+
+    def no_pango(name: str, *args: Any, **kwargs: Any) -> Any:  # pango가 없는 배포를 흉내 낸다
+        if name == "weasyprint" or name.startswith("weasyprint."):
+            tries.append(name)
+            raise OSError("cannot load library 'pango-1.0-0' (시험용)")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_pango)
+    for _ in range(3):  # 웹은 화면을 열 때마다 기능 상태를 조회한다
+        caps = ctx.client.get("/v1/system/capabilities", headers=hm)
+        assert caps.status_code == 200 and caps.json()["report_formats"] == ["XLSX"], caps.text
+    r = ctx.client.get(EXPORT.format(report_id=rid), params={"format": "PDF"}, headers=hm)
+    assert r.status_code == 409 and "렌더러" in r.json()["detail"], r.text
+    assert tries == ["weasyprint"], f"WeasyPrint를 {len(tries)}번 불러오려 했다 (조회마다 다시 시도)"
 
 
 # ------------------------------------------------------------------ S38 열람자의 최신 버전

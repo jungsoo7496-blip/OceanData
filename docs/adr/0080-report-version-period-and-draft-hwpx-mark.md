@@ -41,7 +41,8 @@
    - *생성 시각·데이터 기준 시각(`{{report.generated_at}}`·`{{report.data_as_of}}`)도 요구*: 요구사항 4.4와 ADR-0018은 둘도 넣으라고 하지만 계약 문장은 '초안' 표시만
      말한다. 실제 양식이 이 자리를 가질지 모르는 채로 내보내기를 더 막을지는 사람이 정한다(남은 일).
 3. **S36~S38은 문서대로 되돌린다.** 내보내기는 보고서·버전을 불러온 뒤(`load_scoped`의 404와 감사) 형식을 본다. 기능 상태의 `report_formats`는 내보내기와 같은
-   `rr.enabled_formats()`로 만들고, 설정에는 있지만 렌더러가 없어 꺼진 PDF의 409 안내는 그 이유를 말한다(코드는 그대로 `CONFLICT`). 관리기관 열람자의 `latest_version`은
+   `rr.enabled_formats()`로 만들고, 설정에는 있지만 렌더러가 없어 꺼진 PDF의 409 안내는 그 이유를 말한다(코드는 그대로 `CONFLICT`). 렌더러를 불러올 수 있는지는
+   프로세스마다 처음 한 번만 확인한다(`pdf_available()`이 결과를 기억한다, 감수할 점). 관리기관 열람자의 `latest_version`은
    제출된 적 있는 버전(`submitted_filter`) 중 최신이다(조회·목록). 소유 기관·운영자·기계 주체는 그대로다. 역추적은 `latest_version`을 돌려주지 않아 해당 없다.
 
 ## 결과
@@ -55,15 +56,21 @@
 - `{{report.status}}` 자리가 없는 양식으로는 초안을 HWPX로 내보낼 수 없다(PDF·XLSX는 된다). 운영자가 양식에 자리를 넣어야 한다. 자리가 속성 값 안처럼 보이지 않는 곳에 있어도
   통과한다(구조를 해석하지 않는다).
 - HWPX의 생성 시각·데이터 기준 시각은 여전히 양식에 자리가 있을 때만 들어간다.
-- 기능 상태 조회가 `pdf_available()`(WeasyPrint 불러오기)을 부른다. 한 번 불러온 뒤에는 모듈 캐시라 비용이 없고, 불러올 수 없는 환경에서는 조회마다 다시 시도한다.
+- 기능 상태 조회가 `pdf_available()`(WeasyPrint 불러오기)을 부른다. 실패한 import는 모듈 캐시에 남지 않는다. 그래서 매번 확인하면 렌더러를 불러올 수 없는
+  환경(S37이 다루는 경우)에서 조회마다 import를 처음부터 다시 한다. 시험 컨테이너에서 한 번에 20~40 ms가 들었고, WeasyPrint가 그때마다 여러 줄 안내를 표준 출력에 찍었다.
+  웹은 화면을 열 때마다 기능 상태를 조회한다. 그래서 `pdf_available()`은 결과를 프로세스마다 처음 한 번만 확인해 기억한다(성공·실패 모두). 실행 중에 pango 같은
+  라이브러리를 설치해도 프로세스를 다시 띄워야 PDF가 켜진다. ADR-0018도 불러오기에 실패하면 서버는 뜨고 PDF만 끄는 것으로 정했다. 시험은 함수 자체(`rr.pdf_available`)를
+  바꿔 끼우므로 기억한 값과 상관없다.
 - 열람자의 조회·목록이 보고서마다 질의 하나(기본 키 범위의 최댓값)를 더 한다.
 
 되돌리는 방법: 마이그레이션 0025를 down하고, `report_view`가 `rep.period_from`·`rep.period_to`를 읽게 되돌리고 `generate`의 두 인자를 지운다. `export_report`의
-`required`·`HwpxPlaceholderMissing` 처리와 렌더러의 `required`를 지운다. S36~S38은 각 커밋을 되돌린다. 계약 설명 문장을 되돌리고 웹 타입을 다시 만든다.
+`required`·`HwpxPlaceholderMissing` 처리와 렌더러의 `required`를 지운다. S36~S38은 각 커밋을 되돌린다(S37의 렌더러 확인 기억은 검토 지적 반영 커밋). 계약 설명 문장을 되돌리고 웹 타입을 다시 만든다.
 
-시험: `tests/integration/test_report_contract_sweep.py` 7개 — 회차 끝 시각을 정한 뒤 새 버전을 만들어도 제출된 v1의 기간이 승인 스냅숏과 같음(소유 기관·열람자, v2만 새 기간),
+시험: `tests/integration/test_report_contract_sweep.py` 8개 — 회차 끝 시각을 정한 뒤 새 버전을 만들어도 제출된 v1의 기간이 승인 스냅숏과 같음(소유 기관·열람자, v2만 새 기간),
 마이그레이션 0025 up(기존 버전 채우기)·down, 자리 없는 양식의 초안 HWPX 409(감사 없음, XML 아닌 항목에만 있으면 409, 공백 있는 자리는 200과 '초안', 승인본은 200),
 형식이 꺼진 상태의 다른 기관 내보내기 404와 감사·없는 보고서·없는 버전 404·자기 보고서는 409, PDF 렌더러 유무에 따른 기능 상태와 내보내기 일치(2개), 열람자의
 `latest_version`(초안 둘이 있어도 1, 소유 기관은 3, v3 제출 뒤 v1 조회에서 3). 수정 전 코드(브랜치 기준 커밋 49a2e2e)에서 6개가 실패하는 것을 확인했다
-(PDF 렌더러가 있는 경우는 대조로 통과). 기존 `test_t11_reports.py`·`test_reports_api.py`·`test_report_export_hardening.py`(통합·단위)·`test_report_control_chars.py`는
+(PDF 렌더러가 있는 경우는 대조로 통과). 검토 지적으로 8번째 시험 `test_pdf_renderer_check_runs_once_per_process`를 더했다. pango가 없는 것처럼 `weasyprint`
+import를 실패시키고 기능 상태를 세 번, PDF 내보내기를 한 번 부른다. 그래도 import 시도가 한 번이어야 한다. 기억하기 전 코드에서는
+`AssertionError: WeasyPrint를 4번 불러오려 했다`로 실패했다. 기존 `test_t11_reports.py`·`test_reports_api.py`·`test_report_export_hardening.py`(통합·단위)·`test_report_control_chars.py`는
 그대로 통과한다.
