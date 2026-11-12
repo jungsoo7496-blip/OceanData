@@ -60,6 +60,30 @@ def _idempotency_records(ictx: Ctx) -> int:
         return int(conn.scalar(text("SELECT count(*) FROM idempotency_keys")) or 0)
 
 
+# ---------------------------------------------------------------- S45 파트 목록을 읽지 못하면 문서화된 503
+def test_list_parts_answers_the_documented_503_while_storage_cannot_list(
+    ictx: Ctx, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created, up, _ = _start(ictx, 8401)
+    path = PARTS.format(upload_id=up.upload_id)
+
+    def down(*_args: Any) -> None:
+        raise ConnectionError("합성 저장소 연결 실패")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ictx.c.storage, "list_parts", down)
+        r = ictx.client.get(path, headers=ictx.as_user(102))
+    assert r.status_code == 503, r.text
+    assert r.json()["code"] == "STORAGE_UNAVAILABLE" and r.headers["Retry-After"] == "30"
+    check(r, "GET", PARTS)  # 전(계약 C4 반영 전): 계약에 503 응답이 없었다
+    assert _state(ictx, created) == ("UPLOADING", SIZE, SIZE, "UPLOADING")  # 세션·예약은 그대로
+
+    again = ictx.client.get(path, headers=ictx.as_user(102))
+    assert again.status_code == 200, again.text
+    check(again, "GET", PARTS)
+    assert [p["part_number"] for p in again.json()["completed_parts"]] == [1]
+
+
 # ---------------------------------------------------------------- S46 완료 호출의 저장소 장애는 503, 세션 유지
 def _outage(kind: str) -> Exception:
     if kind == "endpoint":
