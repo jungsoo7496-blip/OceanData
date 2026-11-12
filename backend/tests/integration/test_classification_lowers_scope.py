@@ -12,6 +12,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select, update
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 
 from app.db.models import (
     AccessRequest,
@@ -99,10 +101,14 @@ def _grant_status(ctx: Ctx, grant_id: str) -> str:
         return db.execute(select(Grant.status).where(Grant.grant_id == grant_id)).scalar_one()
 
 
-def _classified_details(ctx: Ctx, response) -> dict:
+def _rows(ctx: Ctx, response, action: str) -> list[AuditLog]:
     with ctx.c.sessionmaker() as db:
-        rows = db.scalars(select(AuditLog).where(AuditLog.request_id == response.headers["x-request-id"],
-                                                 AuditLog.action == "ASSET_CLASSIFIED")).all()
+        return list(db.scalars(select(AuditLog).where(AuditLog.request_id == response.headers["x-request-id"],
+                                                      AuditLog.action == action)).all())
+
+
+def _classified_details(ctx: Ctx, response) -> dict:
+    rows = _rows(ctx, response, "ASSET_CLASSIFIED")
     assert len(rows) == 1
     return rows[0].details
 
@@ -116,6 +122,7 @@ def test_security_on_shared_deid_lowers_it_and_revokes_grants(ctx: Ctx) -> None:
     assert _scope(ctx, ids["deid"]) == "SANDBOX_PARTNERS"
     assert _grant_status(ctx, gid) == "GRANTED"
     assert _classified_details(ctx, r).get("lowered", []) == []
+    assert _rows(ctx, r, "GRANT_REVOKED") == []
 
     r = _classify(ctx, ids["deid"], sensitivity_class="SECURITY")
     g = ctx.client.get(f"/v1/assets/{ids['deid']}", headers=ctx.as_user(ADMIN))
@@ -123,8 +130,15 @@ def test_security_on_shared_deid_lowers_it_and_revokes_grants(ctx: Ctx) -> None:
     check(g, "GET", "/v1/assets/{asset_id}")  # asset-metadata 'L2 이상 등급의 불변식'
     assert _grant_status(ctx, gid) == "REVOKED"
     details = _classified_details(ctx, r)
-    assert details["lowered"] == [{"asset_id": ids["deid"], "from": "SANDBOX_PARTNERS", "to": "PROGRAM_REVIEW"}]
+    assert details["lowered"] == [{"asset_id": ids["deid"], "from": "SANDBOX_PARTNERS", "to": "PROGRAM_REVIEW",
+                                   "revoked_grant_ids": [gid]}]
     assert details["existing_grant_handling"] == "REVOKE_NOW"
+    # 끊은 이용 권한마다 수동 철회(POST /v1/grants/{id}/revoke)와 같은 감사 행 (security.md '이용 승인·철회')
+    (revoked,) = _rows(ctx, r, "GRANT_REVOKED")
+    assert (revoked.target_type, revoked.target_id, revoked.organization_id, revoked.result) == (
+        "Grant", gid, ORG_CONSUMER, "SUCCESS")
+    assert revoked.details == {"cause": "ASSET_CLASSIFIED", "asset_id": ids["deid"]}
+    assert revoked.reason == "민감 해역 확인"
     # 다시 올리려 해도 규칙이 막는다
     r = share(ctx, ids["deid"], ADMIN, target_scope="SANDBOX_PARTNERS")
     assert r.status_code == 422 and "sensitivity_class ≠ SECURITY" in [u["condition"] for u in
@@ -137,8 +151,45 @@ def test_security_on_original_lowers_shared_derivative(ctx: Ctx) -> None:
     assert _scope(ctx, ids["deid"]) == "PROGRAM_REVIEW"  # 파생본은 원본의 SECURITY를 물려받는다
     assert _scope(ctx, ids["orig"]) == "PRIVATE"
     assert _classified_details(ctx, r)["lowered"] == [
-        {"asset_id": ids["deid"], "from": "SANDBOX_PARTNERS", "to": "PROGRAM_REVIEW"}]
+        {"asset_id": ids["deid"], "from": "SANDBOX_PARTNERS", "to": "PROGRAM_REVIEW", "revoked_grant_ids": []}]
     check(ctx.client.get(f"/v1/assets/{ids['deid']}", headers=ctx.as_user(ADMIN)), "GET", "/v1/assets/{asset_id}")
+
+
+@pytest.mark.parametrize("broken", ["deid", "orig"])
+def test_reclassifying_a_row_left_in_breach_repairs_it(ctx: Ctx, broken: str) -> None:
+    """수정 전 PATCH가 남긴 상태(L2 비식별본 자신 또는 그 원본이 이미 SECURITY)에서 운영자가 SECURITY를 다시 지정하면
+    등급을 L1로 내리고 권한을 끊는다 — 분류 조건은 바뀌기 전부터 어긋났어도 넘어가지 않는다."""
+    ids = _shared_deid(ctx)
+    gid = _grant_on(ctx, ids["deid"])
+    with ctx.c.sessionmaker.begin() as db:
+        db.execute(update(Asset).where(Asset.asset_id == ids[broken]).values(sensitivity_class="SECURITY"))
+    r = _classify(ctx, ids[broken], sensitivity_class="SECURITY")
+    assert _scope(ctx, ids["deid"]) == "PROGRAM_REVIEW"
+    assert _grant_status(ctx, gid) == "REVOKED"
+    assert [x["asset_id"] for x in _classified_details(ctx, r)["lowered"]] == [ids["deid"]]
+    check(ctx.client.get(f"/v1/assets/{ids['deid']}", headers=ctx.as_user(ADMIN)), "GET", "/v1/assets/{asset_id}")
+
+
+def test_failed_commit_leaves_no_classification_or_revocation_audit(ctx: Ctx, monkeypatch: pytest.MonkeyPatch) -> None:
+    """하향·철회를 적은 감사는 요청 트랜잭션에 쓴다 (ADR-0053): 커밋이 실패하면 되돌린 하향이 감사에 남지 않는다."""
+    ids = _shared_deid(ctx)
+    gid = _grant_on(ctx, ids["deid"])
+    real_commit, armed = Session.commit, {"on": False}
+
+    def commit(self: Session) -> None:
+        if armed["on"]:
+            armed["on"] = False
+            raise OperationalError("COMMIT", {}, Exception("합성 커밋 실패"))
+        real_commit(self)
+
+    monkeypatch.setattr(Session, "commit", commit)
+    armed["on"] = True
+    r = ctx.client.patch(f"/v1/assets/{ids['deid']}/classification", headers=ctx.as_user(OP),
+                         json={"basis_ref": "점검-2026-11-12-01", "reason": "민감 해역 확인",
+                               "sensitivity_class": "SECURITY"})
+    assert r.status_code == 500, r.text
+    assert (_scope(ctx, ids["deid"]), _grant_status(ctx, gid)) == ("SANDBOX_PARTNERS", "GRANTED")
+    assert _rows(ctx, r, "ASSET_CLASSIFIED") == [] and _rows(ctx, r, "GRANT_REVOKED") == []
 
 
 def test_condition_unmet_before_the_change_does_not_lower(ctx: Ctx) -> None:

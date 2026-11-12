@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import DB, client_ip, container, load_scoped, require
 from app.container import Container
-from app.db.models import Asset, ShareRequest, ShareReviewEvent, TrialSession
+from app.db.models import Asset, Grant, ShareRequest, ShareReviewEvent, TrialSession
 from app.domain import sharing_rules as rules
 from app.domain import states
 from app.domain.principal import Principal
@@ -188,8 +188,8 @@ def classify_asset(asset_id: str, body: Classification, request: Request, db: Se
                    c: Container = Depends(container), p: Principal = Depends(require("asset:classify"))) -> dict:
     """운영자가 근거(점검 기록 참조)와 함께 지정 (요구사항 4.6). 더 엄격하게 바꾸면 파생본 등급은 규칙으로 다시 본다.
 
-    이번 변경으로 지금 등급의 조건을 새로 못 맞추게 된 자산(자신·파생본)은 맞출 수 있는 등급으로 내리고 권한을
-    즉시 철회한다 (ADR-0074).
+    분류 조건을 못 맞추거나 이번 변경으로 다른 조건을 새로 못 맞추게 된 자산(자신·파생본)은 맞출 수 있는 등급으로
+    내리고 권한을 즉시 철회한다. 분류·하향·철회 감사는 요청 트랜잭션에 쓴다 (ADR-0053, ADR-0074).
     """
     if body.sensitivity_class is None and body.privacy_status is None:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "", "code": "minProperties",
@@ -204,23 +204,30 @@ def classify_asset(asset_id: str, body: Classification, request: Request, db: Se
                                unmet_conditions=[{"condition": "variant ≠ ORIGINAL", "actual": a.variant}])
     # 자신·파생본(가장 엄격한 sensitivity_class를 물려받는다)의 등급을 함께 내릴 수 있으므로 그 행을 잠그고 다시 읽는다.
     # 같은 때 들어온 등급 변경 신청이 바뀌기 전 분류로 올리고, 여기서는 올리기 전 등급을 보고 지나치는 일을 막는다.
-    db.refresh(a, with_for_update=True)
-    kids = [x.asset_id for x in sharing.descendants(db, a.asset_id)]
-    family = [a, *db.execute(select(Asset).where(Asset.asset_id.in_(kids)).order_by(Asset.asset_id)
-                             .with_for_update().execution_options(populate_existing=True)).scalars()]
+    family = sharing.lock_family(db, a)
     now = c.clock.now()
     before = {"sensitivity_class": a.sensitivity_class, "privacy_status": a.privacy_status}
-    facts = {x.asset_id: sharing.facts_for(db, x, now) for x in family}
+    facts = sharing.shared_facts(db, family, now)
     if body.sensitivity_class:
         a.sensitivity_class = body.sensitivity_class
     if body.privacy_status:
         a.privacy_status = body.privacy_status
     a.updated_at = now
     lowered = sharing.lower_after_classification(c, db, facts, family, p.principal_id, body.reason, now)
+    # 성공 감사는 요청 트랜잭션에 쓴다: 커밋이 실패해 하향·철회가 되돌아가면 그 기록도 남지 않는다 (ADR-0053)
+    conn, ip = db.connection(), client_ip(request)
     c.audit.record("ASSET_CLASSIFIED", principal=p, organization_id=a.organization_id, target_type="Asset",
-                   target_id=a.asset_id, reason=body.reason, source_ip=client_ip(request),
+                   target_id=a.asset_id, reason=body.reason, source_ip=ip,
                    details={"before": before, "basis_ref": body.basis_ref,
                             "after": {"sensitivity_class": a.sensitivity_class, "privacy_status": a.privacy_status},
-                            "lowered": lowered, "existing_grant_handling": "REVOKE_NOW" if lowered else None})
+                            "lowered": lowered, "existing_grant_handling": "REVOKE_NOW" if lowered else None},
+                   connection=conn)
+    for x in lowered:  # 끊은 권한마다 수동 철회(POST /v1/grants/{id}/revoke)와 같은 행 (security.md)
+        for grant_id in x["revoked_grant_ids"]:
+            g = db.get(Grant, grant_id)
+            assert g is not None  # noqa: S101 - 방금 철회한 행
+            c.audit.record("GRANT_REVOKED", principal=p, organization_id=g.organization_id, target_type="Grant",
+                           target_id=g.grant_id, reason=body.reason, source_ip=ip,
+                           details={"cause": "ASSET_CLASSIFIED", "asset_id": x["asset_id"]}, connection=conn)
     return {"asset_id": a.asset_id, "sensitivity_class": a.sensitivity_class, "privacy_status": a.privacy_status}
 

@@ -17,6 +17,12 @@ LABEL = {s: f"L{i}" for i, s in enumerate(SCOPES)}
 SENSITIVITY_ORDER = {"INTERNAL": 0, "RESTRICTED": 1, "SECURITY": 2}
 L2_PRIVACY = frozenset({"NOT_APPLICABLE", "PSEUDONYMIZED", "ANONYMIZED_VERIFIED"})
 L4_PRIVACY = frozenset({"NOT_APPLICABLE", "ANONYMIZED_VERIFIED"})
+# 분류(sensitivity_class·privacy_status)가 정하는 조건 — asset-metadata 'L2 이상 등급의 불변식'·L4 불변식에 있다
+NEED_L2_PRIVACY = "privacy_status ∈ {NOT_APPLICABLE, PSEUDONYMIZED, ANONYMIZED_VERIFIED}"
+NEED_NOT_SECURITY = "sensitivity_class ≠ SECURITY"
+NEED_L4_PRIVACY = "privacy_status ∈ {NOT_APPLICABLE, ANONYMIZED_VERIFIED}"
+NEED_INTERNAL = "sensitivity_class=INTERNAL"
+CLASSIFICATION_CONDITIONS = frozenset({NEED_L2_PRIVACY, NEED_NOT_SECURITY, NEED_L4_PRIVACY, NEED_INTERNAL})
 
 
 @dataclass(frozen=True)
@@ -77,19 +83,18 @@ def evaluate(target: str, f: Facts, approvals: Iterable[str]) -> list[UnmetCondi
     need(f.variant != "ORIGINAL", "variant ≠ ORIGINAL", f.variant)
     need(f.effective_role == "BYPRODUCT", "data_role=BYPRODUCT (원 자산 포함)", f.effective_role)
     need(not f.derived_from_core_original, "CORE 원본의 파생본이 아님", "CORE 원본에서 파생")
-    need(f.privacy_status in L2_PRIVACY, "privacy_status ∈ {NOT_APPLICABLE, PSEUDONYMIZED, ANONYMIZED_VERIFIED}",
-         f.privacy_status)
+    need(f.privacy_status in L2_PRIVACY, NEED_L2_PRIVACY, f.privacy_status)
     need(f.review_result == "PASSED", "review_result=PASSED", f.review_result)
     need(f.share_status == "APPROVED", "share_status=APPROVED (운영자 최종 승인)", f.share_status)
-    need(f.effective_sensitivity != "SECURITY", "sensitivity_class ≠ SECURITY", f.effective_sensitivity)
+    need(f.effective_sensitivity != "SECURITY", NEED_NOT_SECURITY, f.effective_sensitivity)
     need(bool(f.legal_basis_ref), "legal_basis_ref 존재", f.legal_basis_ref)
     need(f.tier2_agreement_valid, "제공기관 2단 약정 유효", "없음 또는 만료")
     if level == 3:
         need(f.in_dataset_version, "데이터셋 버전에 포함", "포함 안 됨")
         need("PLATFORM_OPERATOR" in ok, "PLATFORM_OPERATOR 승인", "없음")
     if level == 4:
-        need(f.privacy_status in L4_PRIVACY, "privacy_status ∈ {NOT_APPLICABLE, ANONYMIZED_VERIFIED}", f.privacy_status)
-        need(f.effective_sensitivity == "INTERNAL", "sensitivity_class=INTERNAL", f.effective_sensitivity)
+        need(f.privacy_status in L4_PRIVACY, NEED_L4_PRIVACY, f.privacy_status)
+        need(f.effective_sensitivity == "INTERNAL", NEED_INTERNAL, f.effective_sensitivity)
         need("PLATFORM_OPERATOR" in ok, "PLATFORM_OPERATOR 승인", "없음")
     return unmet
 
@@ -114,12 +119,13 @@ def max_scope_for(f: Facts) -> str:
 def scope_after_change(current: str, before: Facts, after: Facts) -> str:
     """사실(분류 지정 등)이 바뀐 뒤 둘 수 있는 가장 높은 등급 (지금 등급 이하, ADR-0074).
 
-    이번 변경으로 새로 충족하지 못하게 된 조건만 본다. 바뀌기 전에도 지금 등급에서 충족하지 못하던 조건
-    (2단 약정 만료 등)은 여기서 문제 삼지 않는다 — 그 조건은 이용 권한을 줄 때 따로 본다.
-    승인은 모두 있다고 본다(max_scope_for와 같다).
+    분류가 정하는 조건(CLASSIFICATION_CONDITIONS)은 늘 바뀐 뒤 사실로 본다 — 바뀌기 전부터 어긋나 있었어도
+    (수정 전 코드가 남긴 행) 맞춘다. 그 밖의 조건은 이번 변경으로 새로 충족하지 못하게 된 것만 본다. 바뀌기 전에도
+    지금 등급에서 충족하지 못하던 것(2단 약정 만료 등)은 여기서 문제 삼지 않는다 — 그 조건은 이용 권한을 줄 때 따로 본다
+    (ADR-0028). 승인은 모두 있다고 본다(max_scope_for와 같다).
     """
     approvals = {"ORG_ADMIN", "PLATFORM_OPERATOR"}
-    known = {u.condition for u in evaluate(current, before, approvals)}
+    known = {u.condition for u in evaluate(current, before, approvals)} - CLASSIFICATION_CONDITIONS
     for s in reversed(SCOPES[:LEVEL[current] + 1]):
         if all(u.condition in known for u in evaluate(s, after, approvals)):
             return s

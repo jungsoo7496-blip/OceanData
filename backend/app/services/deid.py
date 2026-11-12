@@ -155,8 +155,9 @@ def decide(c: Container, db: Session, rv: DeidReview, result: str, missed: list[
     if rv.status != "ASSIGNED":
         raise states.InvalidStateTransition("deid_review", rv.status, result)
     now = c.clock.now()
-    child = db.get(Asset, rv.deid_asset_id, with_for_update=True)
+    # 원본 → 비식별본 순으로 잠근다: 분류 지정(sharing.lock_family)·삭제와 같은 순서 (ADR-0074)
     orig = db.get(Asset, rv.original_asset_id, with_for_update=True)
+    child = db.get(Asset, rv.deid_asset_id, with_for_update=True)
     assert child is not None and orig is not None  # noqa: S101
     rv.missed, rv.manual_regions, rv.note, rv.decided_at = missed, manual, note, now
     flagged: list[str] = []
