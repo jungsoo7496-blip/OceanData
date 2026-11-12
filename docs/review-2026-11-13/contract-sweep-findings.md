@@ -11,11 +11,11 @@
 
 | ID | 심각도 | 작업 | 분류 | 고칠 쪽 | 상태 |
 |---|---|---|---|---|---|
-| S01 | medium | `POST /v1/datasets/{dataset_id}/versions` | missing-behavior | 구현 | 미처리 |
+| S01 | medium | `POST /v1/datasets/{dataset_id}/versions` | missing-behavior | 구현 | 고침 (ADR-0072) |
 | S02 | medium | `POST /v1/distributions` | missing-audit | 구현 | 미처리 |
-| S03 | low | `GET /v1/datasets` | data-semantics | 구현 | 미처리 |
-| S04 | low | `GET /v1/datasets/{dataset_id}/versions/{dataset_version_id}/lineage` | wrong-status | 계약 문구 | 미처리 |
-| S05 | low | `POST /v1/datasets/{dataset_id}/versions` | wrong-status | 구현 | 미처리 |
+| S03 | low | `GET /v1/datasets` | data-semantics | 구현 | 고침 (ADR-0072) |
+| S04 | low | `GET /v1/datasets/{dataset_id}/versions/{dataset_version_id}/lineage` | wrong-status | 계약 문구 | 계약 문구 고침 (ADR-0072) |
+| S05 | low | `POST /v1/datasets/{dataset_id}/versions` | wrong-status | 구현 | 고침 (ADR-0072) |
 | S06 | medium | `POST /v1/grants/{grant_id}/revoke, POST /v1/grants/{grant_id}/destruction-confirmation, POST /v1/access-requests/{access_request_id}/decisions` | missing-audit | 구현 | 미처리 |
 | S07 | medium | `POST /v1/access-requests` | wrong-status | 구현 | 미처리 |
 | S08 | low | `POST /v1/access-requests` | data-semantics | 사람 결정 | 사람 결정 대기 |
@@ -61,7 +61,10 @@
 
 ## 구현 반영
 
-(묶음별 PR이 병합되면 여기에 적는다.)
+- **S01 큰 데이터셋 버전의 데이터 카드** — 작업 큐로 가는 큰 버전(항목이 `DATASET_SYNC_MAX_ITEMS` 초과)도 BUILDING 버전과 `dataset_build` 작업을 만들기 전에 데이터 카드를 매니페스트 계약의 `data_card`로 검사한다. 틀린 카드는 요청 안에서 만드는 경로와 같은 422 `RULE_VIOLATION`(`/data_card…` 포인터)을 받고 버전·작업이 남지 않아, 운영자의 `GET /v1/datasets/{id}`·`GET /v1/datasets`가 계약을 지킨다. ADR-0072.
+- **S03 데이터셋 목록 쪽 나눔** — `limit`(기본 50, 최대 500)과 `cursor`대로 `dataset_id` 순으로 나누고 다음 쪽이 있으면 `next_cursor`를 준다. 이용기관에게는 보이는 버전(게시·L3 이상·READY)이 있는 데이터셋으로만 쪽을 채워 쪽이 짧거나 다음 쪽이 비지 않는다. 웹 운영 콘솔 데이터셋과 이용기관 카탈로그는 `?limit=500`으로 부른다. ADR-0072.
+- **S04 계보 409** — 동작은 그대로 둔다(READY만 200, BUILDING·FAILED는 409 `CONFLICT`, 볼 수 없는 버전은 상태와 관계없이 404). 계약 `getDatasetVersionLineage`에 409 응답과 설명을 적었다.
+- **S05 item_asset_ids 형식** — 항목이 `asset_id` 형식이 아니면 400 `VALIDATION_ERROR`와 `/item_asset_ids/<i>` 오류를 반환한다. 같은 ID가 다시 나오면 그 자리마다 400(`code: unique`)이다. 중복 ID를 조용히 합쳐 201을 주지 않고 멱등 기록도 남기지 않는다. 형식이 맞지만 없는 자산은 지금처럼 422 `RULE_VIOLATION`이다. ADR-0072.
 
 ## datasets (버전·배포·카탈로그) — 발견 5건
 
