@@ -15,6 +15,7 @@ Windows의 기존 credentials.json은 평문이었고, 수동 업데이트는 �
 - 합성 Linux·Windows 바이너리와 실제 자식 프로세스로 실행 중 파일의 원자 교체, Ed25519 변조 거부,
   파일 되돌리기를 확인했다. 새 바이너리가 exit 7로 종료돼도 라이브러리는 교체 파일을 유지해 기동 실패 롤백은 제공하지 않았다.
 - PoC 소스·실행 결과는 `work/selfupdate-poc/` 중간 산출물에 보관한다.
+  (2026-11-12: Codex 작업 사본을 정리하며 PoC 소스와 아래 `var/…` 결과 파일의 글자 파일만 개발 PC의 `var/codex-evidence-2026-11-04.zip`에 옮겼다. 실행 파일은 남기지 않았다 — HANDOFF 3장)
   근거 소스: [v1.7.0](https://github.com/creativeprojects/go-selfupdate/tree/v1.7.0).
 
 ## 결정
