@@ -157,6 +157,11 @@ def act_share_review(asset_id: str, body: ReviewAction, request: Request, db: Se
     target = sharing.ACTIONS[body.action]
     allowed = states.SHARE.get((a.share_status, target))
     if allowed is not None and not allowed & set(p.roles):  # 전이는 있지만 이 역할의 일이 아니다
+        # 권한 거부 감사는 요청이 실패해도 남도록 따로 확정한다 (security.md, ADR-0053)
+        c.audit.record("PERMISSION_DENIED", result="DENIED", principal=p, organization_id=a.organization_id,
+                       target_type="Asset", target_id=a.asset_id, source_ip=client_ip(request),
+                       details={"action": "share:review", "review_action": body.action, "from": a.share_status,
+                                "to": target})
         raise ProblemError("FORBIDDEN", detail=f"{a.share_status} → {target}은 {', '.join(sorted(allowed))}의 일입니다")
     before = a.share_status
     changed = sharing.review(c, db, a, body.action, set(p.roles), p.principal_id, body.reason, body.legal_basis_ref,
