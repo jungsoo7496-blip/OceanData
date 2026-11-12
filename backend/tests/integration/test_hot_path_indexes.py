@@ -161,7 +161,7 @@ def _uploads(conn: Any, now: datetime, sql_tail: str, n: int) -> None:
 
 
 def test_upload_sweep_reads_only_open_uploads(ctx, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
-    from app.services.ingest import IngestService
+    from app.services.ingest import sweep_expired
 
     aborted: list[str] = []
 
@@ -177,9 +177,10 @@ def test_upload_sweep_reads_only_open_uploads(ctx, monkeypatch: pytest.MonkeyPat
                                      ELSE {NOW} + interval '1 day' END,
                                 {NOW} - interval '8 days', {NOW} - interval '8 days'""", 3004)
         conn.execute(text("ANALYZE uploads"))
-    with _captured(ctx.c.engine) as seen, ctx.c.sessionmaker.begin() as db:
-        swept = IngestService(ctx.c, db).sweep_expired()
-    nodes = _plan_nodes(ctx.c.engine, *_one(seen, "FROM uploads", "FOR UPDATE SKIP LOCKED"))
+    with _captured(ctx.c.engine) as seen:
+        swept = sweep_expired(ctx.c)
+    # 후보 고르기(정렬·LIMIT)가 부분 인덱스를 탄다. 잠금은 세션마다 기본 키로 잡는다 (ADR-0059)
+    nodes = _plan_nodes(ctx.c.engine, *_one(seen, "FROM uploads", "ORDER BY uploads.expires_at"))
     assert "ix_uploads_uploading_expires" in _index_names(nodes) and not _sorts(nodes), nodes
     with ctx.c.engine.connect() as conn:
         left = dict(conn.execute(text("SELECT status, count(*) FROM uploads GROUP BY status")).all())

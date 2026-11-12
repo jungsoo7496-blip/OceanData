@@ -237,10 +237,9 @@ def run_once(c: Container, worker_id: str) -> bool:
 
 def sweep(c: Container) -> int:
     """주기 정리: 만료 업로드 세션. 여러 워커가 돌아도 SKIP LOCKED로 겹치지 않는다."""
-    from app.services.ingest import IngestService
+    from app.services.ingest import sweep_expired
 
-    with c.sessionmaker.begin() as db:
-        n = IngestService(c, db).sweep_expired()
+    n = sweep_expired(c)  # 세션마다 자기 트랜잭션으로 확정한다 (ADR-0059)
     if n:
         log.info("expired_uploads_swept", extra={"count": n})
     from app.services.pipeline import sweep_stale_work

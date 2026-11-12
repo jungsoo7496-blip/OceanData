@@ -466,29 +466,6 @@ class IngestService:
                                     for n in sorted(got)],
                 "pending_parts": self._part_urls(up, pending), "expires_at": iso(up.expires_at)}
 
-    def sweep_expired(self, limit: int = 100) -> int:
-        """만료된 업로드 세션 정리: 멀티파트 정리·예약 해제 (요구사항 3.3). 워커가 주기적으로 부른다.
-
-        세션마다 SAVEPOINT 안에서 정리한다. 한 행이 실패해도(기록하고 넘어간다) 같은 묶음의 다른 기관 세션
-        정리와 그 뒤 주기 작업이 막히지 않는다. 돌려주는 값은 정리에 성공한 세션 수다.
-        """
-        rows = self.db.execute(select(Upload).where(Upload.status == "UPLOADING",
-                                                    Upload.expires_at <= self.c.clock.now())
-                               .order_by(Upload.expires_at).limit(limit).with_for_update(skip_locked=True)) \
-            .scalars().all()
-        done = 0
-        for up in rows:
-            upload_id = up.upload_id
-            try:
-                with self.db.begin_nested():
-                    released = self._release(up, "EXPIRED")
-            except Exception as exc:  # noqa: BLE001 - 한 세션의 실패가 묶음 전체를 막지 않게 한다
-                log.error("expired_upload_release_failed", extra={"upload_id": upload_id,
-                                                                  "error_type": type(exc).__name__})
-                continue
-            done += int(released)
-        return done
-
     def abort(self, up: Upload, *, preserve_asset: bool = False) -> None:
         if not self._release(up, "ABORTED", preserve_asset=preserve_asset):
             raise ProblemError("CONFLICT", detail="진행 중인 업로드만 취소할 수 있습니다")
@@ -567,6 +544,34 @@ class IngestService:
                              organization_id=asset.organization_id,
                              dedupe_key=f"integrity_verify:{asset.asset_id}:{up.upload_id}")
         return self.upload_status(up)
+
+
+def sweep_expired(c: Container, limit: int = 100) -> int:
+    """만료된 업로드 세션 정리: 멀티파트 정리·예약 해제 (요구사항 3.3). 워커가 주기적으로 부른다.
+
+    세션마다 따로 짧은 트랜잭션으로 정리하고 바로 확정한다(ADR-0059). 한 트랜잭션에 묶으면 앞 세션의 예약 해제가
+    잡은 기관 쿼터 행 잠금을 다음 세션들의 저장소 호출 내내 쥐게 되어 그동안 같은 기관의 새 업로드 예약이 기다린다.
+    다른 요청(완료·취소)이나 다른 정리기가 잠근 세션은 기다리지 않고 건너뛴다. 한 세션이 실패해도(기록하고 넘어간다)
+    다른 세션 정리와 그 뒤 주기 작업은 막히지 않는다. 돌려주는 값은 정리에 성공한 세션 수다.
+    """
+    now = c.clock.now()
+    expired = (Upload.status == "UPLOADING", Upload.expires_at <= now)
+    with c.sessionmaker() as db:  # 후보만 고른다 — 잠금은 세션마다 정리 트랜잭션에서 잡는다
+        candidates = db.scalars(select(Upload.upload_id).where(*expired).order_by(Upload.expires_at)
+                                .limit(limit)).all()
+    done = 0
+    for upload_id in candidates:
+        try:
+            with c.sessionmaker.begin() as db:
+                up = db.scalars(select(Upload).where(Upload.upload_id == upload_id, *expired)
+                                .with_for_update(skip_locked=True)).one_or_none()
+                released = up is not None and IngestService(c, db)._release(up, "EXPIRED")
+        except Exception as exc:  # noqa: BLE001 - 한 세션의 실패가 묶음 전체를 막지 않게 한다
+            log.error("expired_upload_release_failed", extra={"upload_id": upload_id,
+                                                              "error_type": type(exc).__name__})
+            continue
+        done += int(released)
+    return done
 
 
 # ---------------------------------------------------------------- 무결성 검증 (워커)
