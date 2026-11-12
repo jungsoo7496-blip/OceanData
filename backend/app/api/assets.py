@@ -232,6 +232,9 @@ def reprocess_asset(asset_id: str, body: ReprocessRequest, request: Request, db:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/steps", "code": "unique",
                                                         "message": "단계가 중복되었습니다"}])
     a = load_scoped(db, c, request, Asset, asset_id, p)
+    # 겹친 재처리·검증이 끝난 뒤의 상태로 판단한다. 읽어 둔 FAILED로 판단하면 그사이 등록된 자산을 VALIDATING으로
+    # 덮어쓰고 검증을 또 넣는다 — 그 검증은 무결성 로그 고유키에 걸려 FAILED로 끝난다 (ADR-0076)
+    db.refresh(a, with_for_update=True)
     sensor = body.steps == ["SENSOR_PARSE"]
     if "SENSOR_PARSE" in body.steps and not sensor:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/steps", "code": "mixed",

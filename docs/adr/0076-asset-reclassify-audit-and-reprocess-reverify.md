@@ -29,6 +29,12 @@
    **요청한 단계는 따로 넣지 않는다** — 등록 전에는 처리 결과가 하나도 없어 처음부터 도는 것이 '직전 단계부터'와 같다.
    끝난(FAILED) 검증 작업이 원래 중복 키를 쥐고 있으므로 이번 재처리 실행의 키(`integrity_verify:{asset}:{run}`)를 쓴다.
    작업 행은 요청 트랜잭션에 넣는다(요청이 되돌아가면 작업도 없다). 응답의 job_ids는 이 검증 작업이다 — 계약 설명에 적었다.
+   **재처리는 상태를 보기 전에 자산 행을 잠그고 다시 읽는다**(`db.refresh(a, with_for_update=True)`, 구간 클립 요청과 같은
+   방식). '한 번만'은 이 잠금을 전제로 한다. 잠그지 않고 읽은 값으로 판단하면, 늦은 요청이 FAILED를 읽은 뒤 앞선 재처리와
+   그 검증이 끝나 등록된 자산을 VALIDATING으로 덮어쓰고 검증을 또 넣는다. 그 검증은 등록된 자산의 무결성 로그를 다시 쓰려다
+   고유키(`uq_integrity_log_asset_id`)에 걸려 재시도를 다 쓰고 FAILED(failed_from=VALIDATING)가 되며, 그 뒤 재처리할 때마다
+   같은 일이 되풀이돼 정상 등록된 원본이 갇힌다. 잠그면 늦은 요청은 최신 상태를 본다: 등록됐으면 보통 재처리, 검증 중이면 409다.
+   검증의 두 트랜잭션도 자산 행을 잠그므로 진행 중인 검증과도 겹치지 않는다. 잠금 순서는 삭제와 같은 '원 자산 → 파생본'이다.
 2. **data_role 변경 감사(S23)**: 회차 지정까지 모든 검사와 마지막 flush를 통과한 뒤 `connection=db.connection()`으로
    요청 트랜잭션에 쓴다 (운영 정책 PATCH와 같은 방식). {from, to}는 바꾸기 전 값을 잡아 둔다.
 3. **권한 거부 감사(S24)**: 403 직전에 `PERMISSION_DENIED`(result DENIED, 대상 자산, details
@@ -67,7 +73,7 @@ data_role 변경이 남지 않는다. ORG_MEMBER의 data_role 변경 시도가 �
 - 회차 지정이 실패해 되돌아간 CORE 변경 요청에서도 이용 기관 철회 알림(메일)은 이미 보냈을 수 있다(알림은 트랜잭션 밖이다).
   감사·DB는 되돌아간다.
 
-되돌리는 방법: `reprocess_asset`의 검증 작업 분기, `patch_asset`의 `PERMISSION_DENIED`·`_audit_reclassified`,
+되돌리는 방법: `reprocess_asset`의 검증 작업 분기와 자산 행 잠금, `patch_asset`의 `PERMISSION_DENIED`·`_audit_reclassified`,
 `sharing.downgrade`의 반환값을 되돌리고 계약의 patchAsset 422·설명과 reprocessAsset 설명을 되돌린 뒤 웹·에이전트 타입을
 다시 만든다. 마이그레이션 없음.
 
@@ -75,5 +81,9 @@ data_role 변경이 남지 않는다. ORG_MEMBER의 data_role 변경 시도가 �
 성공한 변경의 감사 한 줄(대조), ORG_MEMBER 403의 PERMISSION_DENIED, CORE 변경의 SHARE_SCOPE_DOWNGRADED·GRANT_REVOKED,
 실패한 CORE 변경은 등급·권한·감사가 그대로, 다른 실증사업 회차 422의 계약 일치. `tests/integration/test_verify_resume.py::
 test_reprocess_after_exhausted_verification_restarts_verification` — 실제 워커로 검증 재시도를 다 쓴 뒤 재처리하면 등록·
-예약 정산·무결성 로그 한 번, 보통 처리 순서 한 번. 수정 전 코드에서 새 시험 9개 중 대조 시험(성공한 변경의 감사 한 줄)을
-뺀 8개가 실패하는 것을 확인했다.
+예약 정산·무결성 로그 한 번, 보통 처리 순서 한 번. `test_verify_resume.py::
+test_overlapping_reprocess_decides_on_the_locked_current_state` 2개 — 늦은 재처리 요청이 FAILED를 읽은 뒤 앞선 재처리가
+확정되면, 그 검증까지 끝나 등록된 자산은 보통 재처리(202, 처리 단계 작업)가 되고 상태·무결성 로그·예약이 그대로이며,
+검증이 아직이면 409이고 검증 작업은 앞선 하나뿐이다. 수정 전 코드에서 새 시험 9개 중 대조 시험(성공한 변경의 감사 한 줄)을
+뺀 8개가 실패하는 것을 확인했다. 겹친 재처리 시험 2개는 잠금 없이(검토 지적 전 이 브랜치) 실패하는 것을 확인했다 —
+등록된 자산이 `(202, 'VALIDATING')`, 검증 중인 자산이 409가 아니라 202였다.
