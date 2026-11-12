@@ -32,7 +32,7 @@ from app.config import get_settings
 from app.container import Container, build_container
 from app.errors import install_error_handlers
 from app.logging_setup import configure_logging
-from app.middleware import RequestContextMiddleware
+from app.middleware import RequestBodyLimitMiddleware, RequestContextMiddleware
 
 
 def create_app(c: Container | None = None) -> FastAPI:
@@ -50,6 +50,8 @@ def create_app(c: Container | None = None) -> FastAPI:
     from app.api.contract_query import _validators
 
     _validators()  # 조회 조건 검사기를 시작할 때 만든다 (계약 파일이 깨졌으면 요청마다가 아니라 기동 때 실패)
+    # 나중에 더한 미들웨어가 바깥이다: 요청 ID·지표·로그(바깥)가 본문 한도로 거절한 요청(안쪽, ADR-0068)에도 남는다
+    app.add_middleware(RequestBodyLimitMiddleware, max_bytes=c.settings.max_request_body_bytes)
     app.add_middleware(RequestContextMiddleware)
     app.include_router(system.router)
     app.include_router(auth.router)

@@ -10,6 +10,8 @@ from pydantic import Field, SecretStr, ValidationError, field_validator, model_v
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 CsvList = Annotated[list[str], NoDecode]
+# 요청 본문 한도 기본값 = 웹 프록시(web/nginx.conf `client_max_body_size 20m`, nginx의 m은 1024²)와 같다 (ADR-0068)
+MAX_REQUEST_BODY_BYTES_DEFAULT = 20 * 1024 * 1024
 
 
 class Settings(BaseSettings):
@@ -93,6 +95,9 @@ class Settings(BaseSettings):
     default_retention_days: int = 3650
     quarantine_retention_days: int = 30
     rate_limit_per_minute: int = 600
+    # 요청 본문 한도(바이트). 프록시를 거치지 않고 API로 바로 오는 요청에도 적용한다 — 넘으면 413 PAYLOAD_TOO_LARGE.
+    # 기본은 웹 프록시 한도와 같다(오늘 프록시가 받는 요청은 앱도 받는다). 바꿀 때는 프록시 값도 함께 본다 (ADR-0068)
+    max_request_body_bytes: int = Field(MAX_REQUEST_BODY_BYTES_DEFAULT, ge=1)
 
     # 처리 파이프라인 (05번). FFmpeg는 별도 프로세스, 하드웨어 인코더는 GPU_ENABLED일 때만
     ffmpeg_path: str = "ffmpeg"
@@ -215,6 +220,12 @@ class Settings(BaseSettings):
     def _empty_is_none(cls, v: object) -> object:
         # .env.example·Compose는 선택 숫자를 빈 값(`KEY=`)으로 둔다 — 빈 값은 '설정 안 함'이다
         return None if isinstance(v, str) and not v.strip() else v
+
+    @field_validator("max_request_body_bytes", mode="before")
+    @classmethod
+    def _empty_is_default(cls, v: object) -> object:
+        # 기본값이 있는 숫자는 빈 값(`KEY=`)이면 기본값을 쓴다 ('설정 안 함'이지 '한도 없음'이 아니다)
+        return MAX_REQUEST_BODY_BYTES_DEFAULT if isinstance(v, str) and not v.strip() else v
 
     @model_validator(mode="after")
     def _warm_not_hot(self) -> Settings:

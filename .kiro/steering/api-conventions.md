@@ -41,7 +41,7 @@ fileMatchPattern: ["backend/app/api/**", "contracts/**", "web/src/api/**", "agen
 | INVALID_STATE_TRANSITION | 409 | domain.md 5장에서 허용하지 않는 전이 |
 | QUOTA_EXCEEDED | 409 | 저장 쿼터 초과 |
 | GONE | 410 | 만료된 업로드 세션·등록 코드·이용 권한 |
-| PAYLOAD_TOO_LARGE | 413 | 요청 본문·배치 크기 한도 초과 |
+| PAYLOAD_TOO_LARGE | 413 | 요청 본문·배치 크기 한도 초과 — 본문 전체 한도(`MAX_REQUEST_BODY_BYTES`, 기본은 웹 프록시와 같은 20MiB)는 어느 작업에서나 날 수 있다 (ADR-0068) |
 | RULE_VIOLATION | 422 | 수집·공유·이용 정책 조건 미충족 (`unmet_conditions`) |
 | UNSUPPORTED_SCHEMA_VERSION | 422 | 다른 주버전, 또는 서버가 모르는 더 높은 부버전 (스키마 검증 전에 먼저 확인) |
 | RATE_LIMITED | 429 | 호출 제한 (`Retry-After` 헤더) |
