@@ -618,7 +618,10 @@ class IntegrityVerifier:
     def verify(self, asset_id: str) -> str:
         with self.c.sessionmaker.begin() as db:
             asset = db.execute(select(Asset).where(Asset.asset_id == asset_id).with_for_update()).scalar_one()
-            revalidate = asset.ingest_status == "VALIDATING" and asset.storage_zone == "QUARANTINE"
+            # 격리됐다가 보완 뒤 다시 검증하는 자산이다. 격리 이동이 실패했으면 객체는 원래 존에 있지만
+            # 격리 사유가 남아 있다(ADR-0060) — 처음 검증을 이어 하는 것(resume)으로 보면 바이트를 한 번 더 센다.
+            revalidate = asset.ingest_status == "VALIDATING" and (asset.storage_zone == "QUARANTINE"
+                                                                  or asset.quarantine_reason is not None)
             # 앞선 시도가 VALIDATING을 확정한 뒤 죽었거나 실패했으면(임대 만료·스트림 오류) 이어서 끝낸다.
             # 검증은 객체를 다시 읽는 작업이고 등록·정산은 아래 두 번째 트랜잭션 한 번이라 되풀이해도 안전하다(ADR-0058)
             resume = asset.ingest_status == "VALIDATING" and not revalidate
@@ -661,6 +664,9 @@ class IntegrityVerifier:
             asset = db.execute(select(Asset).where(Asset.asset_id == asset_id).with_for_update()).scalar_one()
             if asset.ingest_status != "VALIDATING":
                 return asset.ingest_status  # 겹쳐 돈 다른 실행이 먼저 등록·격리했다 (임대 만료로 작업이 겹칠 수 있다)
+            # 격리 사용량(quarantine_bytes)은 격리 존에 있는 객체의 바이트다. 삭제(retention.delete_assets)가 존을 보고
+            # 빼므로 셀 때도 존을 본다 — 격리로 옮기지 못한 객체는 원래 존에 있으니 사용량으로 센다 (ADR-0060)
+            was_in_quarantine_zone = asset.storage_zone == "QUARANTINE"
             reason = None
             if scanned is not None:  # 검사 기록 (엔진·결과만, 내용은 남기지 않는다)
                 asset.ingest_context = {**(asset.ingest_context or {}), "malware_scan": {
@@ -684,25 +690,36 @@ class IntegrityVerifier:
                 db.get(Upload, up.upload_id).reserved_bytes = 0  # type: ignore[union-attr]
             if reason:
                 self._quarantine(db, asset, reason)
+                in_quarantine_zone = asset.storage_zone == "QUARANTINE"
                 if not revalidate:
-                    # 격리 사용량은 자산의 byte_size로 센다: 삭제(retention.delete_assets)·재검증이 같은 값을 빼야
-                    # 쌓이지 않는다. 완료 시점에 파트 크기를 신고 크기와 맞춰 보므로 받은 객체 크기와도 같다
-                    quota.settle(asset.organization_id, reserved, to="quarantine", actual=asset.byte_size)
+                    # 자산의 byte_size로 센다: 삭제·재검증이 같은 값을 빼야 쌓이지 않는다. 완료 시점에 파트 크기를
+                    # 신고 크기와 맞춰 보므로 받은 객체 크기와도 같다
+                    quota.settle(asset.organization_id, reserved, to="quarantine" if in_quarantine_zone else "used",
+                                 actual=asset.byte_size)
+                elif in_quarantine_zone and not was_in_quarantine_zone:
+                    # 지난 격리 때 옮기지 못한 객체를 이번에 옮겼다 — 사용량에서 격리 사용량으로
+                    q = quota._row(asset.organization_id)
+                    q.used_bytes = max(0, q.used_bytes - asset.byte_size)
+                    q.quarantine_bytes += asset.byte_size
                 return "QUARANTINED"
-            if revalidate:  # 격리 존에서 정식 위치(HOT)로 되돌린다
+            if revalidate:  # 격리 존(또는 옮기지 못해 남은 원래 위치)에서 정식 위치(HOT)로 되돌린다
                 asset.quarantine_reason = None
-                tiers.relocate(self.c, asset, zone=zone_for(asset.variant), key=object_key(asset))
+                target = ("HOT", zone_for(asset.variant), object_key(asset))
+                # 같은 자리로 옮기면(복사 뒤 원본 삭제) 객체를 잃는다
+                if (asset.storage_tier, asset.storage_zone, asset.storage_key) != target:
+                    tiers.relocate(self.c, asset, zone=target[1], key=target[2])
             asset.ingest_status = states.transition("ingest_status", "VALIDATING", "REGISTERED", {"SERVICE"})
             apply_rules(asset, rules, self.c.clock.now())
             asset.updated_at = self.c.clock.now()
             append_integrity(db, asset, self.c.clock.now())
             # 잠금 순서는 다른 파생 작업(record_derived)과 같게 '무결성 로그 → 쿼터 행'이다.
             # 재검증이 쿼터 행을 먼저 잡으면 교착이 나고, 피해자가 되면 객체는 옮겨졌는데 DB는 되돌아간다 (ADR-0058)
-            if revalidate:  # 격리 사용량을 사용량으로 옮긴다
+            # 격리 사용량을 사용량으로 옮긴다. 옮기지 못해 원래 존에 남았던 것은 이미 사용량으로 셌다
+            if revalidate and was_in_quarantine_zone:
                 q = quota._row(asset.organization_id)
                 q.quarantine_bytes = max(0, q.quarantine_bytes - asset.byte_size)
                 q.used_bytes += asset.byte_size
-            else:
+            elif not revalidate:
                 quota.settle(asset.organization_id, reserved, to="used", actual=asset.byte_size)  # 통과면 size와 같다
             if asset.data_type != "VIDEO":  # 프록시가 필요 없는 유형 (05번이 영상 프록시를 만든다)
                 asset.ingest_status = states.transition("ingest_status", "REGISTERED", "READY_PRIVATE", {"SERVICE"})

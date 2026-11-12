@@ -50,7 +50,7 @@
 | C8 | 낮음 | 스위퍼가 만료 세션의 쿼터 행 잠금을 쥔 채 저장소를 호출한다(세션 6개·지연 0.5초에 새 업로드 2.5초 지연) | **고침** (ADR-0059, `test_upload_release.py::test_sweep_does_not_hold_quota_lock_during_storage_calls`). 세션마다 짧은 트랜잭션으로 확정 |
 | C9 | 낮음 | 등록된 자식의 부모 업로드가 만료되면 계보가 사라진다 | **미완** |
 | C10 | 낮음 | 같은 체크섬의 동시 `create_upload`에서 진 쪽이 500 | **완화** — 항목 5의 SQLSTATE 23505 → 409 매핑으로 409(에이전트가 백오프 재시도) |
-| C11 | 낮음 | 격리 이동 실패 뒤 삭제하면 `quarantine_bytes`가 샌다 | **미완** |
+| C11 | 낮음 | 격리 이동 실패 뒤 삭제하면 `quarantine_bytes`가 샌다 | **고침** (ADR-0060, `test_quarantine_accounting.py`). 격리 사용량은 격리 존에 있는 객체로 센다. 같은 원인으로 보완 뒤 재검증이 바이트를 두 번 세던 것도 고침 |
 | C12 | 낮음 | 클립 API: 사유가 U+0085·U+2028·방향 제어 문자를 받음, 숫자 자리에 `true`·`"0"` 허용, 시각 미상 부모의 클립이 PASSED, 클립 POST는 Idempotency-Key 미구현 | **미완** |
 
 ## C. 웹훅 전송 격리 (`repro/webhook/`)
