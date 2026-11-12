@@ -1,0 +1,2 @@
+# gitleaks 오탐 예외 (지문 단위). 시험용 합성 상수이며 실제 비밀값이 아니다.
+a6e7179bb7f174e72e97f50020b016cfb23de4f4:agent/cmd/marine-agent/diagnostic_test.go:generic-api-key:24
