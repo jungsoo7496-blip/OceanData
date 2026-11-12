@@ -675,6 +675,8 @@ paths:
         - XML 항목(.xml)은 UTF-8이어야 하고, XML 선언에 인코딩이 있으면 UTF-8이어야 한다 (내보내기는 UTF-8로 쓴다).
         - XML 항목이 하나 이상 있어야 하고, 압축을 푼 크기(zip 헤더에 적힌 항목 크기의 합)는 100MiB 이하다.
           항목은 헤더에 적힌 크기까지만 읽는다.
+        초안을 HWPX로 내보내려면 XML 항목에 {{report.status}} 자리표시자가 있어야 한다("초안" 표시 자리, exportReport).
+        올릴 때는 이것을 요구하지 않는다(승인·제출본만 내보내는 양식).
       x-freeze: G1
       x-status: draft
       requestBody:
@@ -899,6 +901,8 @@ paths:
         (켜진 형식은 /v1/system/capabilities의 report_formats와 같다. PDF는 렌더러를 불러올 수 없으면 꺼진 것이다).
         PDF·XLSX의 근거 손상 안내는 보고서 조회와 같은 범위의 손상 자산 ID를 표시한다.
         HWPX: 저장된 양식을 쓸 수 없으면(양식 검사가 생기기 전에 올린 양식 등) 409 CONFLICT다. 양식을 다시 올린 뒤 내보낸다.
+        HWPX의 "초안" 표시는 양식의 {{report.status}} 자리로만 들어간다. 초안(DRAFT) 버전은 양식의 XML 항목에 이 자리표시자가
+        없으면(여러 텍스트 조각으로 나뉜 경우 포함) 표시 없는 파일을 만들지 않고 409 CONFLICT다 (ADR-0080). 다른 상태의 버전은 상관없다.
         PDF: 외부 주소(이미지·글꼴·스타일, http·file 모두)를 가져오지 않는다. 서버 프로세스마다 동시에 만드는 PDF 수에
         설정 한도(REPORT_PDF_MAX_CONCURRENT)가 있어, 차면 기다리지 않고 429 RATE_LIMITED와 Retry-After를 준다 (ADR-0066).
       x-freeze: G1

@@ -362,11 +362,24 @@ def hwpx_values(doc: dict[str, Any]) -> dict[str, str]:
     return values
 
 
-def render_hwpx(template: bytes, doc: dict[str, Any]) -> bytes:
-    """양식의 XML 항목에서 {{변수}}를 바꾼다. 쓸 수 없는 양식이면 HwpxTemplateError (check_hwpx와 같은 기준)."""
+class HwpxPlaceholderMissing(Exception):
+    """꼭 넣어야 할 값의 자리표시자가 양식의 XML 항목에 없다 (초안의 {{report.status}}, ADR-0080)."""
+
+    def __init__(self, names: list[str]) -> None:
+        super().__init__(", ".join(names))
+        self.names = names
+
+
+def render_hwpx(template: bytes, doc: dict[str, Any], *, required: tuple[str, ...] = ()) -> bytes:
+    """양식의 XML 항목에서 {{변수}}를 바꾼다. 쓸 수 없는 양식이면 HwpxTemplateError (check_hwpx와 같은 기준).
+
+    required의 변수가 바꾼 자리 중에 하나도 없으면 HwpxPlaceholderMissing — 렌더러가 실제로 바꾸는 자리(XML 항목의
+    PLACEHOLDER)만 센다. 여러 텍스트 조각으로 나뉜 자리표시자는 없는 것으로 본다 (양식 구조는 해석하지 않는다)."""
     values = hwpx_values(doc)
+    seen: set[str] = set()
 
     def sub(m: re.Match[str]) -> str:
+        seen.add(m.group(1))
         return xml_escape(xml_safe(values.get(m.group(1), m.group(0))), _ATTR_ENTITIES)
 
     out = io.BytesIO()
@@ -375,4 +388,7 @@ def render_hwpx(template: bytes, doc: dict[str, Any]) -> bytes:
         for info, content in _template_entries(template, keep=True):
             data = PLACEHOLDER.sub(sub, content).encode("utf-8") if isinstance(content, str) else content
             dst.writestr(info, data, compress_type=info.compress_type)
+    missing = [name for name in required if name not in seen]
+    if missing:
+        raise HwpxPlaceholderMissing(missing)
     return out.getvalue()

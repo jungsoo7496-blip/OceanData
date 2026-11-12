@@ -578,11 +578,19 @@ def export_report(report_id: str, request: Request, format: Literal["PDF", "XLSX
     else:
         if not tpl.hwpx_key:
             raise ProblemError("CONFLICT", detail="이 양식에는 HWPX 원본이 없습니다")
+        # 초안은 문서에 '초안' 표시가 있어야 한다(요구사항 4.4). HWPX는 양식의 {{report.status}} 자리로만 들어가므로
+        # 그 자리가 없는 양식이면 표시 없는 초안 파일을 내보내지 않는다 (ADR-0080, 계약 점검 S35)
+        required = ("report.status",) if v.status == "DRAFT" else ()
         try:
-            data = rr.render_hwpx(c.storage.get_object(c.settings.bucket_evidence, tpl.hwpx_key), doc)
+            data = rr.render_hwpx(c.storage.get_object(c.settings.bucket_evidence, tpl.hwpx_key), doc,
+                                  required=required)
         except rr.HwpxTemplateError as exc:  # 양식 검사(ADR-0066) 전에 저장된 양식
             raise ProblemError("CONFLICT",
                                detail=f"저장된 HWPX 양식을 쓸 수 없습니다({exc}). 양식을 다시 올리세요") from None
+        except rr.HwpxPlaceholderMissing:
+            raise ProblemError("CONFLICT", detail="이 HWPX 양식에는 {{report.status}} 자리가 없어 초안 표시를 넣을 수 "
+                                                  "없습니다. 양식의 XML 본문에 {{report.status}}를 넣어 다시 올리세요"
+                                                  "(PDF·XLSX는 초안 표시를 넣어 내보냅니다)") from None
     c.audit.record("REPORT_EXPORTED", principal=p, organization_id=rep.organization_id, target_type="Report",
                    target_id=rep.report_id, source_ip=client_ip(request),
                    details={"version": v.version, "format": format})

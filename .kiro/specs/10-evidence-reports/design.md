@@ -28,6 +28,8 @@
 `{{session.label}}`·`{{session.title}}`·`{{session.starts_at}}`·`{{project.name}}`·`{{organization.name}}`·`{{period.from}}`,
 `{{report.title}}`·`{{report.status}}`·`{{report.version}}`·`{{report.generated_at}}`·`{{report.data_as_of}}`,
 `{{field.<key>}}`, `{{metric.<CODE>}}`(값·'데이터 없음'·'검증 필요'), `{{metric.<CODE>.formula}}`. 모르는 자리표시자는 그대로 둔다.
+HWPX의 '초안' 표시는 `{{report.status}}` 자리로만 들어간다. 초안 버전은 양식의 XML 항목에 이 자리가 없으면 표시 없는 파일을
+만들지 않고 409다(ADR-0080). 승인·제출·대체된 버전과 양식 올리기는 상관없다.
 
 ## 결정
 - ADR-0018: 보고서 내보내기 방식, Pillow·Pyphen 라이선스 예외(승인 대기)

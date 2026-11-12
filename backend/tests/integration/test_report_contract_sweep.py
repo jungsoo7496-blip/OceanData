@@ -1,11 +1,15 @@
 """10번 보고서 계약 점검 S34~S38 (ADR-0080).
 
+- S35 초안 HWPX는 양식에 {{report.status}} 자리가 없으면 '초안' 표시 없이 내보내지 않고 409다.
 - S36 내보내기는 보고서·버전 범위를 먼저 확인한다. 형식이 꺼져 있어도 다른 기관·없는 보고서는 404(+감사)다.
 - S37 /v1/system/capabilities의 report_formats는 내보내기가 받는 형식과 같다 (PDF 렌더러가 없으면 PDF 없음).
 - S38 관리기관 열람자의 latest_version은 제출된 버전 중 최신이다 (제출되지 않은 초안의 수를 드러내지 않는다).
 """
 
 from __future__ import annotations
+
+import io
+import zipfile
 
 import pytest
 
@@ -32,6 +36,56 @@ def _approve_and_submit(c: Ctx, rid: str) -> None:
     for step in ("approve", "submit"):
         r = c.client.post(f"/v1/reports/{rid}/{step}", headers=c.as_user(ADMIN))
         assert r.status_code == 200, r.text
+
+
+# ------------------------------------------------------------------ S35 초안 HWPX의 '초안' 표시
+
+
+def _zip(entries: dict[str, str]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("mimetype", "application/hwp+zip")
+        for name, data in entries.items():
+            z.writestr(name, data)
+    return buf.getvalue()
+
+
+def _put_template(c: Ctx, entries: dict[str, str]) -> None:
+    r = c.client.put(TPL, content=_zip(entries), headers={**c.as_user(OP), "Content-Type": "application/octet-stream"})
+    assert r.status_code == 200, r.text
+
+
+def test_draft_hwpx_needs_the_status_placeholder(ictx: Ctx) -> None:
+    """양식에 {{report.status}}가 없으면 초안 HWPX는 409(감사 없음). 자리가 있으면 '초안'이 들어가고, 승인본은 상관없다."""
+    c, hm = ictx.client, ictx.as_user(MEMBER)
+    _put_template(ictx, {"Contents/section0.xml": "<sec><p>{{report.title}} {{report.generated_at}} "
+                                                   "{{report.data_as_of}}</p></sec>"})
+    rid = _new_report(ictx)
+    path = EXPORT.format(report_id=rid)
+    r = c.get(path, params={"format": "HWPX"}, headers=hm)
+    assert r.status_code == 409, "초안 표시 없는 초안 HWPX를 내보냈다"
+    check(r, "GET", EXPORT)
+    assert r.json()["code"] == "CONFLICT" and "{{report.status}}" in r.json()["detail"], r.text
+    assert "REPORT_EXPORTED" not in ictx.audit_actions()
+    assert c.get(path, params={"format": "XLSX"}, headers=hm).status_code == 200  # 다른 형식은 그대로
+
+    # 렌더러가 바꾸는 자리만 센다: XML이 아닌 항목에만 있으면 없는 것과 같다
+    _put_template(ictx, {"Contents/section0.xml": "<sec><p>{{report.title}}</p></sec>",
+                         "Preview/PrvText.txt": "{{report.status}}"})
+    assert c.get(path, params={"format": "HWPX"}, headers=hm).status_code == 409
+
+    # 앞뒤 공백이 있는 자리도 렌더러와 같이 알아본다
+    _put_template(ictx, {"Contents/section0.xml": "<sec><p>{{ report.status }} {{report.title}}</p></sec>"})
+    r = c.get(path, params={"format": "HWPX"}, headers=hm)
+    assert r.status_code == 200, r.text
+    assert zipfile.ZipFile(io.BytesIO(r.content)).read("Contents/section0.xml").decode().startswith("<sec><p>초안 ")
+
+    # 승인본은 초안 표시가 필요 없다
+    _put_template(ictx, {"Contents/section0.xml": "<sec><p>{{report.title}}</p></sec>"})
+    assert c.post(f"/v1/reports/{rid}/approve", headers=ictx.as_user(ADMIN)).status_code == 200
+    r = c.get(path, params={"format": "HWPX"}, headers=hm)
+    assert r.status_code == 200, r.text
+    assert ictx.audit_actions().count("REPORT_EXPORTED") == 3  # XLSX 1건, HWPX 2건
 
 
 # ------------------------------------------------------------------ S36 내보내기 확인 순서
