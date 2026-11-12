@@ -1,12 +1,14 @@
 """10번 보고서 계약 점검 S34~S38 (ADR-0080).
 
 - S36 내보내기는 보고서·버전 범위를 먼저 확인한다. 형식이 꺼져 있어도 다른 기관·없는 보고서는 404(+감사)다.
+- S37 /v1/system/capabilities의 report_formats는 내보내기가 받는 형식과 같다 (PDF 렌더러가 없으면 PDF 없음).
 """
 
 from __future__ import annotations
 
 import pytest
 
+from app.adapters import report_renderers as rr
 from app.seed import SES_A
 from tests.conftest import Ctx
 from tests.contract.openapi_contract import assert_matches_contract as check
@@ -50,3 +52,26 @@ def test_export_checks_report_scope_before_the_format_gate(ctx: Ctx) -> None:
     own = c.get(path, params={"format": "XLSX"}, headers=hm)  # 볼 수 있는 보고서에만 형식 409
     check(own, "GET", EXPORT)
     assert own.status_code == 409 and "REPORT_FORMATS" in own.json()["detail"], own.text
+
+
+# ------------------------------------------------------------------ S37 켜진 형식
+
+
+@pytest.mark.parametrize("renderer", [True, False], ids=["pdf-renderer", "no-pdf-renderer"])
+def test_capabilities_list_only_formats_the_export_accepts(ctx: Ctx, monkeypatch: pytest.MonkeyPatch,
+                                                            renderer: bool) -> None:
+    monkeypatch.setattr(ctx.c.settings, "report_formats", ["XLSX", "PDF"])
+    monkeypatch.setattr(rr, "pdf_available", lambda: renderer)
+    monkeypatch.setattr(rr, "render_pdf", lambda doc: b"%PDF-1.7 synthetic")  # 렌더러가 있는지만 본다
+    hm = ctx.as_user(MEMBER)
+    rid = _new_report(ctx)
+    caps = ctx.client.get("/v1/system/capabilities", headers=hm)
+    check(caps, "GET", "/v1/system/capabilities")
+    formats = caps.json()["report_formats"]
+    assert formats == (["XLSX", "PDF"] if renderer else ["XLSX"]), "내보내기가 받지 않는 형식을 켜졌다고 알렸다"
+    for fmt in ("XLSX", "PDF"):
+        r = ctx.client.get(EXPORT.format(report_id=rid), params={"format": fmt}, headers=hm)
+        assert (r.status_code == 200) is (fmt in formats), (fmt, r.status_code)
+        if r.status_code == 409:
+            detail = r.json()["detail"]  # REPORT_FORMATS에는 PDF가 있다: 이유는 렌더러다
+            assert "렌더러" in detail and "(REPORT_FORMATS)" not in detail, detail

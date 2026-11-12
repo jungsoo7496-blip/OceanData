@@ -554,6 +554,9 @@ def export_report(report_id: str, request: Request, format: Literal["PDF", "XLSX
     rep = _load_report(db, c, request, report_id, p)
     v = _report_version(db, rep, p, version)
     if format not in rr.enabled_formats(c.settings.report_formats):
+        if format in c.settings.report_formats:  # 설정에는 있다: PDF 렌더러를 불러올 수 없다 (ADR-0018)
+            raise ProblemError("CONFLICT",
+                               detail="PDF 렌더러(WeasyPrint·pango)를 불러올 수 없어 PDF 내보내기가 꺼져 있습니다")
         raise ProblemError("CONFLICT", detail=f"{format} 내보내기가 켜져 있지 않습니다 (REPORT_FORMATS)")
     tpl = reports.latest_template(db, rep.template_code, rep.template_version)
     if tpl is None:
