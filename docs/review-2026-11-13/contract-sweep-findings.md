@@ -12,15 +12,15 @@
 | ID | 심각도 | 작업 | 분류 | 고칠 쪽 | 상태 |
 |---|---|---|---|---|---|
 | S01 | medium | `POST /v1/datasets/{dataset_id}/versions` | missing-behavior | 구현 | 고침 (ADR-0072) |
-| S02 | medium | `POST /v1/distributions` | missing-audit | 구현 | 미처리 |
+| S02 | medium | `POST /v1/distributions` | missing-audit | 구현 | 고침 (ADR-0073) |
 | S03 | low | `GET /v1/datasets` | data-semantics | 구현 | 고침 (ADR-0072) |
 | S04 | low | `GET /v1/datasets/{dataset_id}/versions/{dataset_version_id}/lineage` | wrong-status | 계약 문구 | 계약 문구 고침 (ADR-0072) |
 | S05 | low | `POST /v1/datasets/{dataset_id}/versions` | wrong-status | 구현 | 고침 (ADR-0072) |
-| S06 | medium | `POST /v1/grants/{grant_id}/revoke, POST /v1/grants/{grant_id}/destruction-confirmation, POST /v1/access-requests/{access_request_id}/decisions` | missing-audit | 구현 | 미처리 |
-| S07 | medium | `POST /v1/access-requests` | wrong-status | 구현 | 미처리 |
+| S06 | medium | `POST /v1/grants/{grant_id}/revoke, POST /v1/grants/{grant_id}/destruction-confirmation, POST /v1/access-requests/{access_request_id}/decisions` | missing-audit | 구현 | 고침 (ADR-0073) |
+| S07 | medium | `POST /v1/access-requests` | wrong-status | 구현 | 고침 (ADR-0073) |
 | S08 | low | `POST /v1/access-requests` | data-semantics | 사람 결정 | 사람 결정 대기 |
-| S09 | low | `POST /v1/access-requests/{access_request_id}/decisions` | wrong-status | 계약 문구 | 미처리 |
-| S10 | low | `POST /v1/access-requests/{access_request_id}/decisions` | data-semantics | 구현 | 미처리 |
+| S09 | low | `POST /v1/access-requests/{access_request_id}/decisions` | wrong-status | 계약 문구 | 계약 문구 고침 (ADR-0073) |
+| S10 | low | `POST /v1/access-requests/{access_request_id}/decisions` | data-semantics | 구현 | 고침 (ADR-0073) |
 | S11 | high | `PATCH /v1/assets/{asset_id}/classification` | data-semantics | 구현 | 미처리 |
 | S12 | medium | `POST /v1/assets/{asset_id}/share-review` | missing-behavior | 구현 | 미처리 |
 | S13 | medium | `POST /v1/assets/{asset_id}/share-review` | scope-or-permission | 구현 | 검증 의견 갈림 |
@@ -65,6 +65,11 @@
 - **S03 데이터셋 목록 쪽 나눔** — `limit`(기본 50, 최대 500)과 `cursor`대로 `dataset_id` 순으로 나누고 다음 쪽이 있으면 `next_cursor`를 준다. 이용기관에게는 보이는 버전(게시·L3 이상·READY)이 있는 데이터셋으로만 쪽을 채워 쪽이 짧거나 다음 쪽이 비지 않는다. 웹 운영 콘솔 데이터셋과 이용기관 카탈로그는 `?limit=500`으로 부른다. ADR-0072.
 - **S04 계보 409** — 동작은 그대로 둔다(READY만 200, BUILDING·FAILED는 409 `CONFLICT`, 볼 수 없는 버전은 상태와 관계없이 404). 계약 `getDatasetVersionLineage`에 409 응답과 설명을 적었다.
 - **S05 item_asset_ids 형식** — 항목이 `asset_id` 형식이 아니면 400 `VALIDATION_ERROR`와 `/item_asset_ids/<i>` 오류를 반환한다. 같은 ID가 다시 나오면 그 자리마다 400(`code: unique`)이다. 중복 ID를 조용히 합쳐 201을 주지 않고 멱등 기록도 남기지 않는다. 형식이 맞지만 없는 자산은 지금처럼 422 `RULE_VIOLATION`이다. ADR-0072.
+- **S02 배포의 다른 기관 이용 권한** — 다른 이용기관의 이용 권한 ID로 `POST /v1/distributions`를 보내면 없는 ID와 같은 404를 반환하고 `CROSS_ORG_ACCESS_ATTEMPT`(대상 `Grant`, 기관은 권한을 가진 이용기관)를 기록한다. 없는 ID에는 감사를 남기지 않는다. 주인 이용기관의 발급(201)·만료 권한 410은 그대로다.
+- **S06 이용 권한 철회·파기 확인·이용 신청 결정의 다른 기관 요청** — 역할 범위 밖인 다른 기관의 권한·신청을 철회·파기 확인·결정하려 하면 같은 404와 `CROSS_ORG_ACCESS_ATTEMPT`(대상 `Grant`·`AccessRequest`)를 기록하고 아무것도 바꾸지 않는다. 같은 기관인데 역할 범위 밖이면 교차 기관으로 보지 않는다(Tenant_Guard와 같은 규칙). 역할별 조회는 그대로다. ADR-0073.
+- **S07 이용 신청 기간 날짜** — 달력에 없는 날짜(2월 30일·13월·0일)와 끝 날짜 9999-12-31은 500 대신 400 `VALIDATION_ERROR`와 `/period/start_date`·`/period/end_date` 오류를 반환하고 신청·감사를 남기지 않는다. 9999-12-30은 받는다. 계약 설명에 명시했다. ADR-0073.
+- **S09 운영자 승인의 L3 미달** — 제공기관 승인 뒤 자산 등급이 내려가 버전이 L3 아래가 되면 운영자 승인이 422 `RULE_VIOLATION`인 것을 `decideAccessRequest` 계약(응답 목록·설명)에 명시했다. 결정과 이용 권한은 남지 않고 신청은 `PROVIDER_APPROVED`로 남는다.
+- **S10 응답 기한 뒤 결정** — 기한(`deadline_at`)이 지난 신청의 제공기관·운영자 승인은 409 `INVALID_STATE_TRANSITION`(응답 기한 초과)으로 거부하고 결정·이용 권한을 만들지 않는다. 비교는 정비 주기와 같다(`deadline_at < 지금`). 거절은 받고, `DENIED` 전이는 정비 주기가 한다. 계약 설명에 명시했다. ADR-0073.
 
 ## datasets (버전·배포·카탈로그) — 발견 5건
 
