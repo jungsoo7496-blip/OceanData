@@ -1328,6 +1328,12 @@ type ClientInterface interface {
 
 	// AbortUpload 업로드 취소 (미완료 파트 정리, 쿼터 예약 해제)
 	//
+	// 진행 중인 세션만 취소한다(완료·취소·만료로 끝난 세션이나 다른 요청이 처리 중인 세션은 409 CONFLICT).
+	// 저장소의 미완료 멀티파트를 정리하고 쿼터 예약을 해제한다. 저장소에 이 업로드의 완성 객체가 남아 있으면(완료 직후
+	// 확정 전에 중단된 요청) 함께 지운다.
+	// 저장소 정리를 확인하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다 —
+	// 다시 요청하면 이어서 정리한다.
+	//
 	// Corresponds with DELETE /v1/uploads/{upload_id} (the `AbortUpload` operationId).
 	AbortUpload(ctx context.Context, uploadId UploadId, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1348,6 +1354,8 @@ type ClientInterface interface {
 	// 본문은 저장소가 먼저 거부할 수 있다.
 	// 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
 	// Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
+	// 유효 기간이 지난 세션은 저장소를 정리(남은 완성 객체 포함)하고 쿼터 예약을 해제한 뒤 410 GONE이다. 만료 세션을
+	// 저장소에서 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -1366,6 +1374,8 @@ type ClientInterface interface {
 	// 본문은 저장소가 먼저 거부할 수 있다.
 	// 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
 	// Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
+	// 유효 기간이 지난 세션은 저장소를 정리(남은 완성 객체 포함)하고 쿼터 예약을 해제한 뒤 410 GONE이다. 만료 세션을
+	// 저장소에서 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -1373,6 +1383,11 @@ type ClientInterface interface {
 	CompleteUpload(ctx context.Context, uploadId UploadId, params *CompleteUploadParams, body CompleteUploadJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListUploadParts 완료된 파트와 남은 파트의 새 URL (재개용)
+	//
+	// 이미 완료된 세션은 409 CONFLICT, 취소·만료된 세션은 410 GONE. 유효 기간이 지난 세션은 저장소의 미완료 멀티파트(완료
+	// 직후 확정 전에 중단된 요청이 남긴 완성 객체 포함)를 정리하고 쿼터 예약을 해제한 뒤 410 GONE을 반환한다.
+	// 저장소에서 파트 목록을 조회하지 못하거나 만료 세션을 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며
+	// 세션과 쿼터 예약을 유지한다.
 	//
 	// Corresponds with GET /v1/uploads/{upload_id}/parts (the `ListUploadParts` operationId).
 	ListUploadParts(ctx context.Context, uploadId UploadId, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1648,6 +1663,12 @@ func (c *Client) CreateUpload(ctx context.Context, params *CreateUploadParams, b
 
 // AbortUpload 업로드 취소 (미완료 파트 정리, 쿼터 예약 해제)
 //
+// 진행 중인 세션만 취소한다(완료·취소·만료로 끝난 세션이나 다른 요청이 처리 중인 세션은 409 CONFLICT).
+// 저장소의 미완료 멀티파트를 정리하고 쿼터 예약을 해제한다. 저장소에 이 업로드의 완성 객체가 남아 있으면(완료 직후
+// 확정 전에 중단된 요청) 함께 지운다.
+// 저장소 정리를 확인하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다 —
+// 다시 요청하면 이어서 정리한다.
+//
 // Corresponds with DELETE /v1/uploads/{upload_id} (the `AbortUpload` operationId).
 func (c *Client) AbortUpload(ctx context.Context, uploadId UploadId, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewAbortUploadRequest(c.Server, uploadId)
@@ -1688,6 +1709,8 @@ func (c *Client) GetUpload(ctx context.Context, uploadId UploadId, reqEditors ..
 // 본문은 저장소가 먼저 거부할 수 있다.
 // 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
 // Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
+// 유효 기간이 지난 세션은 저장소를 정리(남은 완성 객체 포함)하고 쿼터 예약을 해제한 뒤 410 GONE이다. 만료 세션을
+// 저장소에서 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 //
 // Takes any type of body and a specified content type.
 //
@@ -1716,6 +1739,8 @@ func (c *Client) CompleteUploadWithBody(ctx context.Context, uploadId UploadId, 
 // 본문은 저장소가 먼저 거부할 수 있다.
 // 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
 // Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
+// 유효 기간이 지난 세션은 저장소를 정리(남은 완성 객체 포함)하고 쿼터 예약을 해제한 뒤 410 GONE이다. 만료 세션을
+// 저장소에서 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -1733,6 +1758,11 @@ func (c *Client) CompleteUpload(ctx context.Context, uploadId UploadId, params *
 }
 
 // ListUploadParts 완료된 파트와 남은 파트의 새 URL (재개용)
+//
+// 이미 완료된 세션은 409 CONFLICT, 취소·만료된 세션은 410 GONE. 유효 기간이 지난 세션은 저장소의 미완료 멀티파트(완료
+// 직후 확정 전에 중단된 요청이 남긴 완성 객체 포함)를 정리하고 쿼터 예약을 해제한 뒤 410 GONE을 반환한다.
+// 저장소에서 파트 목록을 조회하지 못하거나 만료 세션을 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며
+// 세션과 쿼터 예약을 유지한다.
 //
 // Corresponds with GET /v1/uploads/{upload_id}/parts (the `ListUploadParts` operationId).
 func (c *Client) ListUploadParts(ctx context.Context, uploadId UploadId, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -2433,6 +2463,12 @@ type ClientWithResponsesInterface interface {
 
 	// AbortUploadWithResponse 업로드 취소 (미완료 파트 정리, 쿼터 예약 해제)
 	//
+	// 진행 중인 세션만 취소한다(완료·취소·만료로 끝난 세션이나 다른 요청이 처리 중인 세션은 409 CONFLICT).
+	// 저장소의 미완료 멀티파트를 정리하고 쿼터 예약을 해제한다. 저장소에 이 업로드의 완성 객체가 남아 있으면(완료 직후
+	// 확정 전에 중단된 요청) 함께 지운다.
+	// 저장소 정리를 확인하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다 —
+	// 다시 요청하면 이어서 정리한다.
+	//
 	// Returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with DELETE /v1/uploads/{upload_id} (the `AbortUpload` operationId).
@@ -2457,6 +2493,8 @@ type ClientWithResponsesInterface interface {
 	// 본문은 저장소가 먼저 거부할 수 있다.
 	// 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
 	// Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
+	// 유효 기간이 지난 세션은 저장소를 정리(남은 완성 객체 포함)하고 쿼터 예약을 해제한 뒤 410 GONE이다. 만료 세션을
+	// 저장소에서 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -2475,6 +2513,8 @@ type ClientWithResponsesInterface interface {
 	// 본문은 저장소가 먼저 거부할 수 있다.
 	// 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
 	// Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
+	// 유효 기간이 지난 세션은 저장소를 정리(남은 완성 객체 포함)하고 쿼터 예약을 해제한 뒤 410 GONE이다. 만료 세션을
+	// 저장소에서 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -2482,6 +2522,11 @@ type ClientWithResponsesInterface interface {
 	CompleteUploadWithResponse(ctx context.Context, uploadId UploadId, params *CompleteUploadParams, body CompleteUploadJSONRequestBody, reqEditors ...RequestEditorFn) (*CompleteUploadResponse, error)
 
 	// ListUploadPartsWithResponse 완료된 파트와 남은 파트의 새 URL (재개용)
+	//
+	// 이미 완료된 세션은 409 CONFLICT, 취소·만료된 세션은 410 GONE. 유효 기간이 지난 세션은 저장소의 미완료 멀티파트(완료
+	// 직후 확정 전에 중단된 요청이 남긴 완성 객체 포함)를 정리하고 쿼터 예약을 해제한 뒤 410 GONE을 반환한다.
+	// 저장소에서 파트 목록을 조회하지 못하거나 만료 세션을 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며
+	// 세션과 쿼터 예약을 유지한다.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -3457,6 +3502,12 @@ type AbortUploadResponse429Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
+// AbortUploadResponse503Headers the declared response headers of an HTTP 503 response for AbortUpload
+type AbortUploadResponse503Headers struct {
+	RetryAfter *int
+	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
+}
+
 type AbortUploadResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -3470,6 +3521,8 @@ type AbortUploadResponse struct {
 	ApplicationproblemJSON409 *Conflict
 	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
 	ApplicationproblemJSON429 *TooManyRequests
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *ServiceUnavailable
 	// Headers401 the parsed response headers for an HTTP 401 response
 	Headers401 *AbortUploadResponse401Headers
 	// Headers403 the parsed response headers for an HTTP 403 response
@@ -3480,6 +3533,8 @@ type AbortUploadResponse struct {
 	Headers409 *AbortUploadResponse409Headers
 	// Headers429 the parsed response headers for an HTTP 429 response
 	Headers429 *AbortUploadResponse429Headers
+	// Headers503 the parsed response headers for an HTTP 503 response
+	Headers503 *AbortUploadResponse503Headers
 }
 
 // GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
@@ -3505,6 +3560,11 @@ func (r AbortUploadResponse) GetApplicationproblemJSON409() *Conflict {
 // GetApplicationproblemJSON429 returns the response for an HTTP 429 `application/problem+json` response
 func (r AbortUploadResponse) GetApplicationproblemJSON429() *TooManyRequests {
 	return r.ApplicationproblemJSON429
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r AbortUploadResponse) GetApplicationproblemJSON503() *ServiceUnavailable {
+	return r.ApplicationproblemJSON503
 }
 
 // GetBody returns the raw response body bytes
@@ -3822,6 +3882,12 @@ type ListUploadPartsResponse429Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
+// ListUploadPartsResponse503Headers the declared response headers of an HTTP 503 response for ListUploadParts
+type ListUploadPartsResponse503Headers struct {
+	RetryAfter *int
+	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
+}
+
 type ListUploadPartsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -3839,6 +3905,8 @@ type ListUploadPartsResponse struct {
 	ApplicationproblemJSON410 *Gone
 	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
 	ApplicationproblemJSON429 *TooManyRequests
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *ServiceUnavailable
 	// Headers401 the parsed response headers for an HTTP 401 response
 	Headers401 *ListUploadPartsResponse401Headers
 	// Headers403 the parsed response headers for an HTTP 403 response
@@ -3851,6 +3919,8 @@ type ListUploadPartsResponse struct {
 	Headers410 *ListUploadPartsResponse410Headers
 	// Headers429 the parsed response headers for an HTTP 429 response
 	Headers429 *ListUploadPartsResponse429Headers
+	// Headers503 the parsed response headers for an HTTP 503 response
+	Headers503 *ListUploadPartsResponse503Headers
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
@@ -3886,6 +3956,11 @@ func (r ListUploadPartsResponse) GetApplicationproblemJSON410() *Gone {
 // GetApplicationproblemJSON429 returns the response for an HTTP 429 `application/problem+json` response
 func (r ListUploadPartsResponse) GetApplicationproblemJSON429() *TooManyRequests {
 	return r.ApplicationproblemJSON429
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r ListUploadPartsResponse) GetApplicationproblemJSON503() *ServiceUnavailable {
+	return r.ApplicationproblemJSON503
 }
 
 // GetBody returns the raw response body bytes
@@ -4141,6 +4216,12 @@ func (c *ClientWithResponses) CreateUploadWithResponse(ctx context.Context, para
 
 // AbortUploadWithResponse 업로드 취소 (미완료 파트 정리, 쿼터 예약 해제)
 //
+// 진행 중인 세션만 취소한다(완료·취소·만료로 끝난 세션이나 다른 요청이 처리 중인 세션은 409 CONFLICT).
+// 저장소의 미완료 멀티파트를 정리하고 쿼터 예약을 해제한다. 저장소에 이 업로드의 완성 객체가 남아 있으면(완료 직후
+// 확정 전에 중단된 요청) 함께 지운다.
+// 저장소 정리를 확인하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다 —
+// 다시 요청하면 이어서 정리한다.
+//
 // Returns a wrapper object for the known response body format(s).
 //
 // Corresponds with DELETE /v1/uploads/{upload_id} (the `AbortUpload` operationId).
@@ -4177,6 +4258,8 @@ func (c *ClientWithResponses) GetUploadWithResponse(ctx context.Context, uploadI
 // 본문은 저장소가 먼저 거부할 수 있다.
 // 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
 // Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
+// 유효 기간이 지난 세션은 저장소를 정리(남은 완성 객체 포함)하고 쿼터 예약을 해제한 뒤 410 GONE이다. 만료 세션을
+// 저장소에서 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -4201,6 +4284,8 @@ func (c *ClientWithResponses) CompleteUploadWithBodyWithResponse(ctx context.Con
 // 본문은 저장소가 먼저 거부할 수 있다.
 // 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
 // Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
+// 유효 기간이 지난 세션은 저장소를 정리(남은 완성 객체 포함)하고 쿼터 예약을 해제한 뒤 410 GONE이다. 만료 세션을
+// 저장소에서 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -4214,6 +4299,11 @@ func (c *ClientWithResponses) CompleteUploadWithResponse(ctx context.Context, up
 }
 
 // ListUploadPartsWithResponse 완료된 파트와 남은 파트의 새 URL (재개용)
+//
+// 이미 완료된 세션은 409 CONFLICT, 취소·만료된 세션은 410 GONE. 유효 기간이 지난 세션은 저장소의 미완료 멀티파트(완료
+// 직후 확정 전에 중단된 요청이 남긴 완성 객체 포함)를 정리하고 쿼터 예약을 해제한 뒤 410 GONE을 반환한다.
+// 저장소에서 파트 목록을 조회하지 못하거나 만료 세션을 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며
+// 세션과 쿼터 예약을 유지한다.
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -5321,6 +5411,13 @@ func ParseAbortUploadResponse(rsp *http.Response) (*AbortUploadResponse, error) 
 		}
 		response.ApplicationproblemJSON429 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
 	}
 
 	switch {
@@ -5388,6 +5485,23 @@ func ParseAbortUploadResponse(rsp *http.Response) (*AbortUploadResponse, error) 
 			headers.XRequestId = &value
 		}
 		response.Headers429 = &headers
+	case rsp.StatusCode == 503:
+		var headers AbortUploadResponse503Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = &value
+		}
+		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
+			var value ExternalCommonSchemaDefsUlid3520d2d2
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XRequestId = &value
+		}
+		response.Headers503 = &headers
 	}
 
 	return response, nil
@@ -5746,6 +5860,13 @@ func ParseListUploadPartsResponse(rsp *http.Response) (*ListUploadPartsResponse,
 		}
 		response.ApplicationproblemJSON429 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
 	}
 
 	switch {
@@ -5823,6 +5944,23 @@ func ParseListUploadPartsResponse(rsp *http.Response) (*ListUploadPartsResponse,
 			headers.XRequestId = &value
 		}
 		response.Headers429 = &headers
+	case rsp.StatusCode == 503:
+		var headers ListUploadPartsResponse503Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = &value
+		}
+		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
+			var value ExternalCommonSchemaDefsUlid3520d2d2
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XRequestId = &value
+		}
+		response.Headers503 = &headers
 	}
 
 	return response, nil
