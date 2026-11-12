@@ -75,6 +75,8 @@ BAD_TEMPLATES = {
     "euc-kr": [("Contents/section0.xml", "<s>한글 {{report.title}}</s>".encode("euc-kr"))],
     "backslash-traversal": [("Contents/section0.xml", "<s/>"), ("..\\..\\evil.xml", "<a/>")],
     "drive-letter": [("Contents/section0.xml", "<s/>"), ("C:/Windows/evil.xml", "<a/>")],
+    # 방향 제어 문자(U+202E)로 'evilgnp.xml'처럼 보이는 이름. 소스에 보이지 않는 글자를 넣지 않으려고 chr로 만든다
+    "bidi-name": [("Contents/section0.xml", "<s/>"), ("BinData/evil" + chr(0x202E) + "lmx.png", b"\x89PNG")],
 }
 
 

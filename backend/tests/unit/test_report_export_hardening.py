@@ -2,6 +2,9 @@
 
 - HWPX 양식: UTF-8이 아니거나 읽을 수 없는 양식(손상·암호화·지원하지 않는 압축)이 올릴 때 검사를 통과하고 내보낼 때
   예외(→ 500)가 났다. zip 항목 이름 검사는 POSIX 형태('/'로 시작·'..')만 막아 역슬래시·드라이브 문자·UNC 이름이 통과했다.
+  제어 문자(C0·C1)와 보이지 않는 서식 문자(방향 제어 등)가 든 이름도 거부한다.
+- 양식 읽기 메모리: 검사와 내보내기는 항목을 조각으로 읽는다. 검사는 XML 항목을 글로 풀지 않고, 헤더에 적힌 크기보다
+  길게 풀리는 압축 자료(압축 폭탄)도 적힌 크기까지만 읽는다.
 - PDF: WeasyPrint 기본 URL fetcher는 http·file 주소를 가져온다. 지금은 HTML 이스케이프가 사용자 글을 막지만, 그것이
   뚫려도 렌더러는 어떤 주소도 가져오지 않아야 한다.
 
@@ -16,8 +19,10 @@ import random
 import struct
 import sys
 import threading
+import tracemalloc
 import zipfile
-from collections.abc import Iterator
+import zlib
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -132,7 +137,11 @@ BAD_NAMES = [
     "C:/Windows/evil.xml", "C:evil.xml", "c:\\evil.xml", "Contents/section0.xml:stream",  # 드라이브·스트림
     "\\\\server\\share\\evil.xml", "//server/share/evil.xml",  # UNC
     "/etc/evil.xml", "a/../../evil.xml", "../evil.xml",  # POSIX (전에도 막았다)
-    "Contents/sec\ttion.xml",  # 제어 문자
+    "Contents/sec\ttion.xml",  # 제어 문자 C0
+    # C1 제어 문자(NEL·CSI)와 보이지 않는 서식 문자. 소스에 보이지 않는 글자를 넣지 않으려고 chr로 만든다
+    "Contents/a" + chr(0x85) + "b.xml", "Contents/a" + chr(0x9B) + "31mb.xml",
+    "BinData/evil" + chr(0x202E) + "lmx.png",  # RLO: 'evilgnp.xml'처럼 보인다
+    "Contents/a" + chr(0x200B) + "b.xml", "Contents/a" + chr(0x2028) + "b.xml", "Contents/a" + chr(0xFEFF) + "b.xml",
 ]
 
 
@@ -147,7 +156,8 @@ def test_entry_names_that_leave_the_package_are_rejected(name: str) -> None:
 def test_ordinary_package_entry_names_keep_working() -> None:
     names = ["mimetype", "version.xml", "Contents/", "Contents/header.xml", "Contents/section0.xml",
              "Contents/content.hpf", "META-INF/container.xml", "META-INF/manifest.xml", "settings.xml",
-             "BinData/image1.png", "BinData/그림 1.png", "Preview/PrvText.txt", "Preview/a..b.png", "./x.xml"]
+             "BinData/image1.png", "BinData/그림 1.png", "Preview/PrvText.txt", "Preview/a..b.png", "./x.xml",
+             "BinData/" + chr(0x3000) + "전각 공백·가운뎃점.png"]
     data = _zip([(n, b"" if n.endswith("/") else (SECTION if n.endswith(".xml") else b"\x00\x01")) for n in names])
     assert rr.check_hwpx(data) == []
     out = zipfile.ZipFile(io.BytesIO(rr.render_hwpx(data, _doc(title="제목"))))
@@ -166,6 +176,99 @@ def test_utf8_parts_with_or_without_declaration_are_accepted(head: str, bom: byt
     assert rr.check_hwpx(data) == []
     out = zipfile.ZipFile(io.BytesIO(rr.render_hwpx(data, _doc(title="합성"))))
     assert out.read("Contents/section0.xml") == bom + (head + "<s>합성 한글</s>").encode()
+
+
+# ------------------------------------------------------------------ HWPX: 읽을 때 메모리 (검토 지적, ADR-0066)
+
+MiB = 1 << 20
+BOMB_METHODS = {"deflate": zipfile.ZIP_DEFLATED, "bzip2": zipfile.ZIP_BZIP2, "lzma": zipfile.ZIP_LZMA}
+
+
+def _a_entry(method: int, size: int, *, tail: bytes = b"", declared: int | None = None) -> bytes:
+    """'a' size바이트(+ tail)인 XML 항목 하나짜리 양식. 내용을 조각으로 써서 시험이 그만큼 메모리를 쓰지 않는다.
+
+    declared를 주면 헤더(로컬·중앙 디렉터리)의 크기와 CRC를 앞 declared바이트의 것으로 고친다 — 압축 자료는 size
+    바이트로 풀리는데 헤더는 declared바이트라고 적은 양식(압축 폭탄)이다."""
+    buf = io.BytesIO()
+    info = zipfile.ZipInfo("Contents/section0.xml")
+    info.compress_type = method
+    with zipfile.ZipFile(buf, "w") as z, z.open(info, "w") as w:
+        for _ in range(size // MiB):
+            w.write(b"a" * MiB)
+        w.write(tail)
+    if declared is None:
+        return buf.getvalue()
+    b = bytearray(buf.getvalue())
+    crc, cd = zlib.crc32(b"a" * declared), b.find(b"PK\x01\x02")
+    for crc_at, size_at in ((14, 22), (cd + 16, cd + 24)):
+        struct.pack_into("<I", b, crc_at, crc)
+        struct.pack_into("<I", b, size_at, declared)
+    return bytes(b)
+
+
+def _peak(fn: Callable[[], object]) -> int:
+    """fn이 도는 동안 Python이 잡은 메모리의 최댓값 (바이트)."""
+    tracemalloc.start()
+    try:
+        fn()
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def test_check_does_not_hold_a_large_xml_part_in_memory() -> None:
+    """올릴 때 검사는 XML 항목을 조각으로 읽어 UTF-8만 보고 버린다. 'a' 32MiB 끝에 4바이트 글자 하나를 붙인 항목
+    (올리는 크기 32KiB 남짓)을 글로 통째로 풀면 글자마다 4바이트라 160MiB가 넘는다 (검토: 98KB 올리기에 600MB)."""
+    data = _a_entry(zipfile.ZIP_DEFLATED, 32 * MiB, tail=chr(0x1F600).encode())
+    assert len(data) < 64 * 1024
+    problems: list[str] = []
+    peak = _peak(lambda: problems.extend(rr.check_hwpx(data)))
+    assert problems == []
+    assert peak < 8 * MiB, f"{peak / MiB:.1f}MiB"  # 수정 전 160MiB 남짓
+
+
+@pytest.mark.parametrize("method", list(BOMB_METHODS))
+def test_compression_bomb_entry_is_read_only_up_to_its_declared_size(method: str) -> None:
+    """헤더에는 1000바이트, 실제로는 32MiB로 풀리는 항목: 읽기는 적힌 크기에서 멈추고 한 번에 푸는 양도 조각 크기로
+    묶인다. 전에는 압축 해제 한 번에 끝까지 풀어(그 뒤 잘라 냄) 올리기 1MB 남짓이면 메모리 2GB를 썼다."""
+    data = _a_entry(BOMB_METHODS[method], 32 * MiB, declared=1000)
+    assert len(data) < 64 * 1024
+    problems: list[str] = []
+    peak = _peak(lambda: problems.extend(rr.check_hwpx(data)))
+    assert problems == []  # 적힌 크기만큼 읽은 내용과 CRC가 맞는다 — 쓸 수 있는 양식이다
+    assert peak < 16 * MiB, f"{peak / MiB:.1f}MiB"  # 수정 전 77~85MiB (lzma는 압축 해제 사전 8MiB를 쓴다)
+    out = zipfile.ZipFile(io.BytesIO(rr.render_hwpx(data, _doc())))
+    assert out.read("Contents/section0.xml") == b"a" * 1000
+    if method != "lzma":  # lzma는 내보낼 때 다시 묶는 압축기가 그 자체로 90MiB 남짓을 쓴다 (읽기와 무관)
+        peak = _peak(lambda: rr.render_hwpx(data, _doc()))
+        assert peak < 16 * MiB, f"{peak / MiB:.1f}MiB"  # 수정 전 77MiB 남짓
+
+
+@pytest.mark.parametrize(("chunks", "delta"), [(1, -1), (1, -2), (3, 5)], ids=["chunk-1", "chunk-2", "inside"])
+@pytest.mark.parametrize("method", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED], ids=["stored", "deflate"])
+def test_utf8_is_checked_across_read_chunks(method: int, chunks: int, delta: int) -> None:
+    """조각으로 읽어도 판정은 항목 전체를 한 번에 푼 것과 같다: 조각 경계에 걸친 글자는 받고, 경계 뒤의 잘못된
+    바이트와 끝이 잘린 글자는 거부한다."""
+    at = chunks * rr._READ_CHUNK + delta  # 이 위치에서 글자가 시작한다
+    han = "한".encode()
+
+    def tpl(body: bytes) -> bytes:
+        return _zip([("Contents/section0.xml", b"<s>" + b"a" * (at - 3) + body)], method=method)
+
+    ok = tpl(han + b"{{report.title}}</s>")  # '한'(3바이트)이 조각 경계에 걸친다
+    assert rr.check_hwpx(ok) == []
+    out = zipfile.ZipFile(io.BytesIO(rr.render_hwpx(ok, _doc(title="합성"))))
+    assert out.read("Contents/section0.xml").endswith(han + "합성</s>".encode())
+    for bad in (b"\xed\xa0\x80</s>", b"\xff</s>", han[:2]):  # 서로게이트·UTF-8에 없는 바이트·끝이 잘린 글자
+        assert rr.check_hwpx(tpl(bad)) == ["XML 항목이 UTF-8이 아닙니다: Contents/section0.xml"], bad
+        with pytest.raises(rr.HwpxTemplateError):
+            rr.render_hwpx(tpl(bad), _doc())
+
+
+def test_encoding_declaration_is_found_in_a_part_longer_than_a_chunk() -> None:
+    body = b'<?xml version="1.0" encoding="EUC-KR"?><s>' + b"a" * (3 * rr._READ_CHUNK) + b"</s>"
+    assert rr.check_hwpx(_zip([("Contents/section0.xml", body)])) == [
+        "XML 항목의 인코딩 선언이 UTF-8이 아닙니다: Contents/section0.xml"]
 
 
 # ------------------------------------------------------------------ PDF: 어떤 주소도 가져오지 않는다

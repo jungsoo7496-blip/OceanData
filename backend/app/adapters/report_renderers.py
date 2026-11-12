@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import codecs
 import functools
 import html
 import io
@@ -13,10 +14,11 @@ import logging
 import lzma
 import re
 import threading
+import unicodedata
 import zipfile
 import zlib
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Generator, Iterator
+from contextlib import closing, contextmanager
 from typing import Any
 from xml.sax.saxutils import escape as xml_escape
 
@@ -242,29 +244,84 @@ HWPX_MAX_UNPACKED = 100 * 1024 * 1024
 # 잘린 압축 자료, UTF-8 표시가 있지만 UTF-8이 아닌 이름 등). 무작위로 망가뜨린 양식으로 확인했다.
 _ZIP_ERRORS = (zipfile.BadZipFile, RuntimeError, NotImplementedError, EOFError, OSError, ValueError, zlib.error,
                lzma.LZMAError)
+# 항목을 한 번에 읽는 양. 이 이미지의 Python(3.12) zipfile은 한 번 읽을 때 푸는 양도 요청한 크기로 묶으므로(deflate·
+# bzip2·lzma), 헤더에 적은 크기보다 훨씬 길게 풀리는 압축 자료(압축 폭탄)도 조각 하나 넘게 메모리에 올리지 않는다.
+# 헤더에 적은 크기를 넘는 부분은 zipfile이 버린다 (ADR-0066)
+_READ_CHUNK = 256 * 1024
+# XML 선언은 문서 맨 앞의 짧은 줄이다. 인코딩 선언은 앞 4KiB 안에서만 찾는다 (검사가 항목 전체를 글로 들고 있지 않게)
+_XML_HEAD = 4096
 _XML_ENCODING = re.compile(r"""\A\ufeff?<\?xml[^>]*?\bencoding\s*=\s*["']([^"']*)["']""")
-_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+# 항목 이름에 넣을 수 없는 글자의 유니코드 범주: 제어 문자 Cc(C0·DEL·C1), 보이지 않는 서식 문자 Cf(방향 제어
+# U+200E·U+200F·U+202A~U+202E·U+2066~U+2069, 폭 없는 문자 U+200B~U+200D, BOM 등), 줄·문단 구분 Zl·Zp(U+2028·U+2029).
+# 계약이 다른 곳(ClipRequest.reason)에서 '제어 문자·보이지 않는 서식 문자'로 정한 글자를 모두 포함한다
+_NAME_FORBIDDEN = frozenset({"Cc", "Cf", "Zl", "Zp"})
 
 
 def _bad_entry_name(name: str) -> bool:
-    """zip 항목 이름이 패키지 밖을 가리키거나 OS마다 다르게 풀릴 수 있으면 참.
+    """zip 항목 이름이 패키지 밖을 가리키거나, OS마다 다르게 풀리거나, 보이는 것과 다른 이름이면 참.
 
     ZIP 형식의 구분자는 '/'뿐이다. 역슬래시는 Windows에서 구분자라 '..\\'·'C:\\'·UNC('\\\\서버')가 되고,
     ':'는 드라이브 문자('C:x')나 NTFS 스트림('a.xml:s')이 된다. 그래서 POSIX 형태('/'로 시작·'..' 단계)와 함께
-    역슬래시·':'·제어 문자가 든 이름을 모두 거부한다. 일반 항목 이름('Contents/section0.xml' 등)은 해당이 없다."""
-    return (not name or name.startswith("/") or "\\" in name or ":" in name or bool(_CONTROL.search(name))
-            or ".." in name.split("/"))
+    역슬래시·':'가 든 이름을 거부한다. 제어 문자와 보이지 않는 서식 문자(방향 제어로 'evil‹RLO›lmx.png'가
+    'evilgnp.xml'처럼 보이는 등)도 거부한다. 일반 항목 이름('Contents/section0.xml', 'BinData/그림 1.png' 등)은
+    해당이 없다."""
+    return (not name or name.startswith("/") or "\\" in name or ":" in name or ".." in name.split("/")
+            or any(unicodedata.category(ch) in _NAME_FORBIDDEN for ch in name))
 
 
 def _is_xml(info: zipfile.ZipInfo) -> bool:
     return info.filename.lower().endswith(".xml")
 
 
-def _template_entries(data: bytes) -> Iterator[tuple[zipfile.ZipInfo, bytes | str]]:
-    """양식의 항목을 순서대로 읽는다. XML 항목은 UTF-8로 푼 글(str), 나머지는 바이트다.
+def _entry_chunks(z: zipfile.ZipFile, info: zipfile.ZipInfo) -> Generator[bytes, None, None]:
+    """항목 하나를 _READ_CHUNK씩 읽는다. 읽을 수 없으면(손상·암호화·지원하지 않는 압축) HwpxTemplateError."""
+    try:
+        with z.open(info) as fp:
+            while chunk := fp.read(_READ_CHUNK):
+                yield chunk
+    except _ZIP_ERRORS:
+        raise HwpxTemplateError(
+            f"zip 항목을 읽을 수 없습니다(손상·암호화·지원하지 않는 압축): {info.filename[:120]}") from None
+
+
+def _read_entry(z: zipfile.ZipFile, info: zipfile.ZipInfo, keep: bool) -> bytes | str:
+    """항목 하나를 끝까지 읽어 확인한다. XML 항목은 읽으면서 조각마다 엄격한 UTF-8인지 보고(글은 만들지 않고 버린다),
+    앞부분의 인코딩 선언을 본다. keep이면 내용(XML은 UTF-8로 푼 글, 나머지는 바이트)을, 아니면 빈 값을 돌려준다."""
+    name = info.filename[:120]
+    utf8 = codecs.getincrementaldecoder("utf-8")("strict") if _is_xml(info) else None
+    head = b""
+    parts: list[bytes] = []
+    try:
+        with closing(_entry_chunks(z, info)) as chunks:
+            for chunk in chunks:
+                if keep:
+                    parts.append(chunk)
+                if utf8 is not None:
+                    utf8.decode(chunk)
+                    if len(head) < _XML_HEAD:
+                        head += chunk[:_XML_HEAD - len(head)]
+        if utf8 is not None:
+            utf8.decode(b"", final=True)  # 끝이 잘린 글자
+    except UnicodeDecodeError:  # zipfile 쪽 오류는 _entry_chunks가 이미 HwpxTemplateError로 바꿨다
+        raise HwpxTemplateError(f"XML 항목이 UTF-8이 아닙니다: {name}") from None
+    raw = b"".join(parts)
+    parts.clear()
+    if utf8 is None:
+        return raw
+    # head는 UTF-8 글의 앞부분이라 끝에 잘린 글자 하나만 있을 수 있다
+    declared = _XML_ENCODING.match(head.decode("utf-8", "ignore"))
+    if declared and declared.group(1).strip().lower() not in ("utf-8", "utf8"):
+        # 내보내기는 UTF-8로 쓴다. 다른 인코딩을 선언한 문서에 UTF-8 한글을 넣으면 읽는 쪽이 글자를 깨뜨린다
+        raise HwpxTemplateError(f"XML 항목의 인코딩 선언이 UTF-8이 아닙니다: {name}")
+    return raw.decode("utf-8")
+
+
+def _template_entries(data: bytes, *, keep: bool) -> Iterator[tuple[zipfile.ZipInfo, bytes | str]]:
+    """양식의 항목을 순서대로 읽는다. keep이면 XML 항목은 UTF-8로 푼 글(str), 나머지는 바이트다.
 
     올릴 때 검사(check_hwpx)와 내보내기(render_hwpx)가 이 함수 하나로 양식을 읽는다 — 검사를 통과한 양식은 내보낼 때도
-    같은 길로 열린다. 쓸 수 없는 양식이면 HwpxTemplateError (내부 구조는 해석하지 않는다, ADR-0018)."""
+    같은 길로 열린다. 검사는 keep=False로 읽은 조각을 바로 버려, 올리기 한 번이 양식을 푼 크기만큼 메모리를 쓰지
+    않는다(조각 몇 개 크기). 쓸 수 없는 양식이면 HwpxTemplateError (내부 구조는 해석하지 않는다, ADR-0018)."""
     try:
         z = zipfile.ZipFile(io.BytesIO(data))
     except _ZIP_ERRORS:
@@ -278,30 +335,13 @@ def _template_entries(data: bytes) -> Iterator[tuple[zipfile.ZipInfo, bytes | st
         if sum(i.file_size for i in infos) > HWPX_MAX_UNPACKED:
             raise HwpxTemplateError("압축을 푼 크기가 너무 큽니다")
         for info in infos:
-            name = info.filename[:120]
-            try:
-                raw = z.read(info)
-            except _ZIP_ERRORS:
-                raise HwpxTemplateError(
-                    f"zip 항목을 읽을 수 없습니다(손상·암호화·지원하지 않는 압축): {name}") from None
-            if not _is_xml(info):
-                yield info, raw
-                continue
-            try:
-                text = raw.decode("utf-8")
-            except UnicodeDecodeError:
-                raise HwpxTemplateError(f"XML 항목이 UTF-8이 아닙니다: {name}") from None
-            declared = _XML_ENCODING.match(text)
-            if declared and declared.group(1).strip().lower() not in ("utf-8", "utf8"):
-                # 내보내기는 UTF-8로 쓴다. 다른 인코딩을 선언한 문서에 UTF-8 한글을 넣으면 읽는 쪽이 글자를 깨뜨린다
-                raise HwpxTemplateError(f"XML 항목의 인코딩 선언이 UTF-8이 아닙니다: {name}")
-            yield info, text
+            yield info, _read_entry(z, info, keep)
 
 
 def check_hwpx(data: bytes) -> list[str]:
     """올린 양식을 렌더러가 쓸 수 있는지 본다: zip 항목 이름, 모든 항목 읽기, XML 항목의 UTF-8 (ADR-0018·0066)."""
     try:
-        for _ in _template_entries(data):
+        for _ in _template_entries(data, keep=False):
             pass
     except HwpxTemplateError as exc:
         return [str(exc)]
@@ -332,7 +372,7 @@ def render_hwpx(template: bytes, doc: dict[str, Any]) -> bytes:
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w") as dst:
         # 순서·압축 방식을 그대로 둔다 (첫 항목이 무압축이어야 하는 패키지 형식 대비)
-        for info, content in _template_entries(template):
+        for info, content in _template_entries(template, keep=True):
             data = PLACEHOLDER.sub(sub, content).encode("utf-8") if isinstance(content, str) else content
             dst.writestr(info, data, compress_type=info.compress_type)
     return out.getvalue()
