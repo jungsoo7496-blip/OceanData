@@ -12,7 +12,7 @@ OSS-CANDIDATES 목록에도 없었다.
 ## 결정
 1. **별도 프로세스 개발 도구로만 실행한다**: `go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run ./...`
    (CI agent 작업, `make agent-lint`). `agent/go.mod`·`go.sum`에 넣지 않는다 → 제품 모듈 그래프·SBOM·라이선스 검사에 나타나지 않고
-   `marine-agent` 바이너리에도 링크되지 않는다. 버전은 v2.15.0으로 고정한다(Go 1.26 이상 필요, CI는 1.26.10).
+   `marine-agent` 바이너리에도 링크되지 않는다. 버전은 v2.15.0으로 고정한다(Go 1.26 이상 필요, CI는 1.26.11).
 2. **설정**: v2 형식, `standard`(errcheck·govet·ineffassign·staticcheck·unused) + gofmt 포매터. 제외 규칙·`//nolint`를 두지 않는다.
    버리는 오류는 코드에서 `_ =`로 드러내고, 쓰기 파일의 닫기 오류는 확인한다.
 3. **Windows 전용 파일도 검사**: 두 번째 실행은 `go run -exec "env GOOS=windows" …`로 린터는 실행 중인 컴퓨터용으로 빌드하고

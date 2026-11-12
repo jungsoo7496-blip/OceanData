@@ -8,7 +8,7 @@ cd agent && go build -o bin/marine-agent ./cmd/marine-agent            # Linux
 GOOS=windows go build -o bin/marine-agent.exe ./cmd/marine-agent       # Windows
 go build -ldflags "-X main.version=0.1.0" -o bin/marine-agent ./cmd/marine-agent
 ```
-Go 1.26.10 이상 (go.mod `toolchain`). 주요 의존성: fsnotify(BSD-3), modernc.org/sqlite(BSD-3), kardianos/service(Zlib), go-selfupdate/update(MIT), oapi-codegen/runtime(Apache-2.0).
+Go 1.26.11 이상 (go.mod `toolchain`). 주요 의존성: fsnotify(BSD-3), modernc.org/sqlite(BSD-3), kardianos/service(Zlib), go-selfupdate/update(MIT), oapi-codegen/runtime(Apache-2.0).
 
 ## 사용
 ```bash

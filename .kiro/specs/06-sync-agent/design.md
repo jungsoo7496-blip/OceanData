@@ -25,7 +25,7 @@
 - 계약 변경: `agent-heartbeat.schema.json`에 `policy_excluded`(정수) 추가 — 정책 제외 건수 보고 (2.4).
 - 장비 정책의 숫자 기술 상한과 구형 정책 배포 거부를 계약에 정의한다 (ADR-0040). 범위 밖 정책은 유효한 이전 정책을 유지하고 하트비트에 POLICY_INVALID를 기록한다.
 - 개발 편의 CLI (backend): `python -m app.cli set-policy <수집기> <정책.json>`(스키마·매핑 검증, 버전 증가, 감사), `python -m app.cli enrollment-code <수집기>`(운영자 대리 발급, 감사). 정식 화면은 09번.
-- Go 툴체인 1.26.10: 1.24.7 표준 라이브러리 취약점(crypto/x509, net/http)을 govulncheck가 보고해 올렸다.
+- Go 툴체인 1.26.11: 1.24.7 표준 라이브러리 취약점(crypto/x509, net/http)을 govulncheck가 보고해 올렸고, 1.26.10의 net/http 취약점(GO-2026-6859) 때문에 2026-11-12에 1.26.11로 다시 올렸다.
 
 ## 2026-11-05 로컬 보완 (ADR-0024·0025)
 

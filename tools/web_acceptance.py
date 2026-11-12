@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -22,7 +23,6 @@ import socket
 import subprocess  # nosec B404 - 고정된 시험 명령을 실행한다
 import sys
 import time
-import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -93,7 +93,8 @@ def run(out: Path, timeout: int) -> int:
                         with urllib.request.urlopen(api_url + "/healthz", timeout=2) as response:  # noqa: S310  # nosec B310
                             if response.status == 200:
                                 break
-                    except (urllib.error.URLError, TimeoutError):
+                    except (OSError, http.client.HTTPException):
+                        # 기동 중인 API는 연결을 받았다가 끊기도 한다(ConnectionResetError 등). 기한까지 다시 묻는다.
                         pass
                 time.sleep(0.25)
             else:
