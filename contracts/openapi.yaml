@@ -4465,6 +4465,9 @@ paths:
       tags: [datasets]
       operationId: decideAccessRequest
       summary: 제공기관 ORG_ADMIN 승인·거절 → 운영자 최종 승인
+      description: >-
+        운영자 승인 때 데이터셋 버전의 현재 등급이 L3(APPROVED_PARTNERS)에 못 미치면 422 RULE_VIOLATION이다
+        (예: 제공기관 승인 뒤 KEEP_UNTIL_EXPIRY로 자산 등급을 낮춘 경우). 이때 결정은 기록하지 않고 신청은 PROVIDER_APPROVED로 남는다.
       x-freeze: G5
       requestBody:
         required: true
@@ -4482,6 +4485,7 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
 
   /v1/distributions:
