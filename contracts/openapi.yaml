@@ -5856,7 +5856,10 @@ components:
         template_code: {$ref: '#/components/schemas/TemplateCode'}
         template_version: {type: integer}
         version: {type: integer, minimum: 1}
-        latest_version: {type: integer, minimum: 1}
+        latest_version:
+          type: integer
+          minimum: 1
+          description: 조회자에게 보이는 최신 버전. 관리기관 열람자(PROGRAM_VIEWER)에게는 제출된 버전 중 최신이다.
         status: {$ref: './schemas/common.schema.json#/$defs/report_status'}
         generated_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
         data_as_of: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}

@@ -2,6 +2,7 @@
 
 - S36 내보내기는 보고서·버전 범위를 먼저 확인한다. 형식이 꺼져 있어도 다른 기관·없는 보고서는 404(+감사)다.
 - S37 /v1/system/capabilities의 report_formats는 내보내기가 받는 형식과 같다 (PDF 렌더러가 없으면 PDF 없음).
+- S38 관리기관 열람자의 latest_version은 제출된 버전 중 최신이다 (제출되지 않은 초안의 수를 드러내지 않는다).
 """
 
 from __future__ import annotations
@@ -75,3 +76,31 @@ def test_capabilities_list_only_formats_the_export_accepts(ctx: Ctx, monkeypatch
         if r.status_code == 409:
             detail = r.json()["detail"]  # REPORT_FORMATS에는 PDF가 있다: 이유는 렌더러다
             assert "렌더러" in detail and "(REPORT_FORMATS)" not in detail, detail
+
+
+# ------------------------------------------------------------------ S38 열람자의 최신 버전
+
+
+def test_viewer_latest_version_counts_only_submitted_versions(ictx: Ctx) -> None:
+    c, hm, viewer = ictx.client, ictx.as_user(MEMBER), ictx.as_user(VIEWER)
+    rid = _new_report(ictx)
+    path = GET.format(report_id=rid)
+    _approve_and_submit(ictx, rid)
+    for _ in range(2):  # 제출하지 않은 초안 v2·v3
+        assert c.post(f"{path}/versions", headers=hm).status_code == 201
+
+    def seen(headers: dict[str, str], **params: int) -> list[tuple[int, int]]:
+        one = c.get(path, params=params, headers=headers)
+        check(one, "GET", GET)
+        listed = c.get("/v1/reports", headers=headers)
+        check(listed, "GET", "/v1/reports")
+        items = [i for i in listed.json()["items"] if i["report_id"] == rid]
+        return [(one.json()["version"], one.json()["latest_version"])] + [
+            (i["version"], i["latest_version"]) for i in items]
+
+    assert seen(viewer) == [(1, 1), (1, 1)], "열람자가 제출되지 않은 버전의 수를 알게 됐다"
+    assert seen(hm) == [(3, 3), (3, 3)]  # 소유 기관은 그대로
+    assert c.get(path, params={"version": 3}, headers=viewer).status_code == 404
+    _approve_and_submit(ictx, rid)  # v3 승인·제출 → v1은 SUPERSEDED지만 제출된 적이 있어 열람자가 본다
+    assert seen(viewer) == [(3, 3), (3, 3)]
+    assert seen(viewer, version=1)[0] == (1, 3)

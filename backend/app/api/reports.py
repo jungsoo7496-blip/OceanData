@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Body, Depends, Header, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.adapters import report_renderers as rr
@@ -412,6 +412,9 @@ def _view(db: Session, rep: Report, v: ReportVersion, p: Principal) -> dict:
     shown = visible_asset_ids(db, p, {a for m in v.metrics for a in m["sources"].get("asset_ids", [])})
     out["metrics"] = [reports.metric_view(m, shown) for m in v.metrics]
     out["damage"] = _damage_view(db, rep, v, p)
+    if _viewer(p):  # 관리기관 열람자에게는 제출된 버전 중 최신 — 제출되지 않은 초안의 수를 드러내지 않는다 (S38)
+        out["latest_version"] = db.execute(select(func.max(ReportVersion.version)).where(
+            ReportVersion.report_id == rep.report_id, reports.submitted_filter())).scalar_one()
     return out
 
 
