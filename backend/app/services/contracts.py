@@ -11,17 +11,19 @@ import json
 import math
 import os
 import re
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from jsonschema import Draft202012Validator, FormatChecker, validators
+from jsonschema import Draft202012Validator, FormatChecker, ValidationError, validators
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
 from app.domain.metadata import check_schema_version
 from app.domain.normalize import (
+    LOCATION_PROBLEM_LIMIT,
     NoOffsetError,
     TimeRangeError,
     TimeRuleError,
@@ -133,8 +135,44 @@ def _is_number(_checker: Any, instance: Any) -> bool:
             and not (isinstance(instance, float) and not math.isfinite(instance)))
 
 
+def _jsonschema_evaluated_keys() -> Callable[[Any, Any, Any], list[Any]] | None:
+    """표준 unevaluatedProperties가 쓰는 '평가된 속성' 함수. 공개 API가 아니라 없어지면 None(표준 보고로 돌아간다)."""
+    try:
+        from jsonschema import _utils
+    except ImportError:  # pragma: no cover
+        return None
+    return getattr(_utils, "find_evaluated_property_keys_by_schema", None)
+
+
+_STANDARD_UNEVALUATED = Draft202012Validator.VALIDATORS["unevaluatedProperties"]
+_evaluated_keys = _jsonschema_evaluated_keys()
+
+
+def _unevaluated_properties(validator: Any, unevaluated: Any, instance: Any,
+                            schema: dict[str, Any]) -> Iterator[ValidationError]:
+    """unevaluatedProperties — 판정은 표준 그대로, 보고만 고친다 (ADR-0067).
+
+    표준은 allOf 항목 하나가 실패하면 그 항목이 평가한 속성을 버린다(실패한 하위 스키마의 주석은 남지 않는다).
+    그래서 이벤트 문서의 시각 하나가 틀려도 루트에 '알려진 속성이 모두 평가되지 않음' 오류가 붙었다.
+    실패한 항목은 자기 오류로 이미 보고되므로, 그 항목이 평가하는 속성은 평가된 것으로 보고 나머지(계약에 없는
+    속성)만 보고한다. allOf가 실패하면 이 스키마는 어차피 무효라 어떤 문서의 유효성도 바뀌지 않는다."""
+    errors = list(_STANDARD_UNEVALUATED(validator, unevaluated, instance, schema))
+    members = schema.get("allOf")
+    if not errors or not isinstance(members, list) or _evaluated_keys is None:
+        yield from errors
+        return
+    failing = [m for m in members if next(validator.descend(instance, m), None) is not None]
+    if not failing:
+        yield from errors
+        return
+    declared = sorted({str(k) for m in failing for k in _evaluated_keys(validator, instance, m)})
+    stub = {"properties": dict.fromkeys(declared, True)}  # 실패한 항목이 평가하는 속성만 밝히는 항상 통과하는 항목
+    yield from _STANDARD_UNEVALUATED(validator, unevaluated, instance, {**schema, "allOf": [*members, stub]})
+
+
 _ContractValidator = validators.extend(
     Draft202012Validator,
+    validators={"unevaluatedProperties": _unevaluated_properties},
     type_checker=Draft202012Validator.TYPE_CHECKER.redefine("number", _is_number))
 
 _DATE_TIME = re.compile(
@@ -258,6 +296,65 @@ def _location_problems(doc: dict[str, Any]) -> list[Problem]:
     return out
 
 
+# 형상마다 계약에 맞는 좌표 (위치 오류가 가리키는 자리만 이 값으로 바꿔 나머지 결함을 본다)
+_SAMPLE_COORDINATES: dict[str, Any] = {"Point": [1, 1], "LineString": [[1, 1], [1, 1]],
+                                       "Polygon": [[[1, 1], [1, 1], [1, 1], [1, 1]]]}
+
+
+def _repaired_location(loc: dict[str, Any], problems: list[Problem]) -> dict[str, Any] | None:
+    """위치 오류가 가리키는 좌표 자리만 계약에 맞는 값으로 바꾼 사본. 좌표 하나의 셋째 값부터는 원래 값을 둔다.
+
+    형상 종류가 틀렸거나(무엇에 비춰 볼지 모른다) 자리를 따라갈 수 없으면 None."""
+    kind = loc.get("type")
+    if not isinstance(kind, str) or kind not in _SAMPLE_COORDINATES:
+        return None
+    out = copy.deepcopy(loc)
+    for p in problems:
+        segs = _segments(p.pointer)
+        if segs[:2] != ["location", "coordinates"] or not all(s.isdigit() for s in segs[2:]):
+            return None
+        parent: Any = out
+        key: Any = "coordinates"
+        sample: Any = _SAMPLE_COORDINATES[kind]
+        for s in segs[2:]:
+            parent = parent.get(key) if isinstance(parent, dict) else parent[key]
+            if not isinstance(parent, list) or int(s) >= len(parent) or not isinstance(sample[0], list):
+                return None
+            key, sample = int(s), sample[0]
+        current = parent.get(key) if isinstance(parent, dict) else parent[key]
+        if all(isinstance(x, int) for x in sample):  # 좌표 하나
+            parent[key] = [*sample, *(current[2:] if isinstance(current, list) else [])]
+        else:  # 좌표 배열 자리에 배열이 아닌 값
+            parent[key] = copy.deepcopy(sample)
+    return out
+
+
+def _location_explains_schema(contract: str, doc: dict[str, Any], location: list[Problem],
+                              schema: list[Problem]) -> bool:
+    """위치 오류가 /location 아래 스키마 오류를 모두 설명하는가 (그럴 때만 스키마 오류를 가린다).
+
+    좌표 오류는 geometry 전체의 oneOf 불일치(/location)로도 나온다. 위치 오류가 가리키는 자리만 고친 사본이
+    계약을 통과하면 그 불일치는 위치 오류 때문이다. 통과하지 못하면 다른 결함(계약에 없는 속성, 모자란 좌표 수,
+    셋째 값 등)이 있으므로 스키마 오류도 남긴다. 계약의 위치 규칙은 다른 필드에 기대지 않으므로 위치만 검사한다."""
+    errors = [p for p in location if p.severity == "ERROR"]
+    if not errors or not any(_within(p.pointer, "/location") for p in schema):
+        return False  # 가릴 스키마 오류가 없다
+    if len(errors) >= LOCATION_PROBLEM_LIMIT:
+        return False  # 좌표 오류를 다 모으지 않았다: 나머지 자리를 고칠 수 없으니 스키마 오류도 남긴다
+    repaired = _repaired_location(doc["location"], errors)
+    if repaired is None:
+        return True
+    validator = contract_validator({"$ref": BASE + f"{SCHEMA_FOR_CONTRACT[contract]}.schema.json"})
+    return not any(_within(_ptr(e.absolute_path), "/location") for e in validator.iter_errors({"location": repaired}))
+
+
+@lru_cache(maxsize=1)
+def _observed_at_shape() -> Draft202012Validator:
+    """관측 항목 observed_at의 계약 모양(type·pattern). format은 보지 않는다."""
+    ref = BASE + "observation-batch.schema.json#/$defs/observation/properties/observed_at"
+    return _ContractValidator(strict_patterns({"$ref": ref}), registry=registry())
+
+
 def _observation_problems(doc: dict[str, Any], limit: int = MAX_PROBLEMS) -> list[Problem]:
     out: list[Problem] = []
     items = doc.get("observations")
@@ -271,16 +368,20 @@ def _observation_problems(doc: dict[str, Any], limit: int = MAX_PROBLEMS) -> lis
         base = f"/observations/{i}"
         ts = ob.get("observed_at")
         if isinstance(ts, str):
+            # 시각 힌트는 그것만 틀렸을 때만 붙인다(같은 자리의 스키마 오류를 대신하므로). 그 밖의 형식 오류는
+            # 스키마(pattern·format) 검사가 구체적으로 말한다 ('2026-11-02'는 오프셋보다 시각이 없는 것이 문제다)
             try:
                 parse_rfc3339(ts)
             except NoOffsetError:
-                out.append(Problem(base + "/observed_at", "timezone_required",
-                                   "observed_at에는 시간대 오프셋이 필요합니다. 오프셋 없는 원천 시각은 "
-                                   "source_timestamp로 보내면 장비 정책의 source_timezone으로 변환합니다"))
+                if _observed_at_shape().is_valid(ts + "Z"):  # 오프셋만 붙이면 계약에 맞는다
+                    out.append(Problem(base + "/observed_at", "timezone_required",
+                                       "observed_at에는 시간대 오프셋이 필요합니다. 오프셋 없는 원천 시각은 "
+                                       "source_timestamp로 보내면 장비 정책의 source_timezone으로 변환합니다"))
             except TimeRangeError:
-                out.append(Problem(base + "/observed_at", "invalid_time", "UTC 시각으로 바꿀 수 없는 값입니다"))
+                if _observed_at_shape().is_valid(ts):  # 모양은 맞고 UTC로 바꾸면 범위를 넘는다
+                    out.append(Problem(base + "/observed_at", "invalid_time", "UTC 시각으로 바꿀 수 없는 값입니다"))
             except TimeRuleError:
-                pass  # 형식 오류는 스키마(pattern·format) 검사가 구체적으로 말한다
+                pass
         if ob.get("value") is None and ob.get("quality_flag") not in (None, "MISSING"):
             out.append(Problem(base + "/quality_flag", "missing_flag", "결측값은 quality_flag=MISSING으로 보냅니다"))
         unit = ob.get("unit")
@@ -312,9 +413,10 @@ def validate_document(contract: str, doc: Any, *, limit: int = MAX_PROBLEMS) -> 
     items = _observation_problems(doc, limit) if contract == "observation-batch" else []
     # 같은 값에 대한 스키마 오류와 도메인 오류가 겹치면 도메인 쪽(더 구체적인 사유)을 남긴다.
     # 경고(WARNING)는 아무것도 가리지 않는다. 포인터는 조각 단위로 비교한다 (/observations/10 ≠ /observations/1).
-    # - 위치: 좌표 오류는 geometry 전체의 oneOf 불일치(/location)로도 나오므로 /location 아래 스키마 오류를 가린다
+    # - 위치: 좌표 오류는 geometry 전체의 oneOf 불일치(/location)로도 나온다. 위치 오류가 그 불일치를 모두
+    #   설명할 때만 /location 아래 스키마 오류를 가린다 (다른 결함이 있으면 함께 남긴다, ADR-0067)
     # - 관측 항목: 같은 포인터의 스키마 오류만 가린다 (문서 루트·항목·형제 필드의 오류는 그대로 남는다)
-    subtrees = ["/location"] if any(p.severity == "ERROR" for p in location) else []
+    subtrees = ["/location"] if _location_explains_schema(contract, doc, location, raw) else []
     exact = {p.pointer for p in items if p.severity == "ERROR"}
     schema = [p for p in raw if p.code != TRUNCATED_CODE and p.pointer not in exact
               and not any(_within(p.pointer, s) for s in subtrees)]

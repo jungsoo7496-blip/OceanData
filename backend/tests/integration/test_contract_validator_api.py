@@ -95,6 +95,34 @@ def test_a_batch_with_many_bad_items_rejects_each_item_not_crashes(ctx) -> None:
     assert _observations(ctx) == before
 
 
+def test_problem_lists_name_each_real_defect_and_nothing_else(ctx) -> None:
+    """검토 V9 (ADR-0067): 위치 오류가 다른 geometry 결함을 가리지 않고, 이벤트의 필드 하나가 틀려도
+    루트에 '알려진 속성이 모두 평가되지 않음' 오류가 붙지 않는다."""
+    h = ctx.as_user(102)
+    root = contracts_dir() / "examples"
+    m = json.loads((root / "upload-manifest.vessel-video.json").read_text(encoding="utf-8"))
+    m["location"] = {"type": "Point", "coordinates": [0, 0], "bbox": [0, 0, 1, 1]}
+    r = ctx.client.post("/v1/contracts/validate", headers=h, json={"contract": "upload-manifest", "document": m})
+    assert r.status_code == 200, r.text
+    codes = [(p["pointer"], p["code"]) for p in r.json()["problems"]]
+    assert ("/location/coordinates", "null_island") in codes and ("/location", "schema.oneOf") in codes, codes
+    ev = json.loads((root / "event.manual-safety.json").read_text(encoding="utf-8"))
+    ev["started_at"] = "2026-02-30T00:00:00Z"
+    r = ctx.client.post("/v1/events", json=ev, headers=h)
+    assert r.status_code == 400, r.text
+    assert [(e["pointer"], e["code"]) for e in r.json()["errors"]] == [("/started_at", "schema.format")]
+
+
+def test_observed_at_without_a_time_is_still_rejected_per_item_as_timezone_unknown(ctx) -> None:
+    """시간대 힌트 대신 형식 오류가 보고돼도 항목별 거부 사유는 그대로다 (07번 요구사항 1.3·2.2)."""
+    r = ctx.client.post("/v1/observations", json=_batch(_item(observed_at="2026-11-02"), _item()),
+                        headers=ctx.as_user(102))
+    assert r.status_code == 200, r.text
+    results = r.json()["results"]
+    assert results[0] == {"index": 0, "status": "REJECTED", "reason": "TIMEZONE_UNKNOWN"}, results
+    assert results[1]["status"] == "ACCEPTED", results
+
+
 def test_the_400_body_lists_at_most_100_problems(ctx) -> None:
     """항목마다 다른 이유로 배치 전체가 400이어도 응답은 앞의 100개와 안내 하나다 (요청보다 응답이 크지 않게)."""
     items = [_item(bogus=i) for i in range(150)]  # 계약에 없는 필드: 항목별 사유가 없어 배치 전체 400

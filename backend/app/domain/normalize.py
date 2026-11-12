@@ -106,6 +106,9 @@ def _number(x: Any) -> bool:
     return isinstance(x, int | float) and not isinstance(x, bool)
 
 
+LOCATION_PROBLEM_LIMIT = 200  # 응답 크기 상한(검증기가 앞 100개만 보여준다)보다 넉넉하면 충분하다
+
+
 def check_location(geometry: dict[str, Any] | None, base_pointer: str = "/location") -> list[LocationProblem]:
     """GeoJSON 좌표 범위 검사. 위도 자리 값이 ±90을 넘고 경도 자리 값이 ±90 안이면 순서 뒤바뀜으로 본다.
 
@@ -116,7 +119,7 @@ def check_location(geometry: dict[str, Any] | None, base_pointer: str = "/locati
         return [LocationProblem(base_pointer + "/type", "unsupported_geometry", "Point·LineString·Polygon만 받습니다")]
     problems: list[LocationProblem] = []
     for ptr, pos in _positions(geometry):
-        if len(problems) >= 200:  # 응답 크기 상한(검증기가 앞 100개만 보여준다)보다 넉넉하면 충분하다
+        if len(problems) >= LOCATION_PROBLEM_LIMIT:
             break
         if not isinstance(pos, list) or len(pos) < 2 or not all(_number(x) for x in pos[:2]):
             problems.append(LocationProblem(base_pointer + ptr, "invalid_position",
