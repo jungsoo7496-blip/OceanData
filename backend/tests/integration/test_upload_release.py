@@ -18,6 +18,7 @@ import pytest
 from botocore.exceptions import ClientError
 from sqlalchemy import event, select, text
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import DBAPIError
 
 from app.adapters.system_clock import FixedClock
 from app.db.models import Asset, AssetLineage, Device, OrgQuota, Upload
@@ -221,6 +222,43 @@ def test_sweep_continues_past_failing_upload(ictx, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(IngestService, "_release", real)
     assert sweep(ictx.c) == 1
     assert _upload(ictx, bad["upload_id"]).status == "EXPIRED"
+    assert _quota(ictx).reserved_bytes == 0
+
+
+def test_sweep_does_not_hold_quota_lock_during_storage_calls(ictx, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
+    """만료 정리기는 저장소를 부르는 동안 기관 쿼터 행을 잠그고 있지 않는다 (검토 2026-11-12 C8, ADR-0059).
+
+    한 트랜잭션에서 여러 세션을 정리하면 첫 세션의 예약 해제가 잡은 쿼터 행 잠금을 다음 세션들의 저장소 호출 내내
+    쥐고 있어, 그동안 같은 기관의 새 업로드 예약이 기다린다. 세션마다 짧은 트랜잭션으로 확정해야 한다."""
+    from app.workers.main import sweep
+
+    h = ictx.as_user(102)
+    ids = []
+    for i in range(3):
+        r = ictx.client.post("/v1/uploads", json=manifest(mp4_bytes(64, seed=1300 + i)), headers=h)
+        assert r.status_code == 201, r.text
+        ids.append(r.json()["upload_id"])
+    for n, upload_id in enumerate(ids):
+        _expire(ictx, upload_id, 3 - n)  # 오래된 것부터 정리된다
+    real = ictx.c.storage.abort_multipart_upload
+    quota_row_free: list[bool] = []
+
+    def probing_abort(bucket: str, key: str, upload_id: str) -> None:
+        with ictx.c.engine.connect() as conn:  # 다른 연결에서 쿼터 행을 NOWAIT로 잠가 본다
+            try:
+                conn.execute(text(f"SELECT 1 FROM {OrgQuota.__tablename__} WHERE organization_id = :o "
+                                  "FOR UPDATE NOWAIT"), {"o": ORG_A})
+                quota_row_free.append(True)
+            except DBAPIError:
+                quota_row_free.append(False)
+            finally:
+                conn.rollback()
+        real(bucket, key, upload_id)
+
+    monkeypatch.setattr(ictx.c.storage, "abort_multipart_upload", probing_abort)
+    assert sweep(ictx.c) == 3
+    assert quota_row_free == [True, True, True], "앞 세션의 예약 해제가 잡은 쿼터 행 잠금을 저장소 호출 중에 쥐고 있다"
+    assert [_upload(ictx, u).status for u in ids] == ["EXPIRED"] * 3
     assert _quota(ictx).reserved_bytes == 0
 
 
