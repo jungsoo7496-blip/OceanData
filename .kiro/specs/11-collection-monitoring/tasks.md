@@ -12,7 +12,7 @@
 - [x] 9. 경보 → 장애 자동 생성, 확인·해결·담당자·메모, 기관·장비·기간 조회 — 요구사항 4.1, 4.2 · 시험 `test_t07a_*`, `test_T01_a_cross_org_incident_update_and_list`
 - [x] 10. 운영 콘솔 수집 지연 표·실패 원인 상위, 기업 화면 경보·조치 안내 — 요구사항 5.1, 5.2
 - [x] 11. `GET /v1/ingest-status` (ORG 역할·기관 API 키, 기관 범위는 인증 정보로만) — 요구사항 5.3 · 시험 `test_t07a_*`, `test_processing_upload_quarantine_storage_rules`
-- [x] 12. 정기 점검 템플릿(15.2장)·기간·기한, 수행 결과·특이사항·증빙 파일 — 요구사항 6.1, 6.2 · 시험 `test_inspections_flow`, `test_period_*`
+- [x] 12. 정기 점검 템플릿(15.2장)·기간·기한, 수행 결과·특이사항·증빙 파일 — 요구사항 6.1, 6.2 · 시험 `test_inspections_flow`, `test_period_*`, 표현할 수 없는 UTC 기한의 400 응답 `test_inspection_period_bounds.py`
 - [x] 13. 기한 지난 점검 알림 (하루 한 번) — 요구사항 6.3 · 시험 `test_inspections_flow`
 - [x] 14. 자동 확인 항목 채우기 (백업 성공은 08번 백업 전까지 AUTO_UNAVAILABLE) — 요구사항 6.4
 - [x] 15. 하드웨어 신호 수신 인터페이스·규칙 연결·모의 신호(API·CLI) — 요구사항 7.1, 7.2 · 시험 `test_hardware_signal_mock_and_rule_disable`

@@ -176,11 +176,14 @@ def test_fixed_mismatch_status_codes_are_documented(contract_env: ContractEnv) -
     # M5: 없는·범위 밖 장비 → 404 (테넌트 격리)
     r = env.client.post("/v1/uploads", json=manifest(b"synthetic", source="dev_" + "Z" * 26), headers=env.headers)
     assert r.status_code == 404 and "404" in _documented(env, "POST /v1/uploads")
-    # M6: 인증 작업은 모두 호출 제한(429)과 권한 거부(403: 역할·다중 인증·기기 범위)를 문서화한다 (전체 작업 탐색)
+    # M6: 인증 필수 작업은 인증 실패·권한 거부·호출 제한을 문서화한다 (전체 작업 탐색).
+    # 익명 등록의 401은 잘못된 등록 코드를 뜻한다. 인증 필요 여부는 명세의 security에서 읽는다.
     spec = env.schema.raw_schema
-    for code in ("429", "403"):
+    default_security = spec.get("security", [])
+    for code in ("401", "403", "429"):
         missing = [f"{m.upper()} {p}" for p, item in spec["paths"].items() for m, op in item.items()
-                   if isinstance(op, dict) and "responses" in op and "401" in op["responses"]
+                   if isinstance(op, dict) and "responses" in op
+                   and (security := op.get("security", default_security)) and all(security)
                    and code not in op["responses"]]
         assert not missing, (code, missing)
     _set_rate_limit(env.app, 1)

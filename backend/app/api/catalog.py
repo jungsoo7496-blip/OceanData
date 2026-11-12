@@ -106,13 +106,13 @@ def validate_contract(body: ValidateRequest, _: Principal = Depends(require("con
 @router.get("/v1/devices/{device_id}/policy", tags=["agents"])
 def get_device_policy(device_id: str, request: Request, db: Session = Depends(get_db),
                       c: Container = Depends(container), p: Principal = Depends(require("device_policy:read"))) -> dict:
+    device = load_scoped(db, c, request, Device, device_id, p)
     if p.kind == "DEVICE" and device_id != p.device_id:  # 수집기는 자기 정책만
         raise ProblemError("NOT_FOUND")
-    device = load_scoped(db, c, request, Device, device_id, p)
     if device.kind != "COLLECTOR":
         raise ProblemError("NOT_FOUND", detail="정책은 수집기 단위로 배포합니다")
     policy, stored_version = device_policy.current_policy(db, device)
-    problems = contracts.schema_problems("device-policy", policy)
+    problems = device_policy.policy_schema_problems(policy, stored=stored_version is not None)
     if problems:
         raise ProblemError("RULE_VIOLATION", detail="현재 계약을 충족하는 장비 정책을 배포해야 합니다",
                            unmet_conditions=[{"condition": f"장비 정책 계약 {p.pointer or '/'}", "actual": p.code}

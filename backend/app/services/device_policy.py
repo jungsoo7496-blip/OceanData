@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Device, DevicePolicy, IntegrationCard
 from app.domain.errors import RuleViolation, UnmetCondition
-from app.services.contracts import schema_problems
+from app.services.contracts import Problem, schema_problems
 
 
 def mapping_version(db: Session, device_id: str) -> str | None:
@@ -71,9 +71,14 @@ def next_version(db: Session, collector_id: str) -> int:
     return int(current or 0) + 1
 
 
+def policy_schema_problems(doc: Any, *, stored: bool) -> list[Problem]:
+    fragment = "#/$defs/storedPolicy" if stored else ""
+    return schema_problems("device-policy", doc, fragment=fragment)
+
+
 def policy_problems(db: Session, collector_id: str, doc: Any, integration_card_id: str | None) -> list[UnmetCondition]:
     """저장하기 전 검사. 비어 있으면 저장할 수 있다."""
-    found = schema_problems("device-policy", doc)
+    found = policy_schema_problems(doc, stored=True)
     if found:  # 형식이 틀리면 아래 검사를 할 수 없다
         return [UnmetCondition(f"장비 정책 계약 {p.pointer or '/'}", p.message) for p in found[:20]]
     collector = db.get(Device, collector_id)

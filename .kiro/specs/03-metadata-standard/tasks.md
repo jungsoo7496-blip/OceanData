@@ -15,6 +15,6 @@
 - [x] 13. 품질 평가 함수 — 요구사항 10.1 · 시험 `test_quality_evaluator_rules`
 - [x] 14. 품질 규칙 DB 로딩 + 운영자 재평가 명령 — 요구사항 10.1, 10.2 · PostgreSQL 신규 6개와 수집·미디어 회귀 통과(ADR-0027). 0002 재사용
 - [x] 15. 계보 조회(상·하위, 범위 필터) — 요구사항 11.2 · 시험 `test_lineage_and_asset_scope` (기록은 05번 파생 생성 때)
-- [x] 16. 장비 정책 조회 (저장본 없으면 장비 표로 기본 정책) — 요구사항 1.3 일부
+- [x] 16. 장비 정책 조회 (저장본 없으면 장비 표로 기본 정책) — 요구사항 1.3 일부 · 원천 매핑 전 빈 기본 정책과 저장 정책의 원천 제약은 test_empty_default_device_policy.py · ADR-0051
 - [x] 17. 약정·연계 카드 등록 API — 요구사항 1.4, 1.5 · `GET/POST /v1/agreements`, `POST /v1/agreements/{id}/end`, `GET/POST /v1/integration-cards`, `GET /v1/integration-cards/{id}`, `POST …/versions`, `set-policy --integration-card` · 시험 `tests/integration/test_onboarding.py` · ADR-0028 (화면은 09번, 실제 카드 양식은 확인 필요)
 - [x] 18. 품질 집계 `GET /v1/quality-reports`(회차·기간, 기관 범위, 상위 사유 10개) — 요구사항 10.1 · G1 계약에 있었지만 라우트가 없어 404만 돌려주던 것을 구현. 시험 `tests/integration/test_quality_reports.py`, 같은 누락을 막는 계약-라우트 일치 시험 `tests/contract/test_route_parity.py`

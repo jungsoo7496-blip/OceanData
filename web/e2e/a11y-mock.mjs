@@ -19,7 +19,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright-core'
 import { preview } from 'vite'
-import { AST_VIDEO, RPT_DRAFT, RPT_SUBMITTED, SES1, respond } from './fixtures/api.mjs'
+import { AST_PROXY, AST_VIDEO, RPT_DRAFT, RPT_SUBMITTED, SES1, respond } from './fixtures/api.mjs'
 
 const WEB = fileURLToPath(new URL('..', import.meta.url))
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']
@@ -65,6 +65,32 @@ const dialog = (name, open, after) => ({
 /** 화면 안에서 펼치는 상태 (대화상자가 아닌 것) */
 const state = (name, act) => ({ name, act })
 
+async function overlapPagination(page) {
+  const modal = page.getByRole('dialog', { name: /^겹치는 자산/ })
+  const first = modal.locator(`a[href="/assets/${AST_VIDEO}"]`)
+  const second = modal.locator(`a[href="/assets/${AST_PROXY}"]`)
+  const more = modal.getByRole('button', { name: '더 보기', exact: true })
+  await first.waitFor()
+  await second.waitFor({ state: 'hidden' })
+  await more.click({ timeout: 15000 })
+  await second.waitFor()
+  await first.waitFor()
+  await more.waitFor({ state: 'hidden' })
+
+  await modal.locator('#overlap-margin').press('ArrowDown', { timeout: 15000 })
+  const oneMinute = page.getByRole('option', { name: '1분', exact: true })
+  await oneMinute.waitFor({ timeout: 15000 })
+  const firstPage = page.waitForResponse((response) => {
+    const { pathname, searchParams } = new URL(response.url())
+    return pathname.endsWith('/overlapping-assets') && response.ok()
+      && searchParams.get('margin_s') === '60' && !searchParams.has('cursor')
+  }, { timeout: 15000 })
+  await Promise.all([firstPage, oneMinute.click()])
+  await first.waitFor()
+  await second.waitFor({ state: 'hidden' })
+  await more.waitFor()
+}
+
 const SCENARIOS = [
   { role: null, label: '로그인 전', visits: [{ path: '/', ready: '기관 계정으로 로그인하세요' }] },
   { role: 'ORG_ADMIN', visits: [
@@ -73,7 +99,7 @@ const SCENARIOS = [
     { path: '/assets', ready: '2026-11-03_항해01/bridge-cam_20261103_100000.mp4' },
     { path: `/assets/${AST_VIDEO}`, ready: '구간 클립 내보내기' },
     { path: '/sessions', ready: '회차 미상 자산', open: [dialog('회차 만들기', button('회차 만들기'))] },
-    { path: `/sessions/${SES1}`, ready: '시간축', open: [dialog('겹치는 자산', button('겹치는 자산')),
+    { path: `/sessions/${SES1}`, ready: '시간축', open: [dialog('겹치는 자산', button('겹치는 자산'), overlapPagination),
       dialog('회차 수정', button('회차 수정'))] },
     { path: `/sessions/${SES1}/records`, ready: '1차 항해 실증일지', open: [dialog('회차 기록 작성', button('기록 작성'))] },
     { path: '/reports', ready: '사전 점검 보고서', open: [dialog('회차 보고서 초안', button('회차 보고서 초안 만들기'))] },

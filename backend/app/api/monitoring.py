@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -248,13 +248,15 @@ class InspectionCreate(BaseModel):
 def create_inspection(body: InspectionCreate, request: Request, db: Session = Depends(get_db),
                       c: Container = Depends(container), p: Principal = Depends(require("inspection:write"))) -> dict:
     try:
-        tpl.period_last_day(body.cycle, body.period_key)
+        due_at = tpl.due_at(body.cycle, body.period_key, c.settings.ops_timezone).astimezone(UTC)
     except ValueError as exc:
         raise _bad("/period_key", str(exc)) from None
+    except OverflowError:
+        raise _bad("/period_key", "점검 기한을 지원되는 날짜 범위 안에서 계산할 수 없습니다") from None
     if db.execute(select(Inspection.inspection_id).where(Inspection.cycle == body.cycle,
                                                          Inspection.period_key == body.period_key)).scalar():
         raise ProblemError("CONFLICT", detail="이 기간의 점검 기록이 이미 있습니다")
-    row = inspections.create(c, db, cycle=body.cycle, period_key=body.period_key, assignee=body.assignee,
+    row = inspections.create(c, db, cycle=body.cycle, period_key=body.period_key, due_at=due_at, assignee=body.assignee,
                              created_by=p.principal_id, inspection_id=new_id("inspection"))
     db.flush()
     c.audit.record("INSPECTION_CREATED", principal=p, target_type="Inspection", target_id=row.inspection_id,

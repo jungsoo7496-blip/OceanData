@@ -71,7 +71,7 @@ const DEV_CAM = id('dev', 2)
 const DEV_SENSOR = id('dev', 3)
 const DEV_B_PC = id('dev', 4)
 export const AST_VIDEO = id('ast', 1)
-const AST_PROXY = id('ast', 2)
+export const AST_PROXY = id('ast', 2)
 const AST_CLIP = id('ast', 3)
 const AST_CSV = id('ast', 4)
 const AST_IMAGE = id('ast', 5)
@@ -472,9 +472,20 @@ const GET = {
     { job_id: id('job', 1), asset_id: AST_VIDEO, start_s: 10, end_s: 25, status: 'DONE', requested_at: at('07:00:00'), clip_asset_id: AST_CLIP },
   ] }),
   '/v1/events': ({ query }) => ({ items: EVENTS.filter((e) => !query.get('session_id') || e.session_id === query.get('session_id')), next_cursor: null }),
-  '/v1/events/{event_id}/overlapping-assets': ({ params }) => ({ event_id: params.event_id, session_id: SES1,
-    window: { from: at('01:00:30'), to: at('01:01:10') },
-    items: [{ asset: ASSETS[0], overlap_s: 40, linked: true }, { asset: ASSETS[2], overlap_s: 0, linked: false }], unknown_capture_count: 1 }),
+  '/v1/events/{event_id}/overlapping-assets': ({ params, query }) => {
+    const margin = Number(query.get('margin_s') ?? '0')
+    const cursor = query.get('cursor')
+    const next = `synthetic-overlap-${margin}`
+    if (cursor !== null && cursor !== next) return notFound()
+    const overlap = margin > 0 ? 120 : 40
+    const items = cursor === null
+      ? [{ asset: ASSETS[0], overlap_s: overlap, linked: true }]
+      : [{ asset: ASSETS[1], overlap_s: overlap, linked: false }]
+    return { event_id: params.event_id, session_id: SES1, items, unknown_capture_count: 1,
+      window: { from: new Date(Date.parse(at('01:00:30')) - margin * 1000).toISOString(),
+        to: new Date(Date.parse(at('01:01:10')) + margin * 1000).toISOString() },
+      next_cursor: cursor === null ? next : null }
+  },
   '/v1/observations': observations,
   '/v1/usage': ({ role }) => ({ items: role === 'PLATFORM_OPERATOR' ? USAGE : USAGE.slice(0, 1) }),
   '/v1/ingest-status': ({ role }) => ({ generated_at: at('06:00:00'),

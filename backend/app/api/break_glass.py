@@ -80,6 +80,10 @@ def decide_grant(grant_id: str, body: Decision, request: Request, db: Session = 
     try:
         bg.decide(c, db, g, by=p.principal_id, approve=body.decision == "APPROVE", now=now)
     except bg.Refused as exc:
+        if exc.code == "FORBIDDEN":
+            c.audit.record("PERMISSION_DENIED", result="DENIED", principal=p, organization_id=g.organization_id,
+                           target_type="BreakGlassGrant", target_id=g.grant_id, source_ip=client_ip(request),
+                           details={"action": "break_glass:decide", "reason": "self_decision"})
         raise ProblemError(exc.code, detail=exc.detail) from None
     c.audit.record("BREAK_GLASS_APPROVED" if body.decision == "APPROVE" else "BREAK_GLASS_DENIED", principal=p,
                    organization_id=g.organization_id, target_type="BreakGlassGrant", target_id=g.grant_id,

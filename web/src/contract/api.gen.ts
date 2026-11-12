@@ -169,7 +169,8 @@ export interface paths {
         put?: never;
         /**
          * 수집기 자격증명 폐기 (ORG_ADMIN, 다중 인증 필요). 장비는 재등록 대기 상태가 된다
-         * @description 폐기 전에 발급했지만 아직 쓰지 않은 등록 코드도 함께 무효가 된다 — 그 코드로 `POST /v1/agents/enroll`을 하면
+         * @description 수집기가 아닌 장비의 자격증명 폐기 요청은 422 RULE_VIOLATION으로 거부한다.
+         *     폐기 전에 발급했지만 아직 쓰지 않은 등록 코드도 함께 무효가 된다 — 그 코드로 `POST /v1/agents/enroll`을 하면
          *     410 GONE(reason EXPIRED)이다. 재등록은 폐기 뒤 새로 발급한 등록 코드로만 한다 (02번 요구사항 5.4).
          */
         post: operations["revokeDeviceCredentials"];
@@ -555,7 +556,10 @@ export interface paths {
         /** 자기 기관 장비 목록 */
         get: operations["listDevices"];
         put?: never;
-        /** 장비 등록 (ORG_ADMIN) */
+        /**
+         * 장비 등록 (ORG_ADMIN)
+         * @description 참조하는 사업이나 장비가 조회 범위에 없으면 404를 반환한다. 원천 장비를 수집기로 지정하면 422를 반환한다.
+         */
         post: operations["createDevice"];
         delete?: never;
         options?: never;
@@ -593,7 +597,9 @@ export interface paths {
         };
         /**
          * 장비 정책 (에이전트가 주기적으로 받아 적용)
-         * @description 현재 계약을 통과한 정책만 배포한다. 상한 도입 전에 저장한 정책이나 기본 정책에 범위 밖 값이 있으면 422 RULE_VIOLATION과
+         * @description 배포할 수 있는 원천 장비가 아직 없고 저장된 정책도 없으면 기본 정책 pv-0의 sources와 watch_rules를 빈 배열로 돌려준다.
+         *     이 기본 정책을 받은 수집기는 감시 규칙 없이 하트비트를 보낼 수 있다. 저장하는 정책에는 원천 장비가 한 대 이상 있어야 한다.
+         *     현재 계약을 통과한 정책만 배포한다. 상한 도입 전에 저장한 정책이나 기본 정책에 범위 밖 값이 있으면 422 RULE_VIOLATION과
          *     어긋난 필드 위치를 돌려준다. 에이전트는 이전에 적용한 유효 정책을 유지하고, 운영자가 값을 정정해 새 정책을 배포한다 (ADR-0040).
          */
         get: operations["getDevicePolicy"];
@@ -616,7 +622,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 에이전트 등록 코드 발급 (ORG_ADMIN, 1회용, 기본 24시간) */
+        /**
+         * 에이전트 등록 코드 발급 (ORG_ADMIN, 1회용, 기본 24시간)
+         * @description 원천 장비의 요청은 422, 폐기 상태 수집기의 요청은 409를 반환한다.
+         */
         post: operations["createEnrollmentCode"];
         delete?: never;
         options?: never;
@@ -633,7 +642,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 에이전트 상태 보고 */
+        /**
+         * 에이전트 상태 보고
+         * @description 수집기 토큰은 자신의 식별자로 보고한다. 다른 식별자는 404, 미지원 스키마 버전은 422로 거부한다.
+         */
         post: operations["postHeartbeat"];
         delete?: never;
         options?: never;
@@ -737,7 +749,8 @@ export interface paths {
         put?: never;
         /**
          * 약정 종료 (PLATFORM_OPERATOR, 다중 인증). 유효기간 끝을 당긴다
-         * @description 상태 코드를 새로 만들지 않고 valid_until을 effective_at(기본 지금)으로 당긴다. 이미 공유된 자산·이용 권한은 자동으로 바꾸지 않는다 — 13번 하향·철회 절차를 따른다.
+         * @description valid_until을 effective_at(기본 지금)으로 당긴다. 종료 시각이 valid_from보다 빠르면 422를 반환한다.
+         *     이미 공유된 자산·이용 권한에는 13번 하향·철회 절차를 적용한다.
          */
         post: operations["endAgreement"];
         delete?: never;
@@ -1466,7 +1479,10 @@ export interface paths {
         /** 관측값 조회 (interval을 주면 구간 집계) */
         get: operations["listObservations"];
         put?: never;
-        /** 관측값 배치 전송 (항목별 결과) */
+        /**
+         * 관측값 배치 전송 (항목별 결과)
+         * @description 배치의 원천 장비나 회차가 요청자의 범위에 없으면 전체를 404로 거부한다. 항목별 결과는 범위 검사를 통과한 배치에 적용한다.
+         */
         post: operations["postObservations"];
         delete?: never;
         options?: never;
@@ -1523,7 +1539,9 @@ export interface paths {
         put?: never;
         /**
          * 실증 이벤트 등록
-         * @description `human_verified: true`는 사람 사용자만 보낼 수 있다 (07번 요구사항 7.3, `PATCH /v1/events/{event_id}`와 같은 규칙).
+         * @description Idempotency-Key가 있는 요청은 최초 응답(201 또는 200)을 재생한다. 같은 키에 다른 유효한 본문을 보내면 409를 반환한다.
+         *     새 키를 쓰거나 키가 없는 요청에서 원천 이벤트 ID가 이미 있으면 기존 이벤트와 200을 반환한다.
+         *     `human_verified: true`는 사람 사용자만 보낼 수 있다 (07번 요구사항 7.3, `PATCH /v1/events/{event_id}`와 같은 규칙).
          *     기기·API 키 토큰이 true를 보내면 403 FORBIDDEN이다. 사람이 true로 등록하면 그 사용자와 등록 시각이
          *     verified_by·verified_at에 남는다. MODEL 이벤트는 등록 때 확인됨일 수 없다 (스키마 규칙).
          */
@@ -1567,7 +1585,9 @@ export interface paths {
          * 이벤트 구간과 촬영 구간이 겹치는 같은 회차 자산 (07번 요구사항 7.6)
          * @description 이벤트 [started_at, ended_at(없으면 started_at)]과 자산 [capture_start_at, capture_end_at(없으면 capture_start_at)]이 겹치는 자산.
          *     촬영시각을 모르는 자산은 넣지 않는다(unknown_capture_count로 개수만). margin_s만큼 이벤트 구간을 앞뒤로 넓힌다.
-         *     보는 사람의 자산 범위(Tenant_Guard) 안에서만, 촬영 시작 순.
+         *     보는 사람의 자산 범위(Tenant_Guard) 안에서 촬영 시작 시각과 자산 ID 순으로 정렬한다.
+         *     다음 페이지는 같은 이벤트와 필터에 next_cursor를 cursor로 전달한다. 촬영시각 미상 개수는 전체 필터 범위의 값이다.
+         *     이벤트와 자산의 조회 권한이 모두 필요하다. 기관 API 키는 status:read와 asset:read를 모두 갖춰야 한다.
          */
         get: operations["listEventOverlappingAssets"];
         put?: never;
@@ -1711,7 +1731,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 긴급 열람 조기 종료 (PLATFORM_OPERATOR, 다중 인증). 기간 만료와 같은 EXPIRED가 된다 */
+        /**
+         * 긴급 열람 철회 또는 조기 종료 (PLATFORM_OPERATOR, 다중 인증)
+         * @description 승인 전 철회는 `REQUESTED`에서 `DENIED`로 전이한다.
+         *     승인 후 조기 종료는 `ACTIVE`에서 `EXPIRED`로 전이한다 (ADR-0029 결정 4).
+         */
         post: operations["revokeBreakGlass"];
         delete?: never;
         options?: never;
@@ -2217,7 +2241,10 @@ export interface paths {
         /** 정기 점검 기록 (운영자) */
         get: operations["listInspections"];
         put?: never;
-        /** 점검 수행 기록 시작. 자동 확인 항목은 서버가 채운다 */
+        /**
+         * 점검 수행 기록 시작. 자동 확인 항목은 서버가 채운다
+         * @description 기간은 점검 주기에 맞는 유효한 달력 값이어야 한다. 운영 시간대에서 기간 종료 다음 날 0시를 UTC 기한으로 표현할 수 없으면 400을 반환한다.
+         */
         post: operations["createInspection"];
         delete?: never;
         options?: never;
@@ -2983,10 +3010,18 @@ export interface components {
             total_count: number;
             total_bytes: number;
             excluded_legal_hold: number;
+            /** @description 승인된 기록·보고서의 인용 또는 유효한 이용 권한이 있는 데이터셋 버전에 대한 경고. */
             warnings: {
                 asset_id: components["schemas"]["asset_id"];
                 /** @enum {unknown} */
                 reason: "CITED_BY_APPROVED_EVIDENCE" | "IN_DATASET_VERSION";
+                /** @enum {unknown} */
+                cited_by?: "RECORD" | "REPORT" | "DATASET";
+                /** @description 인용한 기록·보고서 또는 데이터셋 버전 ID */
+                id?: string;
+                version?: number;
+                grant_id?: components["schemas"]["grant_id"];
+                action?: string;
             }[];
         };
         DeletionRequest: {
@@ -4320,20 +4355,6 @@ export interface components {
         collection_mode: "C0_METADATA_ONLY" | "C1_SAMPLE_PREVIEW" | "C2_EVENT_CLIPS" | "C3_APPROVED_FULL";
         /** @enum {unknown} */
         local_copy_policy: "RETAINED" | "ROTATING" | "NONE" | "UNKNOWN";
-        /** @enum {unknown} */
-        data_role: "CORE" | "BYPRODUCT";
-        /**
-         * @example Asia/Seoul
-         * @example UTC
-         */
-        iana_timezone: string;
-        /** @enum {unknown} */
-        data_type: "VIDEO" | "IMAGE" | "SENSOR" | "EVENT" | "AIS" | "LOG" | "DOCUMENT" | "ANNOTATION";
-        /**
-         * @description ORIGINAL은 원천 파일, 나머지는 파생본 (domain.md 3·4장)
-         * @enum {unknown}
-         */
-        variant: "ORIGINAL" | "PROXY" | "THUMBNAIL" | "SAMPLE_FRAME" | "CLIP" | "DEID" | "LABEL" | "SENSOR_EXPORT";
         /**
          * 수집기 정책 v1.0 (GET /v1/devices/{id}/policy 응답)
          * @description 에이전트(수집기)가 받아 적용하는 정책. 수집기 하나가 매핑된 원천 장비 여러 대를 맡는다 (domain.md 1장). 숫자는 모두 운영 정책 테이블 값이다 (tech.md HW-3).
@@ -4341,7 +4362,7 @@ export interface components {
         "device-policy.schema": {
             policy_version: string;
             collector_device_id: components["schemas"]["device_id"];
-            /** @description 이 수집기가 데이터를 보낼 수 있는 원천 장비와 장비별 정책 */
+            /** @description 이 수집기가 데이터를 보낼 수 있는 원천 장비와 장비별 정책. 서버가 만드는 기본 정책 pv-0은 감시 규칙과 함께 빈 배열일 수 있다. */
             sources: {
                 device_id: components["schemas"]["device_id"];
                 project_id?: components["schemas"]["project_id"];
@@ -4388,7 +4409,25 @@ export interface components {
                 /** @enum {unknown} */
                 channel?: "stable" | "pilot";
             };
+            $defs: {
+                /** @description 저장할 정책과 저장본에서 배포할 정책에는 원천 장비가 한 대 이상 있어야 한다. */
+                storedPolicy: components["schemas"]["device-policy.schema"];
+            };
         };
+        /** @enum {unknown} */
+        data_role: "CORE" | "BYPRODUCT";
+        /**
+         * @example Asia/Seoul
+         * @example UTC
+         */
+        iana_timezone: string;
+        /** @enum {unknown} */
+        data_type: "VIDEO" | "IMAGE" | "SENSOR" | "EVENT" | "AIS" | "LOG" | "DOCUMENT" | "ANNOTATION";
+        /**
+         * @description ORIGINAL은 원천 파일, 나머지는 파생본 (domain.md 3·4장)
+         * @enum {unknown}
+         */
+        variant: "ORIGINAL" | "PROXY" | "THUMBNAIL" | "SAMPLE_FRAME" | "CLIP" | "DEID" | "LABEL" | "SENSOR_EXPORT";
         /** @description 주.부.수 형식. 서버는 스키마 검증 전에 버전을 먼저 본다: 주버전이 다르거나 서버가 모르는 더 높은 부버전이면 422 UNSUPPORTED_SCHEMA_VERSION, 같거나 낮은 부버전은 받는다. */
         schema_version: string;
         queue: {
@@ -4958,6 +4997,7 @@ export interface components {
         incident_id: string;
         backup_run_id: string;
         break_glass_id: string;
+        grant_id: string;
         deletion_certificate_id: string;
         inspection_id: string;
         webhook_id: string;
@@ -5093,7 +5133,6 @@ export interface components {
                 };
             };
         };
-        grant_id: string;
         access_request_id: string;
         /** @enum {unknown} */
         grant_status: "REQUESTED" | "PROVIDER_APPROVED" | "GRANTED" | "EXPIRED" | "REVOKED" | "DENIED";
@@ -5406,6 +5445,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
             410: components["responses"]["Gone"];
             429: components["responses"]["TooManyRequests"];
         };
@@ -5543,6 +5583,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
             429: components["responses"]["TooManyRequests"];
         };
     };
@@ -6390,6 +6431,9 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
             429: components["responses"]["TooManyRequests"];
         };
     };
@@ -6469,6 +6513,8 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
             429: components["responses"]["TooManyRequests"];
         };
     };
@@ -6495,6 +6541,8 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
             429: components["responses"]["TooManyRequests"];
         };
     };
@@ -6662,6 +6710,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
             429: components["responses"]["TooManyRequests"];
         };
     };
@@ -8153,6 +8202,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             413: components["responses"]["PayloadTooLarge"];
             422: components["responses"]["Unprocessable"];
@@ -8300,6 +8350,8 @@ export interface operations {
             /** @description 같은 원천 이벤트 ID가 이미 있음 (기존 이벤트 반환) */
             200: {
                 headers: {
+                    /** @description 같은 키와 본문으로 200 응답을 재생한 경우 붙는다. */
+                    "Idempotent-Replayed"?: "true";
                     [name: string]: unknown;
                 };
                 content: {
@@ -8309,6 +8361,8 @@ export interface operations {
             /** @description 등록됨 */
             201: {
                 headers: {
+                    /** @description 같은 키와 본문으로 201 응답을 재생한 경우 붙는다. */
+                    "Idempotent-Replayed"?: "true";
                     [name: string]: unknown;
                 };
                 content: {
@@ -8386,6 +8440,8 @@ export interface operations {
             query?: {
                 margin_s?: number;
                 source_system_id?: components["schemas"]["device_id"];
+                limit?: number;
+                cursor?: string;
             };
             header?: never;
             path: {
@@ -8418,6 +8474,8 @@ export interface operations {
                             linked: boolean;
                         }[];
                         unknown_capture_count: number;
+                        /** @description 다음 페이지 커서. 마지막 페이지는 null */
+                        next_cursor: string | null;
                     };
                 };
             };

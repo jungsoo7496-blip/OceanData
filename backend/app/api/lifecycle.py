@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import client_ip, container, get_db, load_scoped, require
 from app.container import Container
-from app.db.models import Asset, BackupRun, DeletionCertificate, Device, OrgQuota, TrialSession
+from app.db.models import Asset, BackupRun, DeletionCertificate, Device, Organization, OrgQuota, TrialSession
 from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services import backup, retention
@@ -22,14 +22,18 @@ router = APIRouter()
 @router.get("/v1/usage", tags=["status"])
 def get_usage(db: Session = Depends(get_db), c: Container = Depends(container),
               p: Principal = Depends(require("usage:read"))) -> dict:
-    stmt = select(OrgQuota).order_by(OrgQuota.organization_id)
+    stmt = select(Organization.organization_id, OrgQuota).outerjoin(
+        OrgQuota, OrgQuota.organization_id == Organization.organization_id,
+    ).order_by(Organization.organization_id)
     if not p.has_role("PLATFORM_OPERATOR"):
-        stmt = stmt.where(OrgQuota.organization_id == p.organization_id)
-    rows = list(db.execute(stmt).scalars())
-    if not rows and not p.has_role("PLATFORM_OPERATOR"):  # 아직 업로드가 없는 기관
-        rows = [OrgQuota(organization_id=p.organization_id, quota_bytes=c.settings.default_org_quota_bytes,
-                         used_bytes=0, quarantine_bytes=0, reserved_bytes=0, backup_bytes=0)]
-    return {"items": [retention.usage_view(q) for q in rows]}
+        stmt = stmt.where(Organization.organization_id == p.organization_id)
+    items = []
+    for organization_id, quota in db.execute(stmt):
+        if quota is None:
+            quota = OrgQuota(organization_id=organization_id, quota_bytes=c.settings.default_org_quota_bytes,
+                             used_bytes=0, quarantine_bytes=0, reserved_bytes=0, backup_bytes=0)
+        items.append(retention.usage_view(quota))
+    return {"items": items}
 
 
 @router.get("/v1/backup-runs", tags=["status"])

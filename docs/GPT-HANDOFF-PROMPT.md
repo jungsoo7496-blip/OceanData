@@ -119,7 +119,7 @@ CI 결과가 필요하면 사용자에게 "fix/backup-runtime-pg16 → main draf
 
 **권장 실행 순서** (사용량이 모자랄 수 있으니 끝내기 쉬운 것·가장 중요한 것을 먼저 합치고, 모든 라우터를 건드리는 5번은 마지막에 한다. S 반나절 미만 · M 하루 · L 이틀 이상):
 
-    11(L) → 12(L) → 5(L)
+    12(L) → 5(L)
 
 6번·9번·1번·4번·3번·8번·7번·13번·10번과 2번의 만료 세션 보완은 완료했다(`HANDOFF.md` 0장 -1ac부터 -1al). 체크섬 격리 재수집, 운영자 파일 경로 공개 범위, 인증 실패 감사 집계는 5장 사람 결정 항목이다.
 
@@ -167,11 +167,8 @@ wip가 없는 항목은 `git switch -c gpt/<NN>-<주제> --no-track origin/fix/b
 
 ### D. 점검 결과 처리·검토
 
-**11) 계약 대비 구현 점검 — 남은 25건 (L)** — `docs/review-2026-11-05/contract-sweep-findings.md`의 27건 중 1번(backup-runs)·5번(backfill)은 `dedupe_active_only`로 이미 고쳤다(`HANDOFF.md` 0장 -1ab). 14·20번(멱등 키 동시 요청)과 4번의 응답 뒤 롤백 부분은 5번 몫이라 건드리지 않는다. 4번의 null 거부(`PATCH /v1/external-sources/{id}`의 `SourcePatch`가 명시적 null을 400으로 거부해야 함, `backend/app/api/external.py`)는 5번과 무관하므로 이 항목에서 고친다.
-발견자는 재현했지만 검증자 검토를 거치지 않았다. 한 번에 5건 이내로 묶어 중간(medium) 심각도(2·3·6·7·8·15·16·17·18번)부터, 각각 먼저 재현해 진짜인지 확인하고 진짜면 고친다. 계약 문구가 틀렸다면 계약부터(26번은 ADR-0029 결정 4가 정본이라 계약 문구를 고친다).
-특히 '기기가 다른 기관 장비를 찾을 때 교차 접근 감사 미기록'(6·16·17번, security.md 위반), 형식 오류가 500인 것(7·8번: `PATCH /v1/events/{id}`, `POST /v1/observations/corrections`), 긴급 열람 본인 승인 거부 미감사(15번).
-고치려면 domain.md 코드값·권한 표를 바꿔야 하는 건은 구현하지 말고 `HANDOFF.md` 5장에 올린다. 점검하지 못한 두 묶음(`datasets·sharing·deid·assets`, `reports·records·contracts·uploads`, 작업 약 70개)은 상한이 없는 일이라 **맨 마지막, 사용량이 남을 때만** 같은 방식
-(계약 설명 ↔ 구현 비교 → 재현 → 수정)으로 한다.
+**11) 계약 대비 구현 점검 — 완료 (2026-11-12, HANDOFF 0장 -1am)** — 발견 27건 중 1·5번은 이전에 반영했고 이 항목에서 23건을 처리했다. 4번의 명시적 null은 400으로 거부한다. 14·20번의 동시 멱등 요청과 4번의 응답 뒤 롤백은 5번에서 처리한다.
+점검하지 못한 두 묶음(`datasets·sharing·deid·assets`, `reports·records·contracts·uploads`, 작업 약 70개)은 상한이 없는 일이라 **맨 마지막, 사용량이 남을 때만** 같은 방식(계약 설명 ↔ 구현 비교 → 재현 → 수정)으로 한다.
 
 **12) 독립 검토를 못 받은 병합분 검토 (L)** — 웹훅 전송 격리(ADR-0041), 구간 클립 보안 보완(ADR-0033 갱신), 기기 토큰 범위 축소, 계약 검증기, XLSX 수식 방어, 업로드 정리 SAVEPOINT. 문제를 찾으면 재현 시험부터 쓰고 고친다.
 **기기 토큰 범위 축소**(`Permission_Table` 'device' 표시 + Tenant_Guard 기기 범위)는 서버 쪽 시험(`backend/tests/integration/test_device_reach.py`, `test_ingest.py`·`test_agents.py`의 기기 토큰 부분)은 있지만, **실제 Go 에이전트를 실제 서버에 붙여 에이전트 경로 전체(정책·매핑·하트비트·업로드·관측값·이벤트·영수증)를 지나가 보는 시험은 없다** — `tools/go_acceptance.py`는 `go test` 결과를 수용 보고서로 옮길 뿐 실제 서버와 도는 시험이 아니다.

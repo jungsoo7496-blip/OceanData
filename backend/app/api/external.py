@@ -123,6 +123,12 @@ def update_source(source_id: str, body: SourcePatch, request: Request, db: Sessi
     if not fields:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "", "code": "minProperties",
                                                         "message": "바꿀 값이 없습니다"}])
+    null_fields = [name for name, value in fields.items() if value is None and name != "rate_limit_per_min"]
+    if null_fields:
+        raise ProblemError("VALIDATION_ERROR", errors=[
+            {"pointer": f"/{name}", "code": "not_nullable", "message": "비울 수 없는 항목입니다"}
+            for name in null_fields
+        ])
     s = _source(db, source_id)
     for k, v in fields.items():
         setattr(s, k, v)

@@ -1,6 +1,6 @@
 // 실증회차 타임라인 (09번 요구사항 5.2): 자산 촬영 구간·이벤트·관측값 수집 구간(07번)·환경 정보(12번)를 한 시간축에 놓고
 // 회차 기록·보고서(10번)로 이동한다. 계약에 있는 조회 API만 쓴다. 회차 수정(요구사항 5.1)은 계약에 수정 API가 없어 아직 없다.
-import { useQueries, useQuery, type UseQueryResult } from '@tanstack/react-query'
+import { useInfiniteQuery, useQueries, useQuery, type UseQueryResult } from '@tanstack/react-query'
 import { Alert, Button, Card, Checkbox, Descriptions, Grid, Modal, Result, Select, Space, Spin, Table, Tabs, Tag, Typography } from 'antd'
 import { useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
@@ -415,10 +415,17 @@ export function SessionTimeline({ me }: { me: Me }) {
 // 이벤트 구간과 촬영 구간이 겹치는 같은 회차 자산 (07번 요구사항 7.6, GET /v1/events/{id}/overlapping-assets)
 function OverlapModal({ event, devName, onClose }: { event: EventT; devName: (id: string) => string; onClose: () => void }) {
   const [margin, setMargin] = useState(0)
-  const q = useQuery({
+  const q = useInfiniteQuery({
     queryKey: ['events', event.event_id, 'overlapping-assets', margin],
-    queryFn: () => api<Overlap>(`/v1/events/${event.event_id}/overlapping-assets?margin_s=${margin}`),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam, signal }) => {
+      const query = new URLSearchParams({ margin_s: String(margin) })
+      if (pageParam !== null) query.set('cursor', pageParam)
+      return api<Overlap>(`/v1/events/${event.event_id}/overlapping-assets?${query}`, { signal })
+    },
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
   })
+  const unknownCount = q.data?.pages[0]?.unknown_capture_count ?? 0
   return (
     <Modal open title={`겹치는 자산 — ${eventLabel(event.event_code)}`} onCancel={onClose} footer={null} width={960}>
       <Space direction="vertical" style={{ width: '100%' }}>
@@ -431,7 +438,8 @@ function OverlapModal({ event, devName, onClose }: { event: EventT; devName: (id
             options={[0, 60, 300, 600, 1800].map((v) => ({ value: v, label: v ? `${v / 60}분` : '없음' }))} />
         </Space>
         {q.error && <Alert type="error" showIcon message={failText(q.error)} />}
-        <Table rowKey={(x) => x.asset.asset_id} size="small" scroll={{ x: 'max-content' }} loading={q.isLoading} dataSource={q.data?.items ?? []} pagination={{ pageSize: 10 }}
+        <Table rowKey={(x) => x.asset.asset_id} size="small" scroll={{ x: 'max-content' }} loading={q.isLoading}
+          dataSource={q.data?.pages.flatMap((page) => page.items) ?? []} pagination={{ pageSize: 10 }}
           locale={{ emptyText: '겹치는 자산이 없습니다' }}
           columns={[
             { title: '파일', key: 'f', render: (_, x) => <Link to={`/assets/${x.asset.asset_id}`}>{fileOf(x.asset)}</Link> },
@@ -440,8 +448,11 @@ function OverlapModal({ event, devName, onClose }: { event: EventT; devName: (id
             { title: '겹침', key: 'o', render: (_, x) => `${Math.round(x.overlap_s)}초` },
             { title: '연결', key: 'l', render: (_, x) => (x.linked ? <Tag color="green">연결됨</Tag> : '-') },
           ]} />
-        {!!q.data?.unknown_capture_count && (
-          <Typography.Text type="secondary">촬영시각 미상 자산 {q.data.unknown_capture_count}건은 비교하지 않았습니다.</Typography.Text>
+        {q.hasNextPage && (
+          <Button loading={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()}>더 보기</Button>
+        )}
+        {unknownCount > 0 && (
+          <Typography.Text type="secondary">촬영시각 미상 자산 {unknownCount}건은 비교하지 않았습니다.</Typography.Text>
         )}
       </Space>
     </Modal>

@@ -2,12 +2,12 @@
 
 - [x] 1. 존별 버킷·객체 키·파일명 미포함 — 요구사항 1.1, 1.2 (04번에서 구현, 계속 사용)
 - [x] 2. 서버 측 암호화 요청(S3_SSE=AES256 → 버킷 기본 암호화, 사전 서명 업로드에도 적용)·미지원 시 기동 경고와 /readyz `warnings` — 요구사항 1.3, 1.4 · 시험 `tests/integration/test_storage_encryption.py`. **SeaweedFS·운영 스토리지의 지원 여부는 확인 필요**
-- [x] 3. 쿼터 정책 표·항목별 사용량·사용량 API — 요구사항 2.1, 2.2, 2.5, 2.6 · 시험 `test_quota_alerts_usage_and_reconcile`
+- [x] 3. 쿼터 정책 표·항목별 사용량·사용량 API — 요구사항 2.1, 2.2, 2.5, 2.6 · 시험 `test_quota_alerts_usage_and_reconcile` · 쿼터 행이 없는 기관까지 보는 운영자 사용량 `test_usage_org_coverage.py`
 - [x] 4. 일일 실측 대조·차이 알림 — 요구사항 2.3
 - [x] 5. 80·90·100% 알림 — 요구사항 2.4
 - [x] 6. 보존 정책 표·등록 시 계산·격리 사유별 — 요구사항 3.1, 3.2 · 시험 `test_retention_policies_applied`
 - [x] 7. 만료 예고 알림 — 요구사항 3.3 · 시험 `test_expiry_notification`
-- [x] 8. 만료 실행·삭제 기록·dry-run API·운영자 확인 후 실행 — 요구사항 3.4, 3.6, 3.7 · 시험 `test_dry_run_legal_hold_and_expiry_execution`
+- [x] 8. 만료 실행·삭제 기록·dry-run API·운영자 확인 후 실행 — 요구사항 3.4, 3.6, 3.7 · 시험 `test_dry_run_legal_hold_and_expiry_execution` · dry-run 경고의 `reason`과 인용 상세는 `tests/integration/test_dataset_retention.py`의 API 계약 검증으로 확인
 - [x] 9. DATASET 존 사본을 원 자산 만료와 별도로 — 요구사항 3.5 · 사본은 원 자산 행과 따로 DATASET 버킷 객체(DatasetVersionItem)로 두어 원 자산 만료·삭제가 지우지 않는다(정책 dataset_keep, KEEP). 유효한 이용 권한이 있는 버전의 항목은 만료가 건너뛰고 dry-run에 경고, 철회 뒤 다음 실행에서 지운다. 사본은 기관 사용량에 넣지 않는다. 시험 `tests/integration/test_dataset_retention.py`. 항목이 지워진 버전의 새 배포는 13번 규칙(PRIVATE로 봄)을 따른다 — 보존 만료로 지운 경우에도 막을지는 확인 필요
 - [x] 10. 법적 보류 설정·해제(운영자·사유·감사)·삭제 제외 — 요구사항 4.1, 4.2
 - [x] 11. 자산·회차 삭제·파생본 포함·삭제 증명·백업 소멸일 — 요구사항 5.1, 5.2 · 시험 `test_asset_deletion_*`, `test_session_deletion_and_cross_org`

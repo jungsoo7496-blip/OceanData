@@ -5,12 +5,26 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["policy_version", "collector_device_id", "sources", "watch_rules", "heartbeat_interval_s", "size_stable_s", "timezone"],
+  "if": {
+    "properties": {
+      "policy_version": { "const": "pv-0" },
+      "watch_rules": { "maxItems": 0 }
+    }
+  },
+  "else": { "properties": { "sources": { "minItems": 1 } } },
+  "$defs": {
+    "storedPolicy": {
+      "description": "저장할 정책과 저장본에서 배포할 정책에는 원천 장비가 한 대 이상 있어야 한다.",
+      "$ref": "#",
+      "properties": { "sources": { "minItems": 1 } }
+    }
+  },
   "properties": {
     "policy_version": { "type": "string", "maxLength": 64 },
     "collector_device_id": { "$ref": "common.schema.json#/$defs/device_id" },
     "sources": {
-      "description": "이 수집기가 데이터를 보낼 수 있는 원천 장비와 장비별 정책",
-      "type": "array", "minItems": 1,
+      "description": "이 수집기가 데이터를 보낼 수 있는 원천 장비와 장비별 정책. 서버가 만드는 기본 정책 pv-0은 감시 규칙과 함께 빈 배열일 수 있다.",
+      "type": "array",
       "items": {
         "type": "object", "additionalProperties": false,
         "required": ["device_id", "collection_mode", "local_copy_policy", "allowed_data_roles"],

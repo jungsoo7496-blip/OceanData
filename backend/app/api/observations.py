@@ -4,21 +4,22 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Header, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import and_, func, literal, or_, select, text, tuple_
 from sqlalchemy.orm import Session
 
 from app.api.deps import client_ip, container, get_db, load_scoped, page_params, require
-from app.api.pagination import paginate
+from app.api.pagination import decode_cursor, encode_cursor, paginate
 from app.container import Container
 from app.db.models import Asset, Device, Event, EventAsset, ObservationMapping, OrgEventCode, TrialSession
-from app.domain.ids import new_id
-from app.domain.normalize import parse_rfc3339
+from app.domain.ids import has_prefix, new_id
+from app.domain.normalize import TimeRuleError, parse_rfc3339
 from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services import contracts
@@ -35,6 +36,17 @@ from app.services.tenant import scoped_select
 from app.timefmt import iso
 
 router = APIRouter()
+_UTC_TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?Z")
+
+
+def _validate_utc_timestamp(value: str | None) -> str:
+    if value is None or not _UTC_TIMESTAMP.fullmatch(value):
+        raise ValueError("Z로 끝나는 RFC 3339 UTC 시각을 입력하세요")
+    try:
+        parse_rfc3339(value)
+    except TimeRuleError:
+        raise ValueError("유효한 날짜와 시각을 입력하세요") from None
+    return value
 
 
 def _problems_to_400(problems: list[Any], rejected: bool) -> None:
@@ -47,11 +59,7 @@ def _problems_to_400(problems: list[Any], rejected: bool) -> None:
 
 
 def _source_device(db: Session, c: Container, request: Request, p: Principal, device_id: str) -> Device:
-    if p.kind == "DEVICE" and device_id not in p.mapped_source_ids:  # 범위 조회보다 먼저 (위반을 감사에 남긴다)
-        c.audit.record("DEVICE_SCOPE_VIOLATION", result="DENIED", principal=p, organization_id=p.organization_id,
-                       target_type="Device", target_id=device_id)
-        raise ProblemError("NOT_FOUND", detail="원천 장비를 찾을 수 없습니다")
-    device: Device = load_scoped(db, c, request, Device, device_id, p)
+    device = load_scoped(db, c, request, Device, device_id, p, audit_device_scope=True)
     if device.status == "REVOKED":
         raise ProblemError("RULE_VIOLATION", detail="폐기된 장비입니다",
                            unmet_conditions=[{"condition": "device.status=ACTIVE", "actual": device.status}])
@@ -209,6 +217,8 @@ class Correction(BaseModel):
     quality_flag: str | None = Field(default=None, pattern="^(GOOD|SUSPECT|BAD|MISSING)$")
     reason: str = Field(min_length=2, max_length=500)
 
+    _check_observed_at = field_validator("observed_at")(_validate_utc_timestamp)
+
 
 @router.post("/v1/observations/corrections", tags=["observations"])
 def correct_observation(body: Correction, request: Request, db: Session = Depends(get_db),
@@ -235,9 +245,9 @@ def _mapping_view(m: ObservationMapping) -> dict:
 @router.get("/v1/devices/{device_id}/observation-mapping", tags=["observations"])
 def get_mapping(device_id: str, request: Request, db: Session = Depends(get_db), c: Container = Depends(container),
                 p: Principal = Depends(require("mapping:read"))) -> dict:
+    load_scoped(db, c, request, Device, device_id, p)
     if p.kind == "DEVICE" and device_id not in p.mapped_source_ids:
         raise ProblemError("NOT_FOUND")
-    load_scoped(db, c, request, Device, device_id, p)
     m = current_mapping(db, device_id)
     if m is None:
         raise ProblemError("NOT_FOUND", detail="매핑 프로필이 없습니다")
@@ -352,14 +362,16 @@ def create_event(request: Request, body: Any = Body(...), db: Session = Depends(
     if ended is not None and ended < started:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/ended_at", "code": "before_start",
                                                         "message": "종료가 시작보다 빠릅니다"}])
-    if body.get("source_event_id"):  # 원천 이벤트 ID로 중복 방지 (요구사항 7.4)
-        dup = db.execute(select(Event).where(Event.organization_id == p.organization_id,
-                                             Event.source_system_id == body.get("source_system_id"),
-                                             Event.source_event_id == body["source_event_id"])).scalar_one_or_none()
-        if dup is not None:
-            return JSONResponse(event_view(db, dup), status_code=200)
 
     def create() -> tuple[int, dict[str, Any]]:
+        if body.get("source_event_id"):  # 원천 이벤트 ID로 중복 방지 (요구사항 7.4)
+            duplicate = db.execute(select(Event).where(
+                Event.organization_id == p.organization_id,
+                Event.source_system_id == body.get("source_system_id"),
+                Event.source_event_id == body["source_event_id"],
+            )).scalar_one_or_none()
+            if duplicate is not None:
+                return 200, event_view(db, duplicate)
         e = Event(event_id=new_id("event"), organization_id=p.organization_id, session_id=session.session_id,
                   project_id=session.project_id, source_system_id=body.get("source_system_id"),
                   event_code=body["event_code"], started_at=started, ended_at=ended,
@@ -409,11 +421,30 @@ def get_event(event_id: str, request: Request, db: Session = Depends(get_db), c:
     return event_view(db, load_scoped(db, c, request, Event, event_id, p))
 
 
+def _overlap_cursor(cursor: str) -> tuple[datetime, str]:
+    try:
+        value = json.loads(decode_cursor(cursor))
+        if not isinstance(value, list) or len(value) != 2:
+            raise ValueError
+        captured_at, asset_id = value
+        if not isinstance(captured_at, str) or not isinstance(asset_id, str) or len(asset_id) != 30:
+            raise ValueError
+        if not has_prefix(asset_id, "asset"):
+            raise ValueError
+        return parse_rfc3339(captured_at), asset_id
+    except (ValueError, OverflowError):
+        raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/query/cursor", "code": "invalid",
+                                                        "message": "커서 형식이 올바르지 않습니다"}]) from None
+
+
 @router.get("/v1/events/{event_id}/overlapping-assets", tags=["events"])
 def overlapping_assets(event_id: str, request: Request, margin_s: int = Query(0, ge=0, le=3600),
                        source_system_id: str | None = Query(None, pattern=r"^dev_[0-9A-HJKMNP-TV-Z]{26}$"),
+                       limit: int = Query(500, ge=1, le=500),
+                       cursor: str | None = Query(None, min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"),
                        db: Session = Depends(get_db), c: Container = Depends(container),
-                       p: Principal = Depends(require("event:read"))) -> dict:
+                       p: Principal = Depends(require("event:read")),
+                       _asset_reader: Principal = Depends(require("asset:read"))) -> dict:
     """이벤트 구간과 촬영 구간이 겹치는 같은 회차 자산 (요구사항 7.6). 촬영시각 미상은 개수만."""
     from datetime import timedelta
 
@@ -426,12 +457,23 @@ def overlapping_assets(event_id: str, request: Request, margin_s: int = Query(0,
     if source_system_id is not None:
         base = base.where(Asset.source_system_id == source_system_id)
     a_end = func.coalesce(Asset.capture_end_at, Asset.capture_start_at)
-    rows = list(db.execute(base.where(Asset.capture_start_at.is_not(None), Asset.capture_start_at <= end,
-                                      a_end >= start).order_by(Asset.capture_start_at, Asset.asset_id)
-                           .limit(500)).scalars())
+    order = (Asset.capture_start_at, Asset.asset_id)
+    page = base.where(Asset.capture_start_at.is_not(None), Asset.capture_start_at <= end, a_end >= start)
+    if cursor is not None:
+        captured_at, asset_id = _overlap_cursor(cursor)
+        page = page.where(tuple_(*order) > tuple_(literal(captured_at), literal(asset_id)))
+    rows = list(db.scalars(page.order_by(*order).limit(limit + 1)))
+    next_cursor = None
+    if len(rows) > limit:
+        rows = rows[:limit]
+        last = rows[-1]
+        assert last.capture_start_at is not None  # noqa: S101 - page의 IS NOT NULL
+        next_cursor = encode_cursor(json.dumps([last.capture_start_at.isoformat(), last.asset_id]))
     unknown = db.execute(select(func.count()).select_from(
         base.where(Asset.capture_start_at.is_(None)).subquery())).scalar_one()
-    linked = set(db.execute(select(EventAsset.asset_id).where(EventAsset.event_id == e.event_id)).scalars())
+    linked = set(db.scalars(select(EventAsset.asset_id).where(
+        EventAsset.event_id == e.event_id, EventAsset.asset_id.in_([asset.asset_id for asset in rows]),
+    )))
     items = []
     for a, view in zip(rows, asset_views(db, rows, p), strict=True):
         a_start = a.capture_start_at
@@ -439,7 +481,7 @@ def overlapping_assets(event_id: str, request: Request, margin_s: int = Query(0,
         overlap = (min(a.capture_end_at or a_start, end) - max(a_start, start)).total_seconds()
         items.append({"asset": view, "overlap_s": max(0.0, overlap), "linked": a.asset_id in linked})
     return {"event_id": e.event_id, "session_id": e.session_id, "window": {"from": iso(start), "to": iso(end)},
-            "items": items, "unknown_capture_count": int(unknown)}
+            "items": items, "unknown_capture_count": int(unknown), "next_cursor": next_cursor}
 
 
 class EventPatch(BaseModel):
@@ -448,6 +490,8 @@ class EventPatch(BaseModel):
     ended_at: str | None = None
     add_linked_asset_ids: list[str] | None = Field(default=None, max_length=200)
     note: str | None = Field(default=None, max_length=2000)
+
+    _check_ended_at = field_validator("ended_at")(_validate_utc_timestamp)
 
 
 @router.patch("/v1/events/{event_id}", tags=["events"])

@@ -370,7 +370,7 @@ type ExternalDevicePolicySchemaD0320935 struct {
 	// SizeStableS 쓰기 완료 판정: 파일 크기·수정 시각이 이 시간(초) 동안 그대로여야 전송 대상에 넣는다 (06번 요구사항 3.1). 상한은 heartbeat_interval_s와 같은 기술 한도다 (ADR-0040)
 	SizeStableS int `json:"size_stable_s"`
 
-	// Sources 이 수집기가 데이터를 보낼 수 있는 원천 장비와 장비별 정책
+	// Sources 이 수집기가 데이터를 보낼 수 있는 원천 장비와 장비별 정책. 서버가 만드는 기본 정책 pv-0은 감시 규칙과 함께 빈 배열일 수 있다.
 	Sources []struct {
 		AllowedDataRoles []ExternalCommonSchemaDefsDataRole54164017     `json:"allowed_data_roles"`
 		CollectionMode   ExternalCommonSchemaDefsCollectionMode8b570e81 `json:"collection_mode"`
@@ -1204,12 +1204,16 @@ type ClientInterface interface {
 
 	// PostHeartbeatWithBody 에이전트 상태 보고
 	//
+	// 수집기 토큰은 자신의 식별자로 보고한다. 다른 식별자는 404, 미지원 스키마 버전은 422로 거부한다.
+	//
 	// Takes any type of body and a specified content type.
 	//
 	// Corresponds with POST /v1/agents/heartbeat (the `PostHeartbeat` operationId).
 	PostHeartbeatWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// PostHeartbeat 에이전트 상태 보고
+	//
+	// 수집기 토큰은 자신의 식별자로 보고한다. 다른 식별자는 404, 미지원 스키마 버전은 422로 거부한다.
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -1260,6 +1264,8 @@ type ClientInterface interface {
 
 	// GetDevicePolicy 장비 정책 (에이전트가 주기적으로 받아 적용)
 	//
+	// 배포할 수 있는 원천 장비가 아직 없고 저장된 정책도 없으면 기본 정책 pv-0의 sources와 watch_rules를 빈 배열로 돌려준다.
+	// 이 기본 정책을 받은 수집기는 감시 규칙 없이 하트비트를 보낼 수 있다. 저장하는 정책에는 원천 장비가 한 대 이상 있어야 한다.
 	// 현재 계약을 통과한 정책만 배포한다. 상한 도입 전에 저장한 정책이나 기본 정책에 범위 밖 값이 있으면 422 RULE_VIOLATION과
 	// 어긋난 필드 위치를 돌려준다. 에이전트는 이전에 적용한 유효 정책을 유지하고, 운영자가 값을 정정해 새 정책을 배포한다 (ADR-0040).
 	//
@@ -1268,12 +1274,16 @@ type ClientInterface interface {
 
 	// PostObservationsWithBody 관측값 배치 전송 (항목별 결과)
 	//
+	// 배치의 원천 장비나 회차가 요청자의 범위에 없으면 전체를 404로 거부한다. 항목별 결과는 범위 검사를 통과한 배치에 적용한다.
+	//
 	// Takes any type of body and a specified content type.
 	//
 	// Corresponds with POST /v1/observations (the `PostObservations` operationId).
 	PostObservationsWithBody(ctx context.Context, params *PostObservationsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// PostObservations 관측값 배치 전송 (항목별 결과)
+	//
+	// 배치의 원천 장비나 회차가 요청자의 범위에 없으면 전체를 404로 거부한다. 항목별 결과는 범위 검사를 통과한 배치에 적용한다.
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -1404,6 +1414,8 @@ func (c *Client) EnrollAgent(ctx context.Context, body EnrollAgentJSONRequestBod
 
 // PostHeartbeatWithBody 에이전트 상태 보고
 //
+// 수집기 토큰은 자신의 식별자로 보고한다. 다른 식별자는 404, 미지원 스키마 버전은 422로 거부한다.
+//
 // Takes any type of body and a specified content type.
 //
 // Corresponds with POST /v1/agents/heartbeat (the `PostHeartbeat` operationId).
@@ -1420,6 +1432,8 @@ func (c *Client) PostHeartbeatWithBody(ctx context.Context, contentType string, 
 }
 
 // PostHeartbeat 에이전트 상태 보고
+//
+// 수집기 토큰은 자신의 식별자로 보고한다. 다른 식별자는 404, 미지원 스키마 버전은 422로 거부한다.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -1520,6 +1534,8 @@ func (c *Client) GetObservationMapping(ctx context.Context, deviceId DeviceId, r
 
 // GetDevicePolicy 장비 정책 (에이전트가 주기적으로 받아 적용)
 //
+// 배포할 수 있는 원천 장비가 아직 없고 저장된 정책도 없으면 기본 정책 pv-0의 sources와 watch_rules를 빈 배열로 돌려준다.
+// 이 기본 정책을 받은 수집기는 감시 규칙 없이 하트비트를 보낼 수 있다. 저장하는 정책에는 원천 장비가 한 대 이상 있어야 한다.
 // 현재 계약을 통과한 정책만 배포한다. 상한 도입 전에 저장한 정책이나 기본 정책에 범위 밖 값이 있으면 422 RULE_VIOLATION과
 // 어긋난 필드 위치를 돌려준다. 에이전트는 이전에 적용한 유효 정책을 유지하고, 운영자가 값을 정정해 새 정책을 배포한다 (ADR-0040).
 //
@@ -1538,6 +1554,8 @@ func (c *Client) GetDevicePolicy(ctx context.Context, deviceId DeviceId, reqEdit
 
 // PostObservationsWithBody 관측값 배치 전송 (항목별 결과)
 //
+// 배치의 원천 장비나 회차가 요청자의 범위에 없으면 전체를 404로 거부한다. 항목별 결과는 범위 검사를 통과한 배치에 적용한다.
+//
 // Takes any type of body and a specified content type.
 //
 // Corresponds with POST /v1/observations (the `PostObservations` operationId).
@@ -1554,6 +1572,8 @@ func (c *Client) PostObservationsWithBody(ctx context.Context, params *PostObser
 }
 
 // PostObservations 관측값 배치 전송 (항목별 결과)
+//
+// 배치의 원천 장비나 회차가 요청자의 범위에 없으면 전체를 404로 거부한다. 항목별 결과는 범위 검사를 통과한 배치에 적용한다.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -2283,12 +2303,16 @@ type ClientWithResponsesInterface interface {
 
 	// PostHeartbeatWithBodyWithResponse 에이전트 상태 보고
 	//
+	// 수집기 토큰은 자신의 식별자로 보고한다. 다른 식별자는 404, 미지원 스키마 버전은 422로 거부한다.
+	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with POST /v1/agents/heartbeat (the `PostHeartbeat` operationId).
 	PostHeartbeatWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostHeartbeatResponse, error)
 
 	// PostHeartbeatWithResponse 에이전트 상태 보고
+	//
+	// 수집기 토큰은 자신의 식별자로 보고한다. 다른 식별자는 404, 미지원 스키마 버전은 422로 거부한다.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -2343,6 +2367,8 @@ type ClientWithResponsesInterface interface {
 
 	// GetDevicePolicyWithResponse 장비 정책 (에이전트가 주기적으로 받아 적용)
 	//
+	// 배포할 수 있는 원천 장비가 아직 없고 저장된 정책도 없으면 기본 정책 pv-0의 sources와 watch_rules를 빈 배열로 돌려준다.
+	// 이 기본 정책을 받은 수집기는 감시 규칙 없이 하트비트를 보낼 수 있다. 저장하는 정책에는 원천 장비가 한 대 이상 있어야 한다.
 	// 현재 계약을 통과한 정책만 배포한다. 상한 도입 전에 저장한 정책이나 기본 정책에 범위 밖 값이 있으면 422 RULE_VIOLATION과
 	// 어긋난 필드 위치를 돌려준다. 에이전트는 이전에 적용한 유효 정책을 유지하고, 운영자가 값을 정정해 새 정책을 배포한다 (ADR-0040).
 	//
@@ -2353,12 +2379,16 @@ type ClientWithResponsesInterface interface {
 
 	// PostObservationsWithBodyWithResponse 관측값 배치 전송 (항목별 결과)
 	//
+	// 배치의 원천 장비나 회차가 요청자의 범위에 없으면 전체를 404로 거부한다. 항목별 결과는 범위 검사를 통과한 배치에 적용한다.
+	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with POST /v1/observations (the `PostObservations` operationId).
 	PostObservationsWithBodyWithResponse(ctx context.Context, params *PostObservationsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostObservationsResponse, error)
 
 	// PostObservationsWithResponse 관측값 배치 전송 (항목별 결과)
+	//
+	// 배치의 원천 장비나 회차가 요청자의 범위에 없으면 전체를 404로 거부한다. 항목별 결과는 범위 검사를 통과한 배치에 적용한다.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -2464,6 +2494,11 @@ type EnrollAgentResponse400Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
+// EnrollAgentResponse401Headers the declared response headers of an HTTP 401 response for EnrollAgent
+type EnrollAgentResponse401Headers struct {
+	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
+}
+
 // EnrollAgentResponse410Headers the declared response headers of an HTTP 410 response for EnrollAgent
 type EnrollAgentResponse410Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
@@ -2482,12 +2517,16 @@ type EnrollAgentResponse struct {
 	JSON201 *EnrollResponse
 	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
 	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
 	// ApplicationproblemJSON410 the response for an HTTP 410 `application/problem+json` response
 	ApplicationproblemJSON410 *Gone
 	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
 	ApplicationproblemJSON429 *TooManyRequests
 	// Headers400 the parsed response headers for an HTTP 400 response
 	Headers400 *EnrollAgentResponse400Headers
+	// Headers401 the parsed response headers for an HTTP 401 response
+	Headers401 *EnrollAgentResponse401Headers
 	// Headers410 the parsed response headers for an HTTP 410 response
 	Headers410 *EnrollAgentResponse410Headers
 	// Headers429 the parsed response headers for an HTTP 429 response
@@ -2502,6 +2541,11 @@ func (r EnrollAgentResponse) GetJSON201() *EnrollResponse {
 // GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
 func (r EnrollAgentResponse) GetApplicationproblemJSON400() *BadRequest {
 	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r EnrollAgentResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
 }
 
 // GetApplicationproblemJSON410 returns the response for an HTTP 410 `application/problem+json` response
@@ -2558,6 +2602,16 @@ type PostHeartbeatResponse403Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
+// PostHeartbeatResponse404Headers the declared response headers of an HTTP 404 response for PostHeartbeat
+type PostHeartbeatResponse404Headers struct {
+	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
+}
+
+// PostHeartbeatResponse422Headers the declared response headers of an HTTP 422 response for PostHeartbeat
+type PostHeartbeatResponse422Headers struct {
+	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
+}
+
 // PostHeartbeatResponse429Headers the declared response headers of an HTTP 429 response for PostHeartbeat
 type PostHeartbeatResponse429Headers struct {
 	RetryAfter *int
@@ -2573,6 +2627,10 @@ type PostHeartbeatResponse struct {
 	ApplicationproblemJSON401 *Unauthorized
 	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
 	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
+	ApplicationproblemJSON422 *Unprocessable
 	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
 	ApplicationproblemJSON429 *TooManyRequests
 	// Headers400 the parsed response headers for an HTTP 400 response
@@ -2581,6 +2639,10 @@ type PostHeartbeatResponse struct {
 	Headers401 *PostHeartbeatResponse401Headers
 	// Headers403 the parsed response headers for an HTTP 403 response
 	Headers403 *PostHeartbeatResponse403Headers
+	// Headers404 the parsed response headers for an HTTP 404 response
+	Headers404 *PostHeartbeatResponse404Headers
+	// Headers422 the parsed response headers for an HTTP 422 response
+	Headers422 *PostHeartbeatResponse422Headers
 	// Headers429 the parsed response headers for an HTTP 429 response
 	Headers429 *PostHeartbeatResponse429Headers
 }
@@ -2598,6 +2660,16 @@ func (r PostHeartbeatResponse) GetApplicationproblemJSON401() *Unauthorized {
 // GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
 func (r PostHeartbeatResponse) GetApplicationproblemJSON403() *Forbidden {
 	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r PostHeartbeatResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
+func (r PostHeartbeatResponse) GetApplicationproblemJSON422() *Unprocessable {
+	return r.ApplicationproblemJSON422
 }
 
 // GetApplicationproblemJSON429 returns the response for an HTTP 429 `application/problem+json` response
@@ -3055,6 +3127,11 @@ type PostObservationsResponse403Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
 }
 
+// PostObservationsResponse404Headers the declared response headers of an HTTP 404 response for PostObservations
+type PostObservationsResponse404Headers struct {
+	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
+}
+
 // PostObservationsResponse409Headers the declared response headers of an HTTP 409 response for PostObservations
 type PostObservationsResponse409Headers struct {
 	XRequestId *ExternalCommonSchemaDefsUlid3520d2d2
@@ -3087,6 +3164,8 @@ type PostObservationsResponse struct {
 	ApplicationproblemJSON401 *Unauthorized
 	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
 	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
 	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
 	ApplicationproblemJSON409 *Conflict
 	// ApplicationproblemJSON413 the response for an HTTP 413 `application/problem+json` response
@@ -3101,6 +3180,8 @@ type PostObservationsResponse struct {
 	Headers401 *PostObservationsResponse401Headers
 	// Headers403 the parsed response headers for an HTTP 403 response
 	Headers403 *PostObservationsResponse403Headers
+	// Headers404 the parsed response headers for an HTTP 404 response
+	Headers404 *PostObservationsResponse404Headers
 	// Headers409 the parsed response headers for an HTTP 409 response
 	Headers409 *PostObservationsResponse409Headers
 	// Headers413 the parsed response headers for an HTTP 413 response
@@ -3129,6 +3210,11 @@ func (r PostObservationsResponse) GetApplicationproblemJSON401() *Unauthorized {
 // GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
 func (r PostObservationsResponse) GetApplicationproblemJSON403() *Forbidden {
 	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r PostObservationsResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
 }
 
 // GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
@@ -3854,6 +3940,8 @@ func (c *ClientWithResponses) EnrollAgentWithResponse(ctx context.Context, body 
 
 // PostHeartbeatWithBodyWithResponse 에이전트 상태 보고
 //
+// 수집기 토큰은 자신의 식별자로 보고한다. 다른 식별자는 404, 미지원 스키마 버전은 422로 거부한다.
+//
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
 // Corresponds with POST /v1/agents/heartbeat (the `PostHeartbeat` operationId).
@@ -3866,6 +3954,8 @@ func (c *ClientWithResponses) PostHeartbeatWithBodyWithResponse(ctx context.Cont
 }
 
 // PostHeartbeatWithResponse 에이전트 상태 보고
+//
+// 수집기 토큰은 자신의 식별자로 보고한다. 다른 식별자는 404, 미지원 스키마 버전은 422로 거부한다.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -3950,6 +4040,8 @@ func (c *ClientWithResponses) GetObservationMappingWithResponse(ctx context.Cont
 
 // GetDevicePolicyWithResponse 장비 정책 (에이전트가 주기적으로 받아 적용)
 //
+// 배포할 수 있는 원천 장비가 아직 없고 저장된 정책도 없으면 기본 정책 pv-0의 sources와 watch_rules를 빈 배열로 돌려준다.
+// 이 기본 정책을 받은 수집기는 감시 규칙 없이 하트비트를 보낼 수 있다. 저장하는 정책에는 원천 장비가 한 대 이상 있어야 한다.
 // 현재 계약을 통과한 정책만 배포한다. 상한 도입 전에 저장한 정책이나 기본 정책에 범위 밖 값이 있으면 422 RULE_VIOLATION과
 // 어긋난 필드 위치를 돌려준다. 에이전트는 이전에 적용한 유효 정책을 유지하고, 운영자가 값을 정정해 새 정책을 배포한다 (ADR-0040).
 //
@@ -3966,6 +4058,8 @@ func (c *ClientWithResponses) GetDevicePolicyWithResponse(ctx context.Context, d
 
 // PostObservationsWithBodyWithResponse 관측값 배치 전송 (항목별 결과)
 //
+// 배치의 원천 장비나 회차가 요청자의 범위에 없으면 전체를 404로 거부한다. 항목별 결과는 범위 검사를 통과한 배치에 적용한다.
+//
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
 // Corresponds with POST /v1/observations (the `PostObservations` operationId).
@@ -3978,6 +4072,8 @@ func (c *ClientWithResponses) PostObservationsWithBodyWithResponse(ctx context.C
 }
 
 // PostObservationsWithResponse 관측값 배치 전송 (항목별 결과)
+//
+// 배치의 원천 장비나 회차가 요청자의 범위에 없으면 전체를 404로 거부한다. 항목별 결과는 범위 검사를 통과한 배치에 적용한다.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -4153,6 +4249,13 @@ func ParseEnrollAgentResponse(rsp *http.Response) (*EnrollAgentResponse, error) 
 		}
 		response.ApplicationproblemJSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 410:
 		var dest Gone
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -4180,6 +4283,16 @@ func ParseEnrollAgentResponse(rsp *http.Response) (*EnrollAgentResponse, error) 
 			headers.XRequestId = &value
 		}
 		response.Headers400 = &headers
+	case rsp.StatusCode == 401:
+		var headers EnrollAgentResponse401Headers
+		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
+			var value ExternalCommonSchemaDefsUlid3520d2d2
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XRequestId = &value
+		}
+		response.Headers401 = &headers
 	case rsp.StatusCode == 410:
 		var headers EnrollAgentResponse410Headers
 		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
@@ -4250,6 +4363,20 @@ func ParsePostHeartbeatResponse(rsp *http.Response) (*PostHeartbeatResponse, err
 		}
 		response.ApplicationproblemJSON403 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest Unprocessable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
 		var dest TooManyRequests
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -4290,6 +4417,26 @@ func ParsePostHeartbeatResponse(rsp *http.Response) (*PostHeartbeatResponse, err
 			headers.XRequestId = &value
 		}
 		response.Headers403 = &headers
+	case rsp.StatusCode == 404:
+		var headers PostHeartbeatResponse404Headers
+		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
+			var value ExternalCommonSchemaDefsUlid3520d2d2
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XRequestId = &value
+		}
+		response.Headers404 = &headers
+	case rsp.StatusCode == 422:
+		var headers PostHeartbeatResponse422Headers
+		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
+			var value ExternalCommonSchemaDefsUlid3520d2d2
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XRequestId = &value
+		}
+		response.Headers422 = &headers
 	case rsp.StatusCode == 429:
 		var headers PostHeartbeatResponse429Headers
 		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
@@ -4787,6 +4934,13 @@ func ParsePostObservationsResponse(rsp *http.Response) (*PostObservationsRespons
 		}
 		response.ApplicationproblemJSON403 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
 		var dest Conflict
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -4848,6 +5002,16 @@ func ParsePostObservationsResponse(rsp *http.Response) (*PostObservationsRespons
 			headers.XRequestId = &value
 		}
 		response.Headers403 = &headers
+	case rsp.StatusCode == 404:
+		var headers PostObservationsResponse404Headers
+		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {
+			var value ExternalCommonSchemaDefsUlid3520d2d2
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-Request-Id", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XRequestId = &value
+		}
+		response.Headers404 = &headers
 	case rsp.StatusCode == 409:
 		var headers PostObservationsResponse409Headers
 		if values := rsp.Header.Values("X-Request-Id"); len(values) > 0 {

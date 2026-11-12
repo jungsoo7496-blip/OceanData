@@ -24,7 +24,7 @@
 - [ ] 21. 10GB 끊고 재개 시험 (SeaweedFS) — 요구사항 10.3 (현재는 11MB 축소판)
 - [x] 22. 손상 파일 격리 시험 — 요구사항 10.4
 - [x] 23. 장비 정책 조회 — 요구사항 11.1 (03번에서 구현)
-- [x] 24. 하트비트 저장·`GET /v1/agents/{id}/health` (상태: NEVER_SEEN/OK/STALE/ERROR, 지연은 11번) — 요구사항 11.2, 11.3 · 시험 `test_heartbeat_and_health`
+- [x] 24. 하트비트 저장·`GET /v1/agents/{id}/health` (상태: NEVER_SEEN/OK/STALE/ERROR, 지연은 11번) — 요구사항 11.2, 11.3 · 시험 `test_heartbeat_and_health` · 하트비트 범위 거절·버전 응답과 교차 기관 감사 시험 `test_agent_heartbeat_contract.py`
 - [x] 25. 자산 목록·상세(감사)·수정(data_role 사유·감사, 위치 정밀도) — contracts assets 태그
 - [x] 26. 원래 좌표계 → EPSG:4326 (PostGIS ST_Transform) — 03번 요구사항 6.3 · 시험 `test_source_location_is_transformed_to_4326`
 - [x] 27. 파트 길이 서명과 완료 전 크기 검증·정리 — 요구사항 1.1, 1.4, 1.5, 3.1, 4.1, 10.1 · `test_upload_release.py`, SeaweedFS 3.80 서명 검증, Go 빈 PUT 회귀 · ADR-0044

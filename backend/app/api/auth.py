@@ -156,6 +156,9 @@ def revoke_device_credentials(device_id: str, request: Request, db: Session = De
                               p: Principal = Depends(require("device_credential:revoke"))) -> dict:
     device = load_scoped(db, c, request, Device, device_id, p)
     db.refresh(device, with_for_update={"key_share": True})
+    if device.kind != "COLLECTOR":
+        raise ProblemError("RULE_VIOLATION", detail="자격증명 폐기는 수집기 장비에만 적용합니다",
+                           unmet_conditions=[{"condition": "kind=COLLECTOR", "actual": device.kind}])
     now = c.clock.now()
     n = 0
     for cred in db.execute(select(DeviceCredential).where(DeviceCredential.device_id == device.device_id,

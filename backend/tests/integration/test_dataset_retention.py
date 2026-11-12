@@ -10,18 +10,23 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import timedelta
 
 import httpx
 import pytest
 from sqlalchemy import text
 
 from app.db.models import Asset, OrgQuota
-from app.seed import DEV_A_CAMERA, ORG_A, PRJ_A
+from app.seed import DEV_A_CAMERA, ORG_A, PRJ_A, SES_A
 from app.services import retention
 from tests.acceptance.test_t08_t15_sharing import CARD, access, approved_pair, decide, share, to_l3
+from tests.conftest import Ctx
+from tests.contract.openapi_contract import assert_matches_contract
+from tests.integration.test_catalog import _asset
 
 pytestmark = pytest.mark.integration
 ADMIN_A, OP, CONSUMER = 101, 106, 109
+DRY_RUN_PATH = "/v1/retention/dry-run"
 
 
 def _grant(ctx, vid: str) -> str:  # type: ignore[no-untyped-def]
@@ -47,6 +52,35 @@ def _download(ctx, grant: str, path: str) -> bytes:  # type: ignore[no-untyped-d
     return httpx.get(files[path], timeout=30).content
 
 
+def test_dry_run_warns_about_approved_evidence(ctx: Ctx) -> None:
+    with ctx.c.sessionmaker.begin() as db:
+        asset = _asset(ORG_A, PRJ_A, DEV_A_CAMERA)
+        asset.retention_policy_id = "raw_default"
+        asset.retention_until = ctx.c.clock.now() - timedelta(days=1)
+        db.add(asset)
+        asset_id = asset.asset_id
+
+    record = ctx.client.post(f"/v1/sessions/{SES_A}/records", headers=ctx.as_user(102), json={
+        "kind": "TEST", "title": "합성 보존 경고", "evidence_refs": [{"kind": "ASSET", "asset_id": asset_id}],
+    })
+    assert record.status_code == 201, record.text
+    record_id = record.json()["record_id"]
+    approval = ctx.client.post(f"/v1/records/{record_id}/approve", headers=ctx.as_user(ADMIN_A))
+    assert approval.status_code == 200, approval.text
+
+    response = ctx.client.post(DRY_RUN_PATH, headers=ctx.as_user(OP))
+    assert response.status_code == 200, response.text
+    assert_matches_contract(response, "POST", DRY_RUN_PATH)
+    dry_run = response.json()
+    assert dry_run["total_count"] == 1
+    [warning] = dry_run["warnings"]
+    assert (warning["asset_id"], warning["reason"], warning["cited_by"], warning["id"], warning["version"]) == (
+        asset_id, "CITED_BY_APPROVED_EVIDENCE", "RECORD", record_id, approval.json()["version"],
+    )
+    with ctx.c.sessionmaker() as db:
+        assert db.get(Asset, asset_id).deleted_at is None
+
+
 def test_dataset_copies_outlive_source_expiry(ictx) -> None:
     ctx = ictx
     a = approved_pair(ctx, ORG_A, PRJ_A, DEV_A_CAMERA, ["AI_TRAINING"])
@@ -65,10 +99,15 @@ def test_dataset_copies_outlive_source_expiry(ictx) -> None:
         conn.execute(text("""UPDATE assets SET retention_until = now() - interval '1 day',
                              retention_policy_id = CASE variant WHEN 'ORIGINAL' THEN 'raw_default' ELSE 'deid_default' END
                              WHERE asset_id IN (:o, :d)"""), {"o": a["orig"], "d": a["deid"]})
-    with ctx.c.sessionmaker() as db:
-        dr = retention.dry_run(db, ctx.c.clock.now())
+    response = ctx.client.post(DRY_RUN_PATH, headers=ctx.as_user(OP))
+    assert response.status_code == 200, response.text
+    assert_matches_contract(response, "POST", DRY_RUN_PATH)
+    dr = response.json()
     assert dr["total_count"] == 2
-    assert [(w["asset_id"], w["cited_by"], w["grant_id"]) for w in dr["warnings"]] == [(a["deid"], "DATASET", grant)]
+    [warning] = dr["warnings"]
+    assert (warning["asset_id"], warning["reason"], warning["cited_by"], warning["id"], warning["grant_id"]) == (
+        a["deid"], "IN_DATASET_VERSION", "DATASET", vid, grant,
+    )
 
     # 이용 권한이 있는 동안: 원본만 지우고 데이터셋에 든 비식별본은 건너뛴다. 사본은 그대로 받을 수 있다
     with ctx.c.sessionmaker.begin() as db:

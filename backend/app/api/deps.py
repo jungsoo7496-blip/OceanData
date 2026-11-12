@@ -92,7 +92,7 @@ def require(action: str) -> Callable[..., Principal]:
 
 
 def load_scoped(db: Session, c: Container, request: Request, model: type[T], ident: str, principal: Principal,
-                *, purpose: str = "metadata") -> T:
+                *, purpose: str = "metadata", audit_device_scope: bool = False) -> T:
     try:
         return get_scoped(db, model, ident, principal, purpose=purpose)
     except NotFoundInScope as exc:
@@ -100,6 +100,9 @@ def load_scoped(db: Session, c: Container, request: Request, model: type[T], ide
             c.audit.record("CROSS_ORG_ACCESS_ATTEMPT", result="DENIED", principal=principal,
                            organization_id=exc.owner_org, target_type=exc.model, target_id=ident,
                            source_ip=client_ip(request), details={"path": request.url.path})
+        elif audit_device_scope and principal.kind == "DEVICE":
+            c.audit.record("DEVICE_SCOPE_VIOLATION", result="DENIED", principal=principal,
+                           organization_id=principal.organization_id, target_type=exc.model, target_id=ident)
         raise ProblemError("NOT_FOUND") from None
 
 

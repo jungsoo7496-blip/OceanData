@@ -98,6 +98,8 @@ def create_device(body: DeviceCreate, request: Request, db: Session = Depends(ge
                   idempotency_key: str | None = Header(default=None)) -> JSONResponse:
     if p.has_role("PLATFORM_OPERATOR") and not p.has_role("ORG_ADMIN"):
         # 운영자는 기관을 본문으로 지정할 수 없다 (organization_id는 인증 정보로만) → 대리 등록은 09번 운영 콘솔에서
+        c.audit.record("PERMISSION_DENIED", result="DENIED", principal=p, organization_id=p.organization_id,
+                       source_ip=client_ip(request), details={"action": "device:write"})
         raise ProblemError("FORBIDDEN", detail="장비 등록은 해당 기관 ORG_ADMIN이 합니다")
 
     def create() -> tuple[int, dict]:

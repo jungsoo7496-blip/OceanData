@@ -258,7 +258,13 @@ def dry_run(db: Session, now: datetime) -> dict[str, Any]:
         t[0] += 1
         t[1] += a.byte_size if a.has_binary else 0
         victims.append(a)
-    warnings = affected_by(db, victims)
+    warnings = [
+        {
+            **citation,
+            "reason": "IN_DATASET_VERSION" if citation["cited_by"] == "DATASET" else "CITED_BY_APPROVED_EVIDENCE",
+        }
+        for citation in affected_by(db, victims)
+    ]
     return {"generated_at": iso(now), "targets": [{"target": k, "count": v[0], "bytes": v[1]}
                                                    for k, v in sorted(targets.items())],
             "total_count": sum(v[0] for v in targets.values()), "total_bytes": sum(v[1] for v in targets.values()),
