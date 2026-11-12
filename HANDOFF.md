@@ -1,7 +1,7 @@
 # 인수인계 (클라우드 → 로컬)
 
 이 파일은 클라우드 세션에서 만든 작업을 로컬에서 이어가기 위한 안내다. 작업이 진행될 때마다 갱신한다.
-최종 갱신 2026-11-12 (KST). 지시서 12번 독립 검토(0장 -1an)와 지시서 5번(요청 커밋을 응답 앞으로·같은 멱등 키 동시 요청, 0장 -1ao)을 처리했다. 다음은 사람의 `main` 병합 판단과 `docs/review-2026-11-12/README.md`의 미완 항목이다.
+최종 갱신 2026-11-12 (KST). 작업 브랜치 `fix/backup-runtime-pg16`을 PR #1로 `main`에 병합했고(병합 커밋 8bfec37, 원격 CI 7개 작업 통과), 끝난 `gpt/*`·`wip/*` 브랜치를 원격에서 지웠다. **이제 기준 브랜치는 `main`이다** — 작업마다 `main`에서 짧은 브랜치를 따서 PR로 넣는다. 다음은 아래 '남은 일' 3·4절과 `docs/review-2026-11-12/README.md`의 미완 항목이다.
 
 ## 요약 — 로컬에서 이어 갈 때 먼저 읽기 (2026-11-05 클라우드 세션 끝)
 **2026-11-12 지시서 5번 — 커밋 시점과 동시 멱등 키.** FastAPI 0.118+는 `yield` 의존성의 마무리(커밋)를 응답을 보낸 **뒤**에 돌려, 커밋이 실패해도 클라이언트는 이미 201을 받았다(`POST /v1/events`가 `event_id`를 줬는데 그 ID가 404). 모든 경로의 DB 세션을 `Depends(get_db, scope="function")`로 받아(`deps.DB`, 151곳) 커밋을 응답 앞으로 옮겼고(ADR-0053), 커밋 때 드러나는 동시 요청 충돌(고유·외래 키·배타 위반, 직렬화 실패·교착)은 409(`Retry-After`)로 매핑한다. 같은 `Idempotency-Key` 동시 요청은 `run_idempotent`가 키 단위 어드바이저리 잠금으로 줄 세워 뒤 요청이 같은 응답을 받는다(일은 한 번, 대기 2초·프로세스당 8개, 넘으면 409). 별도 적대적 검토(K1~K7)에서 나온 보완: 재시도 폭주가 스레드·연결 풀과 `/healthz`를 막던 것, FastAPI 하한 0.121, 완료 요청이 저장소에서 끝난 뒤 커밋이 실패하면 재시도가 503만 받던 것, 새 409 매핑의 로그·지표, 예제 클라이언트의 재시도, 조립된 앱 기준 범위 시험. 마이그레이션 없음, 계약은 설명 문구만. 계약 점검 14·20번과 검토 2 #4를 닫는다.
@@ -13,7 +13,7 @@
 **2026-11-11 로컬 확인.** 인수 기준선은 백엔드 380건 통과·6건 건너뜀과 별도 실제 SeaweedFS T01-e 1건 통과였다. 지시서 6번 전체 382건, 9번 394건, 1번 400건, 2번 403건, 4번 406건, 3번 414건, 8번 425건, 7번 433건, 13번 438건이 통과했다. 10번 fix 반영 트리는 전체 444건·하위시험 28건 통과, 8건 건너뜀(선택 계약 탐색 5건, 컨테이너 안 Docker CLI가 필요한 SeaweedFS 서명 시험 3건). 마이그레이션 머리 0024, 빈 DB 왕복과 데이터가 든 합성 DB의 0023 복원 확인. SeaweedFS 서명 시험은 1번에서 별도 통과했고 3번에서 실제 중단 동작을 확인했다. 8번은 Chromium 92개 화면 상태를 검증했다. 원격 CI는 미실행이다.
 
 **클라우드 인수 시점 검증:** 백엔드 전체 **381건 통과·5건 건너뜀**(건너뜀은 `SCHEMATHESIS_ALL=1`로만 도는 선택 탐색 5개), 마이그레이션 head 0023(이번 병합에 새 마이그레이션 없음 — 0024는 `wip/hot-path-indexes`에만) 임시 DB head→base→head→base 왕복 통과, 계약 검사(158개 작업·중복 키 검사)·Go SDK·웹 타입 재생성 일치, 계약-라우트 일치 시험, 에이전트 `go vet`·`go test -race` 전체 통과·`GOOS=windows go vet`, 웹 lint·typecheck·build·`npm run test:a11y`(로그인 전·역할 6개 × 데스크톱·휴대폰 92개 상태, axe serious·critical 0건), 런타임 의존성 취약점(Trivy 0.58.1) HIGH·CRITICAL 0건, 새 클론에서 `make ci` 통과. 수용시험 표(docs/ACCEPTANCE-STATUS.md) PASS 74 (NOT_IMPLEMENTED 4건은 모두 조건부 15·16번). **이번 마지막 병합 뒤 다시 돌리지 못한 것:** 전체 작업 Schemathesis 탐색(`SCHEMATHESIS_ALL=1`, 그 전에는 구성원·운영자 작업당 25개·열람자·검수자·이용기관 12개 모두 불일치 0건), 수용시험 표 재생성, 실제 스택(Keycloak·SeaweedFS) 확인.
-**원격 CI는 이 브랜치로 돌려 본 적이 없다.** `ci`·`web-e2e`는 `main` push와 `pull_request`에서만, `security`는 main push·주간·수동에서만 돌아서 이 브랜치에 push하는 것만으로는 시작되지 않는다 — **`fix/backup-runtime-pg16` → `main` draft PR을 열어 두면 push마다 돈다** (사람이 연다).
+**원격 CI (2026-11-12).** PR #1에서 `ci`(contracts·secrets·backend·web·agent·agent-windows)와 `web-e2e`(upload-resume)가 처음 돌았고, 실패 3건을 고친 뒤 모두 통과했다: ① gitleaks가 `agent/cmd/marine-agent/diagnostic_test.go`의 합성 시험 상수를 비밀값으로 오인 → 그 지문만 `.gitleaksignore`에 등록, ② govulncheck가 Go 1.26.10 `net/http`의 GO-2026-6859를 보고 → 툴체인·CI를 1.26.11로, ③ `tools/web_acceptance.py`가 API 기동 대기 중 `ConnectionResetError`를 다시 묻지 않고 실패로 끝냄 → 대기 중 `OSError`·`HTTPException`은 기한까지 재시도. `ci`·`web-e2e`는 `main` push와 `pull_request`에서, `security`는 main push·주간·수동에서만 돈다(`security`는 PR에서 돌지 않았으므로 병합 뒤 main 실행 결과를 본다).
 
 **이번 세션에 끝낸 것 (ADR):** 08 삭제 보호 보완 · 03 약정·연계 카드 API(0028)·품질 집계 `GET /v1/quality-reports` · 02 긴급 열람(0029)·기기 토큰 범위 축소 ·
 04 웹훅(0030)·웹훅 전송 격리(0041)·악성코드 검사 포트(0031)·예제 클라이언트·Schemathesis(0035)·업로드 취소·만료 정리 복구 ·
@@ -30,7 +30,7 @@
 끊긴 것은 `wip/*` 브랜치에 진행분을 그대로 보존했다(미완·검토 전). 아래 표가 그 상태다.
 
 ### 1. 먼저 확인할 것
-1. **원격 GitHub Actions** — `ci`·`web-e2e`는 `main` push와 `pull_request`에서만 돈다(`security`는 main push·주간·수동). 이 브랜치로는 한 번도 돌지 않았다(main에는 2026-11-04 실행 기록이 있고 마지막은 실패). `fix/backup-runtime-pg16` → `main` draft PR을 열어 CI 결과부터 본다(PR을 열어 두면 이 브랜치에 push할 때마다 돈다).
+1. **원격 GitHub Actions** — *2026-11-12 PR #1에서 처음 돌려 모두 통과시키고 `main`에 병합했다(위 요약의 '원격 CI').* 남은 확인은 병합 뒤 main에서 도는 `security` 워크플로 결과다.
 2. **독립 검토를 못 받은 병합분** — *2026-11-12 지시서 12번에서 검토·처리했다(0장 -1an, `docs/review-2026-11-12/README.md`).* 아래는 당시 목록이다:
    - 웹훅 격리(ADR-0041: 전송 전용 스레드·총 기한·IP 고정·구독 수 상한) — 새 설정 `WEBHOOK_*`, 워커에 스레드가 하나 늘었다.
    - 클립 보안 보완(ADR-0033 갱신: 쿼터·기관별 대기 한도·삭제 경쟁 잠금) — 자산 행 → 쿼터 행 → 감사 순서의 잠금.
@@ -40,6 +40,7 @@
 3. **Docker가 죽어 있으면** (이 클라우드 컨테이너처럼 세션이 재시작된 뒤): `dockerd`를 다시 띄우고 `docker start marine-postgres-1` 한 뒤 시험한다.
 
 ### 2. 끊긴 작업 — `wip/*` 브랜치 (원격에 있음, 모두 미완·검토 전)
+*(2026-11-12: 아래 절차와 표는 기록이다. 6개 모두 끝나 `main`에 있고 브랜치는 지웠다 — 표 아래 '브랜치 정리'.)*
 기반은 이 브랜치의 옛 커밋이다. 이어 하려면 `git switch -c gpt/<NN>-<이름> --no-track origin/wip/<…>` → `git rebase origin/fix/backup-runtime-pg16`
 (`contracts/openapi.yaml` 충돌은 손으로 풀어 양쪽을 살리고, 생성 파일 `web/src/contract/api.gen.ts`·`agent/internal/contractapi/client.gen.go`는 충돌 부분을 버리고 `npm run gen:api`·`tools/generate_agent_api.py`로 재생성 — 충돌이 없어도 rebase 뒤 `npm run check:api`를 돌린다) → 해당 시험 → 백엔드 전체 시험 → 검토. 상세한 단계는 `docs/GPT-HANDOFF-PROMPT.md` [3]. 현재 마이그레이션 머리는 반복 조회 인덱스 0024다(ADR-0042).
 
@@ -51,6 +52,10 @@
 | **완료(2026-11-07, -1ai)** `wip/report-scope-leaks` | 보고서 근거 ID·추적과 자산 원래 파일명·경로의 공개 범위 | 제출본·손상 안내·역추적·부모 ID 필터, 파일 경로 제한, 계약·웹·시험 | 운영자에게도 파일 경로를 숨길지 5장 확인 대기(ADR-0047) |
 | **완료(2026-11-06, -1ad)** `wip/agent-policy-overflow` | 06 서버 정책 값 시간 넘침 방어 | 계약 상한, 구형 저장본 배포 검사, 유효한 이전 정책 유지, Retry-After·토큰·mvhd 회귀시험, ADR-0040 | 범위 밖 구형 정책은 운영자가 정정한 새 버전을 배포 |
 | **완료(2026-11-11, -1al)** `wip/hot-path-indexes` | 큐 폴링·업로드 만료·감시·기관 목록 인덱스 | PostgreSQL 16 합성 DB에서 실행 시간과 버퍼 재측정, 인덱스 7개 유지, 0024·down 및 재현 도구(ADR-0042) | 운영 적용은 쓰기 잠금에 맞춰 점검 시간에 진행 |
+
+**브랜치 정리 (2026-11-12).** 위 표의 `wip/*` 6개와 지시서별 `gpt/*` 14개, 병합이 끝난 `fix/backup-runtime-pg16`을 원격에서 지웠다. 내용은 모두 `main`에 있다(`gpt/*`는 "[지시서 N번]" 커밋과 코드가 같고 진행 기록 문서만 달랐으며, `gpt/05`는 `main` 쪽이 검토 보완 K1~K7이 더 들어간 뒤 판이다). 옛 브랜치 끝 커밋이 필요하면 아래 번호로 찾는다(GitHub이 닿지 않는 커밋을 치우기 전까지만 `git fetch origin <전체 SHA>`로 받을 수 있다):
+`gpt/01` 8a3ab2c · `gpt/02` 583d44c · `gpt/03` 17113d5 · `gpt/04` 780ef20 · `gpt/05` 77c3e35 · `gpt/06` 275b4d7 · `gpt/07` 2541536 · `gpt/08` 342905a · `gpt/09` f573f4b · `gpt/10` 9f7a056 · `gpt/11` e9efa9e · `gpt/12` 9c086c8 · `gpt/13` 84cdd99 · `gpt/auth-enrollment-codes` 07abb61 ·
+`wip/agent-policy-overflow` 7727f25 · `wip/auth-enrollment-codes` 27a8f76 · `wip/commit-before-response-tests` 242ef9c · `wip/hot-path-indexes` 141e23a · `wip/ingest-size-enforcement` 414bdcf · `wip/report-scope-leaks` eb0f951 · `fix/backup-runtime-pg16` e426a05
 
 ### 3. 아직 시작하지 않은 것
 - **지시서 12번에서 찾고 고치지 않은 것** (`docs/review-2026-11-12/README.md`의 '미완' 항목): 웹훅 라운드 장벽(기관 간 격리, 재현은 `test_webhook_cross_tenant_isolation.py` strict xfail)·독살 이벤트·TLS 핸드셰이크 소켓·1xx 범람, 취소·만료 정리의 저장소 오류 삼킴과 미완성 멀티파트 청소, 클립 작업의 워커 독점, 스위퍼의 쿼터 잠금 보유, 요청 본문 크기 제한, HWPX 양식 인코딩·ZIP 경로, PDF 렌더 비용. 사람 결정이 필요한 것은 아래 4절.
@@ -187,7 +192,6 @@
 ```bash
 git clone https://github.com/jungsoo7496-blip/OceanData.git
 cd OceanData
-git switch fix/backup-runtime-pg16   # 아직 main에 합치지 않았다면 작업 브랜치로 (맨 위 '최종 갱신' 줄)
 cp .env.example .env          # 값은 개발용 자리표시자. 필요하면 바꾼다
 make venv                     # backend/.venv에 개발 의존성 설치 (다시 실행하면 갱신)
 (cd web && npm ci)            # 웹 의존성 — make lint·typecheck·web-check·web-a11y·ci와 수용시험 웹(T02-g)에 필요
