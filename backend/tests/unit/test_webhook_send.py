@@ -6,6 +6,7 @@ DB 없이 127.0.0.1의 합성 수신 서버로만 확인한다 (밖으로 나가
 from __future__ import annotations
 
 import datetime as dt
+import gc
 import socket
 import ssl
 import threading
@@ -114,6 +115,17 @@ def silent(conn: socket.socket, seen: list[bytes]) -> None:
         pass
 
 
+def stall_before_tls(conn: socket.socket, seen: list[bytes]) -> None:
+    """TCP 연결은 받고 TLS 핸드셰이크에 답하지 않는다. 클라이언트가 소켓을 닫으면 EOF를 남긴다."""
+    conn.settimeout(10)
+    try:
+        while conn.recv(65536):
+            pass
+        seen.append(b"EOF")
+    except OSError:
+        pass
+
+
 @pytest.fixture()
 def receiver() -> Iterator[Callable[..., SyntheticReceiver]]:
     made: list[SyntheticReceiver] = []
@@ -214,6 +226,28 @@ def test_tls_sni_and_certificate_are_checked_against_the_name(receiver, tmp_path
         webhooks.http_send(f"https://hooks.example.test:{other.port}/h", BODY, HEADERS, 2.0,
                            addresses=["127.0.0.1"], verify=other_trusted)
     assert other.seen == []
+
+
+def test_socket_is_closed_when_deadline_hits_during_tls_handshake(receiver, tmp_path) -> None:
+    """TLS 핸드셰이크 중에 전체 기한이 닿아도 TCP 소켓을 바로 닫는다 (검토 2026-11-12 W3, ADR-0061).
+
+    httpcore는 핸드셰이크가 일반 예외로 끝날 때만 소켓을 닫고, 전체 기한(asyncio.wait_for)의 취소로 끝나면 닫지 않아
+    가비지 수집 때까지 열려 있었다(20회 시도에 소켓 20개). 수집을 꺼 두고 서버가 바로 EOF를 받는지 본다."""
+    _, trusted = self_signed(tmp_path, "hooks.example.test")
+    r = receiver(stall_before_tls)
+    gc.disable()
+    try:
+        for _ in range(3):
+            with pytest.raises(TimeoutError):
+                webhooks.http_send(f"https://hooks.example.test:{r.port}/h", BODY, HEADERS, 0.3,
+                                   addresses=["127.0.0.1"], verify=trusted)
+        deadline = time.monotonic() + 2
+        while len(r.seen) < 3 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        closed = list(r.seen)
+    finally:
+        gc.enable()
+    assert closed == [b"EOF"] * 3, "기한으로 끊긴 TLS 연결의 소켓이 열린 채 남았다"
 
 
 def test_next_address_is_tried_only_when_connect_fails(receiver) -> None:
