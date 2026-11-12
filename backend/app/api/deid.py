@@ -29,6 +29,15 @@ def _operator(p: Principal) -> bool:
     return not p.is_machine and p.has_role("PLATFORM_OPERATOR")
 
 
+def _frame_denied(c: Container, request: Request, p: Principal, rv: DeidReview, a: Asset, which: str,
+                  reason: str) -> None:
+    """운영자 프레임 거부도 권한 거부로 감사한다 (security.md). 요청과 따로 확정돼 403 뒤에도 남는다 (ADR-0053)."""
+    c.audit.record("PERMISSION_DENIED", result="DENIED", principal=p, organization_id=a.organization_id,
+                   target_type="Asset", target_id=a.asset_id, source_ip=client_ip(request),
+                   details={"action": "deid_review:read", "which": which, "reason": reason,
+                            "review_id": rv.review_id})
+
+
 def _review(db: Session, p: Principal, review_id: str, lock: bool = False) -> DeidReview:
     rv = db.get(DeidReview, review_id, with_for_update=lock)
     if rv is None or (not _operator(p) and rv.reviewer_id != p.user_id):  # 배정된 대상만 (요구사항 4.5)
@@ -72,6 +81,7 @@ def review_frame(review_id: str, request: Request, t: float = Query(ge=0), which
 
         grant = active_grant_for(db, a, p.principal_id, c.clock.now())
         if grant is None:
+            _frame_denied(c, request, p, rv, a, which, "no_break_glass_grant")
             raise ProblemError("FORBIDDEN", detail="운영자의 원본 프레임 열람은 유효한 긴급 열람 승인이 있어야 합니다")
         grant_id, grant_expires = grant.grant_id, grant.expires_at
     db.expunge(a)
