@@ -406,21 +406,29 @@ class IngestService:
 
         저장소 정리가 끝났다고 확인될 때만 세션을 끝낸다 (ADR-0065). 멀티파트 중단의 NoSuchUpload는 이미 정리된 것이다
         (어댑터가 성공으로 돌려준다). 이 키에 완성 객체가 있으면(저장소 완료 뒤 DB 확정 전에 요청이 죽었다) 지운다.
-        그 밖의 저장소 실패는 UploadCleanupFailed(503)로 알리고 아무것도 바꾸지 않는다 — 호출자가 트랜잭션을 되돌리면
+        그 밖의 저장소 실패는 UploadCleanupFailed(503)로 알리고 DB는 바꾸지 않는다 — 호출자가 트랜잭션을 되돌리면
         세션·예약이 그대로 남아 다시 시도할 수 있다. 삭제 경로(preserve_asset)는 완성 객체를 지우지 않고 409다
         (ADR-0046).
+
+        완성 객체 확인은 멀티파트 중단보다 먼저 한다. 확인이 실패하면 저장소도 그대로라, 크기 불일치 취소(완료 요청
+        안)의 503 뒤에 다시 보낸 완료가 살아 있는 멀티파트를 보고 이 정리에 다시 닿는다. 중단 뒤에 확인하면 다시 보낸
+        완료는 이미 중단된 멀티파트의 파트 목록만 보게 된다. 확인과 중단 사이에 이 업로드를 완료하는 요청은 없다 —
+        완료는 이 행 잠금을 쥐고 저장소 완료부터 DB 확정까지 한다.
         """
         self.db.refresh(up, with_for_update=True)
         if up.status != "UPLOADING":
             return False
         try:
-            self.c.storage.abort_multipart_upload(up.bucket, up.object_key, up.s3_upload_id)
             stored = self.c.storage.head_object(up.bucket, up.object_key)
+        except Exception as exc:  # noqa: BLE001 - 완성 객체가 있는지 모르면 세션을 끝내지 않는다
+            raise self._cleanup_failed(up, "head_object", exc) from None
+        if stored is not None and preserve_asset:
+            raise ProblemError("CONFLICT", detail="저장소에 완료 객체가 있어 업로드 중단을 확인할 수 없습니다")
+        try:
+            self.c.storage.abort_multipart_upload(up.bucket, up.object_key, up.s3_upload_id)
         except Exception as exc:  # noqa: BLE001 - 정리됐는지 확인하지 못했다. 세션을 끝내지 않는다
             raise self._cleanup_failed(up, "abort_multipart", exc) from None
         if stored is not None:
-            if preserve_asset:
-                raise ProblemError("CONFLICT", detail="저장소에 완료 객체가 있어 업로드 중단을 확인할 수 없습니다")
             self._remove_completed_object(up)
         self.quota.settle(up.organization_id, up.reserved_bytes, to=None)
         up.status, up.reserved_bytes, up.updated_at = final, 0, self.c.clock.now()
@@ -539,7 +547,7 @@ class IngestService:
         if not wrong:
             return {part.part_number: part for part in stored}
         log.warning("upload_part_size_mismatch", extra={"upload_id": up.upload_id, "parts": len(wrong)})
-        self._release(up, "ABORTED")  # 정리를 확인하지 못하면 503, 세션·예약 유지
+        self._release(up, "ABORTED")  # 정리를 확인하지 못하면 503, 세션·예약 유지 (완료를 다시 보내면 여기로 다시 온다)
         self.db.commit()  # 409를 돌려주기 전에 취소·예약 해제를 확정한다
         raise ProblemError("CONFLICT", detail="올린 파트 크기가 신고한 파일 크기(byte_size)와 다릅니다. 업로드를 "
                                               "취소했습니다 — 새 업로드로 다시 보내세요",
