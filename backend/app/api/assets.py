@@ -335,6 +335,17 @@ def create_asset_clip(asset_id: str, body: ClipRequest, request: Request, db: Se
     return JSONResponse(out, status_code=status, headers={"Idempotent-Replayed": "true"} if replayed else None)
 
 
+def _download_denied(c: Container, request: Request, p: Principal, a: Asset, reason: str,
+                     detail: str) -> ProblemError:
+    """권한 표는 통과했지만 이 바이너리는 줄 수 없다 — 권한 거부를 감사하고 403 (security.md, 02번 요구사항 7.1).
+
+    감사는 따로 커밋한다(연결을 넘기지 않는다): 요청 트랜잭션은 오류로 되돌려지지만 거부 기록은 남아야 한다."""
+    c.audit.record("PERMISSION_DENIED", result="DENIED", principal=p, organization_id=a.organization_id,
+                   target_type="Asset", target_id=a.asset_id, source_ip=client_ip(request),
+                   details={"action": "asset:download", "reason": reason})
+    return ProblemError("FORBIDDEN", detail=detail)
+
+
 @router.post("/v1/assets/{asset_id}/download-url")
 def create_download_url(asset_id: str, request: Request, db: Session = DB,
                         c: Container = Depends(container), p: Principal = Depends(require("asset:download"))) -> dict:
@@ -348,10 +359,11 @@ def create_download_url(asset_id: str, request: Request, db: Session = DB,
             from app.services.break_glass import active_grant_for
 
             grant = active_grant_for(db, a, p.principal_id, c.clock.now())
-            if grant is None:
-                raise ProblemError("FORBIDDEN", detail="운영자의 원본 접근은 유효한 긴급 열람 승인이 있어야 합니다")
+            if grant is None:  # 승인 없음·승인 전·만료·남의 승인 — 모두 같은 거부
+                raise _download_denied(c, request, p, a, "no_active_break_glass",
+                                       "운영자의 원본 접근은 유효한 긴급 열람 승인이 있어야 합니다")
         else:
-            raise ProblemError("FORBIDDEN", detail="다른 기관 자산의 바이너리는 받을 수 없습니다")
+            raise _download_denied(c, request, p, a, "cross_org_binary", "다른 기관 자산의 바이너리는 받을 수 없습니다")
     if not a.has_binary or not a.storage_key or a.ingest_status in ("UPLOADING", "RECEIVED", "VALIDATING"):
         raise ProblemError("CONFLICT", detail="아직 내려받을 수 있는 바이너리가 없습니다")
     if a.ingest_status == "QUARANTINED":
