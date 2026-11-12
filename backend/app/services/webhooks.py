@@ -11,7 +11,8 @@
      모두 WEBHOOK_BATCH_SIZE건까지 고른다(구독·전송 행 모두 SKIP LOCKED라 다른 워커를 기다리지 않는다).
      SENDING(임대)으로 바꾸고 커밋한다.
   2) 보내기 — 트랜잭션 밖에서 동시에. 한 건은 이름 풀기부터 응답 헤더까지 WEBHOOK_TIMEOUT_S 안에
-     끝나야 하고 상태 코드만 본다(본문은 읽지 않는다). HMAC-SHA256 서명(`timestamp.body`)·이벤트 ID.
+     끝나야 하고 상태 코드만 본다(본문은 읽지 않는다). 최종 응답 헤더까지 읽는 양은 중간 응답(1xx)을 합쳐
+     RESPONSE_HEAD_MAX_BYTES까지다(ADR-0064). HMAC-SHA256 서명(`timestamp.body`)·이벤트 ID.
      리디렉션은 따르지 않는다.
   3) 기록 — 건마다 짧은 트랜잭션. 실패는 지수 백오프, WEBHOOK_MAX_ATTEMPTS번 실패하면 구독을 끄고
      기관 ORG_ADMIN에게 알린다(알림은 커밋 뒤). 보내던 워커가 죽으면 임대가 끝난 뒤 다시 보낸다
@@ -70,6 +71,10 @@ SENDING = "SENDING"
 _DUE = ("PENDING", SENDING)  # 임대(next_attempt_at)가 지난 SENDING은 보내던 워커가 죽은 것 — 다시 보낸다
 # 이름을 못 풀었든 공인 주소가 아니든 기관에는 같은 문구 (내부 이름이 있는지 드러나지 않게). 자세한 이유는 서버 로그
 REFUSED = "보낼 수 없는 대상입니다 (공인 주소로 풀리는 https 주소만 보냅니다)"
+# 전송 한 건이 최종 응답 헤더를 받을 때까지 소켓에서 읽는 바이트 상한 (중간 응답 1xx 포함, ADR-0064).
+# httpcore가 응답 헤더 하나에 허용하는 크기(100KiB)에 중간 응답 몫 28KiB를 더했다.
+# 본문은 읽지 않으므로 한 건에서 읽는 양 전체의 상한이다
+RESPONSE_HEAD_MAX_BYTES = 128 * 1024
 
 
 class TargetRefused(Exception):
@@ -312,22 +317,59 @@ def _in_thread(fn: Callable[..., T], *args: Any, **kwargs: Any) -> asyncio.Futur
     return asyncio.wrap_future(fut)
 
 
+class _CappedStream(httpcore.AsyncNetworkStream):
+    """읽은 바이트를 전송 한 건(백엔드)에 더해 가는 스트림 (ADR-0064). 상한까지 읽은 뒤 더 읽으려 하면
+    RemoteProtocolError로 끝낸다 — 수신 서버가 중간 응답(1xx)을 끝없이 보내도 기한 내내 파싱하지 않는다.
+
+    읽기 한 번의 크기를 남은 몫으로 줄여 상한을 넘겨 읽지 않는다. start_tls가 돌려주는 새 스트림도 감싸 같은 셈을
+    이어 간다(TLS면 복호화한 바이트를 센다). 쓰기·닫기·연결 정보는 그대로 넘긴다."""
+
+    def __init__(self, stream: httpcore.AsyncNetworkStream, backend: _ClosingBackend) -> None:
+        self._stream, self._backend = stream, backend
+
+    async def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+        b = self._backend
+        left = b.read_limit - b.read_bytes
+        if left <= 0:
+            raise httpcore.RemoteProtocolError(f"응답 헤더가 {b.read_limit}바이트 안에 끝나지 않았습니다 "
+                                               "(중간 응답 범람 등)")
+        data = await self._stream.read(min(max_bytes, left), timeout)
+        b.read_bytes += len(data)
+        return data
+
+    async def write(self, buffer: bytes, timeout: float | None = None) -> None:
+        await self._stream.write(buffer, timeout)
+
+    async def aclose(self) -> None:
+        await self._stream.aclose()
+
+    async def start_tls(self, ssl_context: ssl.SSLContext, server_hostname: str | None = None,
+                        timeout: float | None = None) -> httpcore.AsyncNetworkStream:
+        return _CappedStream(await self._stream.start_tls(ssl_context, server_hostname, timeout), self._backend)
+
+    def get_extra_info(self, info: str) -> Any:
+        return self._stream.get_extra_info(info)
+
+
 class _ClosingBackend(httpcore.AsyncNetworkBackend):
     """연 TCP 연결을 기록해 두는 네트워크 백엔드. 전송이 끝나면(정상·오류·취소) 남은 것을 모두 닫는다 (ADR-0061).
 
     httpcore는 TLS 핸드셰이크가 일반 예외로 실패할 때만 소켓을 닫고, 전체 기한(asyncio.wait_for)이 핸드셰이크 중에
-    닿아 취소(CancelledError)로 끝나면 닫지 않는다 — 그 소켓은 가비지 수집 때까지 열려 있었다(검토 2026-11-12 W3)."""
+    닿아 취소(CancelledError)로 끝나면 닫지 않는다 — 그 소켓은 가비지 수집 때까지 열려 있었다(검토 2026-11-12 W3).
+    전송 한 건에 하나씩 만들고, 그 건에서 읽은 바이트(read_bytes)를 read_limit까지로 묶는다
+    (ADR-0064, `_CappedStream`)."""
 
-    def __init__(self) -> None:
+    def __init__(self, read_limit: int = RESPONSE_HEAD_MAX_BYTES) -> None:
         self._inner = httpcore.AnyIOBackend()
         self.streams: list[httpcore.AsyncNetworkStream] = []
+        self.read_limit, self.read_bytes = read_limit, 0
 
     async def connect_tcp(self, host: str, port: int, timeout: float | None = None, local_address: str | None = None,
                           socket_options: Any = None) -> httpcore.AsyncNetworkStream:
         stream = await self._inner.connect_tcp(host, port, timeout=timeout, local_address=local_address,
                                                socket_options=socket_options)
         self.streams.append(stream)
-        return stream
+        return _CappedStream(stream, self)
 
     async def connect_unix_socket(self, path: str, timeout: float | None = None,
                                   socket_options: Any = None) -> httpcore.AsyncNetworkStream:
@@ -359,7 +401,9 @@ async def _post(url: str, body: bytes, headers: dict[str, str], timeout: float, 
 
     이름은 Host 헤더·TLS SNI·인증서 확인에만 쓰고 다시 풀지 않는다. 프록시 환경변수(HTTPS_PROXY 등)와
     리디렉션은 따르지 않는다. 전체 기한은 부르는 쪽의 asyncio.wait_for가 건다(단계별 timeout은 보조).
-    주소가 여럿이면 연결이 안 될 때만 다음 주소로. 연 소켓은 어떻게 끝나든 여기서 닫는다(ADR-0061)."""
+    주소가 여럿이면 연결이 안 될 때만 다음 주소로. 연 소켓은 어떻게 끝나든 여기서 닫는다(ADR-0061).
+    최종 응답 헤더 전에 RESPONSE_HEAD_MAX_BYTES를 읽으면 httpx.RemoteProtocolError
+    (다른 실패와 같이 재시도, ADR-0064)."""
     u = httpx.URL(url)
     hdrs = {**headers, "Host": u.netloc.decode("ascii")}
     ext = {"sni_hostname": u.raw_host.decode("ascii")}
