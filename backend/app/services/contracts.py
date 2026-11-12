@@ -13,6 +13,7 @@ import os
 import re
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,7 @@ from app.domain.normalize import (
     UnitDictionary,
     check_location,
     parse_rfc3339,
+    resolve_capture_time,
 )
 
 # 서버가 아는 공통 메타데이터 스키마 버전 (domain.md 8장 v1.0). 새 부버전을 받으면 여기에 더한다.
@@ -425,6 +427,99 @@ def validate_document(contract: str, doc: Any, *, limit: int = MAX_PROBLEMS) -> 
     if is_truncated(raw) or len(merged) > limit:  # 앞의 limit개와 안내 하나로 제한한다
         return merged[:limit] + [truncation_notice(limit)], False
     return merged, False
+
+
+# ---- 운영 경로가 validate_document 뒤에 따로 보는 문서 규칙 (사전 검증도 같은 함수로 본다, 요구사항 13.1·13.2)
+# 운영 경로는 상태 코드와 검사 순서를 지키려고 각자 자리에서 본다: 이벤트 코드표는 422(회차·장비 확인 뒤), 이벤트 시각
+# 순서는 400(그 뒤), 관측 항목 코드는 정규화의 항목별 UNKNOWN_METRIC, 매니페스트 시각 순서는 업로드의 400.
+# 회차·장비 범위, 사람 확인, 미래 시각, 중복처럼 저장된 상태나 받은 시각에 기대는 규칙은
+# 사전 검증이 보지 않는다 (ADR-0081).
+
+@lru_cache(maxsize=4)
+def _shape(definition: str) -> Draft202012Validator:
+    """common.schema.json의 정의 하나(type·pattern)만 보는 검증기. 모양이 틀린 값은 스키마 오류가 이미 말한다."""
+    return _ContractValidator(strict_patterns({"$ref": BASE + "common.schema.json#/$defs/" + definition}),
+                              registry=registry())
+
+
+def event_code_problem(code: str, subcode_registered: Callable[[str], bool]) -> Problem | None:
+    """이벤트 코드표 규칙 (03번 요구사항 8.3, 07번 7.5). 공통 상위분류에 있어야 하고, 하위코드는 호출 기관이 등록한
+    것이어야 한다. POST /v1/events(422 RULE_VIOLATION)와 사전 검증이 같이 쓴다."""
+    if code.split(".")[0] not in {x["code"] for x in code_table("event-categories")["items"]}:
+        return Problem("/event_code", "unknown_event_category", "공통 상위분류에 없는 이벤트 코드입니다")
+    if "." in code and not subcode_registered(code):
+        return Problem("/event_code", "unregistered_event_subcode", "기관 하위코드가 등록되어 있지 않습니다")
+    return None
+
+
+def _instant(value: Any) -> datetime | None:
+    """시각 순서를 비교할 UTC 값. 읽히지 않으면 None (형식 오류는 스키마 검사가 말한다)."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return parse_rfc3339(value)
+    except TimeRuleError:
+        return None
+
+
+def time_order_problems(contract: str, doc: dict[str, Any]) -> list[Problem]:
+    """시각 순서 규칙. 두 시각이 모두 읽힐 때만 UTC 값으로 비교한다(문자열로 비교하지 않는다).
+
+    - 이벤트: ended_at < started_at이면 /ended_at before_start. POST /v1/events가 같은 함수로 400을 낸다.
+    - 매니페스트: 운영 업로드와 같은 resolve_capture_time으로 본다. 근거 출처일 때만 capture_end_at < capture_start_at을
+      /capture_start_at time_rule로 거부하고, 출처가 UNKNOWN이거나 없으면 시각을 버리므로 오류가 아니다."""
+    if contract == "event":
+        start, end = _instant(doc.get("started_at")), _instant(doc.get("ended_at"))
+        if start is not None and end is not None and end < start:
+            return [Problem("/ended_at", "before_start", "종료가 시작보다 빠릅니다")]
+    elif contract == "upload-manifest":
+        start_at, end_at, quality = doc.get("capture_start_at"), doc.get("capture_end_at"), doc.get("timestamp_quality")
+        if _instant(start_at) is not None and _instant(end_at) is not None and isinstance(quality, dict):
+            try:
+                resolve_capture_time(start_at, end_at, quality)
+            except TimeRuleError as exc:
+                return [Problem("/capture_start_at", "time_rule", str(exc))]
+    return []
+
+
+def rule_problems(contract: str, doc: dict[str, Any], *, subcode_registered: Callable[[str], bool],
+                  limit: int = MAX_PROBLEMS) -> list[Problem]:
+    """코드표(이벤트 상위분류·기관 하위코드, 관측 항목)와 시각 순서 규칙의 문제. 코드는 모양이 계약에 맞을 때만 본다."""
+    out: list[Problem] = []
+    if contract == "event":
+        code = doc.get("event_code")
+        if isinstance(code, str) and _shape("code_ref").is_valid(code):
+            problem = event_code_problem(code, subcode_registered)
+            out += [problem] if problem is not None else []
+    elif contract == "observation-batch" and isinstance(doc.get("observations"), list):
+        metrics = {m["code"] for m in code_table("metrics")["items"]}  # 정규화(metrics_table)와 같은 코드표
+        for i, ob in enumerate(doc["observations"]):
+            if len(out) > limit:  # 더 모아도 담지 않는다
+                break
+            metric = ob.get("metric") if isinstance(ob, dict) else None
+            if isinstance(metric, str) and metric not in metrics and _shape("metric_code").is_valid(metric):
+                out.append(Problem(f"/observations/{i}/metric", "unknown_metric",
+                                   "관측 항목 코드표(metrics)에 없는 항목입니다 (항목을 UNKNOWN_METRIC으로 거부)"))
+    return out + time_order_problems(contract, doc)
+
+
+def prevalidate(contract: str, doc: Any, *, subcode_registered: Callable[[str], bool],
+                limit: int = MAX_PROBLEMS) -> tuple[bool, list[Problem]]:
+    """사전 검증(POST /v1/contracts/validate)의 (유효 여부, 문제 목록).
+
+    운영 경로와 같은 validate_document에, 운영 경로가 그 뒤에 보는 문서 규칙(rule_problems)을 더한다. 규칙 문제는
+    스키마·위치·항목 문제 뒤에 붙고 목록은 앞의 limit개와 안내 하나까지다. 판정은 목록에서 잘린 문제까지 본다.
+    스키마 버전 거부나 객체가 아닌·너무 깊은 문서처럼 validate_document가 바로 돌려준 경우에는
+    운영 경로처럼 거기서 멈춘다."""
+    problems, rejected = validate_document(contract, doc, limit=limit)
+    stopped = rejected or not isinstance(doc, dict) or any(p.code == "schema.depth" for p in problems)
+    extra = [] if stopped else rule_problems(contract, doc, subcode_registered=subcode_registered, limit=limit)
+    valid = not any(p.severity == "ERROR" for p in (*problems, *extra))
+    if extra:
+        merged = [p for p in problems if p.code != TRUNCATED_CODE] + extra
+        truncated = is_truncated(problems) or len(merged) > limit
+        problems = merged[:limit] + [truncation_notice(limit)] if truncated else merged
+    return valid, problems
 
 
 def _segments(pointer: str) -> list[str]:

@@ -11,6 +11,11 @@ from app.errors import ProblemError
 from app.services import contracts
 
 
+def subcode_registered(db: Session, organization_id: str, code: str) -> bool:
+    """기관이 등록한 이벤트 하위코드인가 (요구사항 8.3). 이벤트 제출과 사전 검증이 같이 쓴다 (ADR-0081)."""
+    return db.get(OrgEventCode, (organization_id, code)) is not None
+
+
 def register_subcode(db: Session, principal: Principal, code: str, label: str, created_at: datetime) -> None:
     parent = code.split(".", 1)[0]
     if not any(item["code"] == parent for item in contracts.code_table("event-categories")["items"]):
