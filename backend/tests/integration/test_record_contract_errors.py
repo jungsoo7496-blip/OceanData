@@ -5,14 +5,17 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from sqlalchemy import text
 
-from app.seed import DEV_A_SENSOR, SES_A, fid
+from app.db.models import Asset
+from app.domain.ids import new_id
+from app.seed import DEV_A_CAMERA, DEV_A_SENSOR, DEV_B_CAMERA, ORG_A, ORG_B, PRJ_A, PRJ_B, SEED_AT, SES_A, SES_B, fid
 from tests.conftest import Ctx
 from tests.contract.openapi_contract import assert_matches_contract as check
 
 pytestmark = pytest.mark.integration
 
-MEMBER_A = 102
+MEMBER_A, MEMBER_B = 102, 104
 CREATE = "/v1/sessions/{session_id}/records"
 UPDATE = "/v1/records/{record_id}"
 
@@ -33,6 +36,25 @@ def _latest_version(ctx: Ctx, record_id: str) -> int:
     r = ctx.client.get(f"/v1/records/{record_id}", headers=ctx.as_user(MEMBER_A))
     assert r.status_code == 200, r.text
     return int(r.json()["latest_version"])
+
+
+def _asset(org: str, prj: str, dev: str, session: str) -> Asset:
+    return Asset(asset_id=new_id("asset"), schema_version="1.0.0", organization_id=org, project_id=prj,
+                 session_id=session, source_system_id=dev, data_type="VIDEO", variant="ORIGINAL", data_role="CORE",
+                 ingested_at=SEED_AT, timestamp_quality={"source": "UNKNOWN", "verified": False},
+                 mime_type="video/mp4", byte_size=10, checksum_sha256=new_id("asset")[4:].lower().ljust(64, "0"),
+                 has_binary=True, collection_mode="C3_APPROVED_FULL", privacy_status="REVIEW_REQUIRED",
+                 sensitivity_class="RESTRICTED", sharing_scope="PRIVATE", retention_policy_id="default",
+                 retention_until=SEED_AT, quality_status="PENDING", ingest_status="READY_PRIVATE", share_status="NONE",
+                 backup_class="NONE", provenance={"ingest_channel": "AGENT"},
+                 location={"type": "Point", "coordinates": [126.5, 34.7]}, created_at=SEED_AT, updated_at=SEED_AT)
+
+
+def _cross_org_rows(ctx: Ctx) -> list[dict[str, Any]]:
+    with ctx.c.engine.connect() as conn:
+        return [dict(r._mapping) for r in conn.execute(text(
+            "SELECT organization_id, actor_id, actor_organization_id, target_type, target_id, result, details "
+            "FROM audit_log WHERE action = 'CROSS_ORG_ACCESS_ATTEMPT' ORDER BY seq"))]
 
 
 # ------------------------------------------------------------------ S39·S42: null을 받을 수 없는 항목
@@ -94,3 +116,76 @@ def test_observation_range_valid_timestamp_still_accepted(ctx: Ctx) -> None:
         "kind": "LOG", "title": "x", "evidence_refs": [_obs(DEV_A_SENSOR, to="2026-10-01T23:59:59.5Z")]})
     assert r.status_code == 201, r.text
     check(r, "POST", CREATE)
+
+
+# ------------------------------------------------------------------ S41: 다른 기관 근거는 '없음'으로 답하고 감사
+
+
+def _foreign_refs(ctx: Ctx) -> dict[str, tuple[dict[str, Any], str, str]]:
+    """{종류: (근거, 감사 대상 종류, 대상 ID)} — 모두 B 기관 소속."""
+    ev = ctx.client.post("/v1/events", headers=ctx.as_user(MEMBER_B), json={
+        "schema_version": "1.0.0", "session_id": SES_B, "event_code": "VESSEL", "started_at": "2026-11-01T02:00:00Z",
+        "timestamp_quality": {"source": "MANUAL", "verified": False, "est_offset_ms": None}, "source": "MANUAL"})
+    assert ev.status_code in (200, 201), ev.text
+    event_id = ev.json()["event_id"]
+    with ctx.c.sessionmaker.begin() as db:
+        asset = _asset(ORG_B, PRJ_B, DEV_B_CAMERA, SES_B)
+        db.add(asset)
+        asset_id = asset.asset_id
+    return {"ASSET": ({"kind": "ASSET", "asset_id": asset_id}, "Asset", asset_id),
+            "EVENT": ({"kind": "EVENT", "event_id": event_id}, "Event", event_id),
+            "OBSERVATION_RANGE": (_obs(DEV_B_CAMERA), "Device", DEV_B_CAMERA)}
+
+
+MISSING = {"ASSET": {"kind": "ASSET", "asset_id": fid("ast", 999)},
+           "EVENT": {"kind": "EVENT", "event_id": fid("evt", 999)},
+           "OBSERVATION_RANGE": _obs(fid("dev", 999))}
+
+
+@pytest.mark.parametrize("route", ["POST", "PATCH"])
+@pytest.mark.parametrize("kind", ["ASSET", "EVENT", "OBSERVATION_RANGE"])
+def test_cross_org_evidence_ref_is_hidden_and_audited(ctx: Ctx, kind: str, route: str) -> None:
+    ref, target_type, target_id = _foreign_refs(ctx)[kind]
+    hm = ctx.as_user(MEMBER_A)
+    record_id = _new_record(ctx) if route == "PATCH" else ""
+
+    def send(refs: list[dict[str, Any]]) -> Any:
+        if route == "POST":
+            return ctx.client.post(f"/v1/sessions/{SES_A}/records", headers=hm,
+                                   json={"kind": "LOG", "title": "x", "evidence_refs": refs})
+        return ctx.client.patch(f"/v1/records/{record_id}", headers=hm, json={"evidence_refs": refs})
+
+    before = len(_cross_org_rows(ctx))
+    missing = send([MISSING[kind]])
+    assert missing.status_code == 400, missing.text
+    assert len(_cross_org_rows(ctx)) == before  # 없는 ID는 감사하지 않는다
+
+    # 같은 근거를 두 번 넣어도 감사는 대상마다 한 행
+    foreign = send([ref, ref])
+    assert foreign.status_code == 400, foreign.text
+    check(foreign, route, CREATE if route == "POST" else UPDATE)
+    # 응답은 없는 ID와 같다 — 존재를 드러내지 않는다 (10번 설계)
+    assert foreign.json()["errors"] == [{**e, "pointer": p} for p in ("/evidence_refs/0", "/evidence_refs/1")
+                                        for e in missing.json()["errors"]]
+    rows = _cross_org_rows(ctx)[before:]
+    assert len(rows) == 1, rows
+    row = rows[0]
+    assert (row["organization_id"], row["actor_organization_id"], row["target_type"], row["target_id"],
+            row["result"]) == (ORG_B, ORG_A, target_type, target_id, "DENIED")
+    assert row["actor_id"] == fid("usr", MEMBER_A)
+    assert row["details"]["path"] == (f"/v1/sessions/{SES_A}/records" if route == "POST" else f"/v1/records/{record_id}")
+    if route == "PATCH":
+        assert _latest_version(ctx, record_id) == 1
+
+
+def test_own_org_deleted_asset_ref_is_not_audited(ctx: Ctx) -> None:
+    with ctx.c.sessionmaker.begin() as db:
+        asset = _asset(ORG_A, PRJ_A, DEV_A_CAMERA, SES_A)
+        asset.deleted_at = SEED_AT
+        db.add(asset)
+        asset_id = asset.asset_id
+    before = len(_cross_org_rows(ctx))
+    r = ctx.client.post(f"/v1/sessions/{SES_A}/records", headers=ctx.as_user(MEMBER_A),
+                        json={"kind": "LOG", "title": "x", "evidence_refs": [{"kind": "ASSET", "asset_id": asset_id}]})
+    assert r.status_code == 400 and r.json()["errors"][0]["code"] == "not_found", r.text
+    assert len(_cross_org_rows(ctx)) == before

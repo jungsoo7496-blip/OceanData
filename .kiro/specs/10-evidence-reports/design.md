@@ -3,7 +3,7 @@
 ## 이번에 구현한 것 (마이그레이션 0009)
 | 구성 | 구현 |
 |---|---|
-| 회차 기록 | `session_records` + `session_record_versions`. `POST /v1/sessions/{id}/records`(멱등 키), `PATCH /v1/records/{id}`는 **항상 새 버전**(이전 버전·승인본 보존), `GET …/versions` 이력. 근거(`evidence_refs`: 자산 구간·이벤트·관측 구간)는 같은 기관·존재 여부를 확인하고, 다른 기관 근거는 '없음'과 같은 오류(존재 비공개) |
+| 회차 기록 | `session_records` + `session_record_versions`. `POST /v1/sessions/{id}/records`(멱등 키), `PATCH /v1/records/{id}`는 **항상 새 버전**(이전 버전·승인본 보존), `GET …/versions` 이력. 근거(`evidence_refs`: 자산 구간·이벤트·관측 구간)는 같은 기관·존재 여부를 확인하고, 다른 기관 근거는 '없음'과 같은 오류(존재 비공개)이고 `CROSS_ORG_ACCESS_ATTEMPT`로 감사(대상마다 한 행, ADR-0078) |
 | 증빙 승인 | `POST /v1/records/{id}/approve`(ORG_ADMIN): 최신 버전 APPROVED·승인자·시각. 인용 자산(자산 근거 + 이벤트에 연결된 자산 + 관측 구간의 원천 파일 자산) → `backup_class=PROTECTED`. 클립을 인용했으면 그 클립만 |
 | 인용 역색인 | `evidence_citations`(기록·보고서 버전 → 자산). 근거 손상 감지와 08번 `retention.affected_by()`(승인된 기록·승인/제출 보고서가 인용한 자산은 삭제 요청 시 영향 목록과 함께 409, 만료 실행에서 제외)에 쓴다 |
 | 지표 | `metric_definitions`(코드·버전, 운영자 등록). 계산 방법 4종: EVENT_COUNT(상위분류는 하위코드 포함), EVENT_RATIO, OBSERVATION_STAT(mean/min/max/count, BAD·MISSING 제외 → 누락 건수), VIDEO_HOURS(원본 영상 길이, 길이 모름 → 누락). 결과마다 계산식·정의 버전·입력/누락 건수·원천(이벤트·자산·관측 구간) 저장 |

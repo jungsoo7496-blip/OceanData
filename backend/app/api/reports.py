@@ -108,10 +108,17 @@ def _refs(refs: list[Any]) -> list[dict[str, Any]]:
     return [r.model_dump(by_alias=True, exclude_none=True) for r in refs]
 
 
-def _check(db: Session, org: str, refs: list[dict[str, Any]]) -> list[str]:
+def _check(db: Session, c: Container, request: Request, p: Principal, org: str,
+           refs: list[dict[str, Any]]) -> list[str]:
     try:
         return evidence.check_refs(db, org, refs)
     except evidence.BadEvidence as exc:
+        # 다른 기관 근거는 '없음'과 같은 400으로 답하고 교차 기관 시도로 감사한다 (security.md, ADR-0078).
+        # 요청 트랜잭션은 400으로 되돌려지므로 load_scoped처럼 감사는 따로 커밋한다 (ADR-0053)
+        for target_type, ident, owner in exc.foreign:
+            c.audit.record("CROSS_ORG_ACCESS_ATTEMPT", result="DENIED", principal=p, organization_id=owner,
+                           target_type=target_type, target_id=ident, source_ip=client_ip(request),
+                           details={"path": request.url.path})
         raise ProblemError("VALIDATION_ERROR", errors=exc.errors) from None
 
 
@@ -147,7 +154,7 @@ def create_record(session_id: str, body: RecordCreate, request: Request, db: Ses
     def create() -> tuple[int, dict]:
         s = load_scoped(db, c, request, TrialSession, session_id, p)
         values = {**body.model_dump(exclude={"evidence_refs"}), "evidence_refs": _refs(body.evidence_refs)}
-        assets = _check(db, s.organization_id, values["evidence_refs"])
+        assets = _check(db, c, request, p, s.organization_id, values["evidence_refs"])
         now = c.clock.now()
         rec = SessionRecord(record_id=new_id("record"), organization_id=s.organization_id, project_id=s.project_id,
                             session_id=s.session_id, latest_version=0, created_by=p.principal_id, created_at=now,
@@ -186,7 +193,7 @@ def update_record(record_id: str, body: RecordUpdate, request: Request, db: Sess
     values.update(fields)
     if body.evidence_refs is not None:
         values["evidence_refs"] = _refs(body.evidence_refs)
-    assets = _check(db, rec.organization_id, values["evidence_refs"])
+    assets = _check(db, c, request, p, rec.organization_id, values["evidence_refs"])
     v = evidence.add_version(db, rec, values, p.principal_id, c.clock.now(), assets)
     return evidence.record_view(rec, v)
 
