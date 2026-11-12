@@ -1622,6 +1622,8 @@ paths:
       summary: 매니페스트 신고 → 업로드 세션과 파트 URL 발급
       description: |
         - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
+        - 파트 URL(parts)은 응답 하나에 서버 한도(기본 1000개)까지만 1번 파트부터 번호 순으로 담는다. parts가 part_count보다
+          적으면 받은 파트를 올린 뒤 GET /v1/uploads/{upload_id}/parts로 남은 파트의 URL을 받는다(잘렸다는 표시는 따로 없다).
         - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
         - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
         - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
@@ -6383,7 +6385,12 @@ components:
         asset_id: {$ref: './schemas/common.schema.json#/$defs/asset_id'}
         part_size: {type: integer, minimum: 1}
         part_count: {type: integer, minimum: 1}
-        parts: {type: array, items: {$ref: '#/components/schemas/PartUrl'}}
+        parts:
+          type: array
+          items: {$ref: '#/components/schemas/PartUrl'}
+          description: >-
+            1번 파트부터 번호 순으로 서버 한도(기본 1000개)까지의 업로드 URL. part_count보다 적으면 이 파트들을 올린 뒤
+            GET /v1/uploads/{upload_id}/parts로 남은 파트의 URL을 받는다(잘렸다는 표시는 따로 없다).
         expires_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
       allOf:
         - if: {properties: {status: {const: UPLOAD_CREATED}}}
@@ -6398,6 +6405,7 @@ components:
         part_count: {type: integer, minimum: 1}
         completed_parts:
           type: array
+          description: 저장소에 올라간 파트 전부 (한도로 잘리지 않는다).
           items:
             type: object
             required: [part_number, etag, size]
@@ -6405,7 +6413,12 @@ components:
               part_number: {type: integer, minimum: 1}
               etag: {type: string}
               size: {type: integer, minimum: 0}
-        pending_parts: {type: array, items: {$ref: '#/components/schemas/PartUrl'}}
+        pending_parts:
+          type: array
+          items: {$ref: '#/components/schemas/PartUrl'}
+          description: >-
+            저장소에 아직 없는 파트의 새 업로드 URL. 번호가 낮은 파트부터 서버 한도(기본 1000개)까지 담는다. completed_parts와
+            합쳐 part_count보다 적으면 이 파트들을 올린 뒤 GET /v1/uploads/{upload_id}/parts를 다시 불러 나머지를 받는다.
         expires_at: {$ref: './schemas/common.schema.json#/$defs/utc_datetime'}
 
     CompleteRequest:

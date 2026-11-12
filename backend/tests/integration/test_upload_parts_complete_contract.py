@@ -15,14 +15,17 @@ import logging
 from typing import Any
 
 import pytest
+import yaml
 from botocore.exceptions import ClientError, EndpointConnectionError, ReadTimeoutError
 from sqlalchemy import text
 
+from app.config import Settings
 from app.db.models import Asset, OrgQuota, Upload
 from app.seed import ORG_A
+from app.services.contracts import contracts_dir
 from tests.conftest import Ctx
 from tests.contract.openapi_contract import assert_matches_contract as check
-from tests.integration.test_ingest import manifest, mp4_bytes, put_parts
+from tests.integration.test_ingest import MB, manifest, mp4_bytes, put_parts
 
 pytestmark = pytest.mark.integration
 SIZE = 128
@@ -178,3 +181,46 @@ def test_wrong_etag_is_still_409_before_storage_is_asked(ictx: Ctx, monkeypatch:
     assert _state(ictx, created) == ("UPLOADING", SIZE, SIZE, "UPLOADING")
     ok = ictx.client.post(COMPLETE.format(upload_id=up.upload_id), json={"parts": parts}, headers=ictx.as_user(102))
     assert ok.status_code == 202, ok.text
+
+
+# ---------------------------------------------------------------- S47 파트 URL 수 한도는 계약에 적힌 대로
+def test_part_url_lists_are_capped_as_the_contract_documents(ictx: Ctx, monkeypatch: pytest.MonkeyPatch) -> None:
+    spec = yaml.safe_load((contracts_dir() / "openapi.yaml").read_text(encoding="utf-8"))
+    schemas = spec["components"]["schemas"]
+    default_cap = Settings.model_fields["max_part_urls_per_response"].default
+    documented = {
+        "createUpload": spec["paths"]["/v1/uploads"]["post"]["description"],
+        "UploadCreated.parts": schemas["UploadCreated"]["properties"]["parts"].get("description", ""),
+        "PartList.pending_parts": schemas["PartList"]["properties"]["pending_parts"].get("description", ""),
+    }
+    for where, words in documented.items():  # 전: 한도도, 남은 URL을 다시 받는 방법도 적혀 있지 않았다
+        assert f"{default_cap}개" in words and "GET /v1/uploads/{upload_id}/parts" in words, where
+    completed = schemas["PartList"]["properties"]["completed_parts"].get("description", "")
+    assert "잘리지 않" in completed  # 완료된 파트는 한도 없이 모두 돌려준다
+
+    monkeypatch.setattr(ictx.c.settings, "max_part_urls_per_response", 2)
+    h = ictx.as_user(102)
+    data = mp4_bytes(3 * 5 * MB + 100, seed=8440)  # 5 MiB 파트 4개
+    r = ictx.client.post("/v1/uploads", json=manifest(data), headers=h)
+    assert r.status_code == 201, r.text
+    check(r, "POST", "/v1/uploads")
+    created = r.json()
+    assert created["part_count"] == 4
+    assert [p["part_number"] for p in created["parts"]] == [1, 2]  # 낮은 번호부터 한도까지
+    first = put_parts(created, data, only={1})
+
+    path = PARTS.format(upload_id=created["upload_id"])
+    listed = ictx.client.get(path, headers=h)
+    check(listed, "GET", PARTS)
+    assert [p["part_number"] for p in listed.json()["completed_parts"]] == [1]
+    assert [p["part_number"] for p in listed.json()["pending_parts"]] == [2, 3]  # 남은 파트 중 낮은 번호부터
+    middle = put_parts(listed.json(), data)
+
+    listed = ictx.client.get(path, headers=h)
+    assert [p["part_number"] for p in listed.json()["completed_parts"]] == [1, 2, 3]
+    assert [p["part_number"] for p in listed.json()["pending_parts"]] == [4]
+    last = put_parts(listed.json(), data)
+
+    done = ictx.client.post(COMPLETE.format(upload_id=created["upload_id"]), json={"parts": first + middle + last},
+                            headers=h)
+    assert done.status_code == 202, done.text
