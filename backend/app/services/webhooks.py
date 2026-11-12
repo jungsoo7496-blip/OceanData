@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import concurrent.futures
+import contextlib
 import hashlib
 import hmac
 import ipaddress
@@ -42,6 +43,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.parse import urlsplit
 
+import httpcore
 import httpx
 from sqlalchemy import and_, event, exists, func, inspect, select, text, update
 from sqlalchemy.orm import Session, aliased
@@ -310,27 +312,72 @@ def _in_thread(fn: Callable[..., T], *args: Any, **kwargs: Any) -> asyncio.Futur
     return asyncio.wrap_future(fut)
 
 
+class _ClosingBackend(httpcore.AsyncNetworkBackend):
+    """연 TCP 연결을 기록해 두는 네트워크 백엔드. 전송이 끝나면(정상·오류·취소) 남은 것을 모두 닫는다 (ADR-0061).
+
+    httpcore는 TLS 핸드셰이크가 일반 예외로 실패할 때만 소켓을 닫고, 전체 기한(asyncio.wait_for)이 핸드셰이크 중에
+    닿아 취소(CancelledError)로 끝나면 닫지 않는다 — 그 소켓은 가비지 수집 때까지 열려 있었다(검토 2026-11-12 W3)."""
+
+    def __init__(self) -> None:
+        self._inner = httpcore.AnyIOBackend()
+        self.streams: list[httpcore.AsyncNetworkStream] = []
+
+    async def connect_tcp(self, host: str, port: int, timeout: float | None = None, local_address: str | None = None,
+                          socket_options: Any = None) -> httpcore.AsyncNetworkStream:
+        stream = await self._inner.connect_tcp(host, port, timeout=timeout, local_address=local_address,
+                                               socket_options=socket_options)
+        self.streams.append(stream)
+        return stream
+
+    async def connect_unix_socket(self, path: str, timeout: float | None = None,
+                                  socket_options: Any = None) -> httpcore.AsyncNetworkStream:
+        raise httpcore.UnsupportedProtocol("웹훅은 유닉스 소켓으로 보내지 않습니다")
+
+    async def sleep(self, seconds: float) -> None:
+        await self._inner.sleep(seconds)
+
+    async def close_all(self) -> None:
+        for stream in self.streams:  # 정상 종료로 이미 닫힌 것은 그대로 지나간다
+            with contextlib.suppress(Exception):
+                await stream.aclose()
+
+
+def _transport(verify: ssl.SSLContext, backend: _ClosingBackend) -> httpx.AsyncHTTPTransport:
+    transport = httpx.AsyncHTTPTransport(verify=verify, trust_env=False)
+    # httpx는 네트워크 백엔드를 받는 인자가 없어 연결 풀의 백엔드를 바꾼다. httpx·httpcore를 올렸는데 이 이름이
+    # 없어지면 조용히 넘어가지 않고 실패한다 (tests/unit/test_webhook_send.py가 소켓이 닫히는지 본다)
+    pool = transport._pool
+    if not hasattr(pool, "_network_backend"):
+        raise RuntimeError("httpcore 연결 풀에 _network_backend가 없습니다 — 웹훅 전송 소켓 정리를 다시 맞추세요")
+    pool._network_backend = backend
+    return transport
+
+
 async def _post(url: str, body: bytes, headers: dict[str, str], timeout: float, *, addresses: list[str],
                 verify: ssl.SSLContext | None = None) -> int:
     """검사한 주소로 바로 연결해 보내고 상태 코드만 돌려준다. 응답 본문은 읽지 않고 연결을 닫는다.
 
     이름은 Host 헤더·TLS SNI·인증서 확인에만 쓰고 다시 풀지 않는다. 프록시 환경변수(HTTPS_PROXY 등)와
     리디렉션은 따르지 않는다. 전체 기한은 부르는 쪽의 asyncio.wait_for가 건다(단계별 timeout은 보조).
-    주소가 여럿이면 연결이 안 될 때만 다음 주소로."""
+    주소가 여럿이면 연결이 안 될 때만 다음 주소로. 연 소켓은 어떻게 끝나든 여기서 닫는다(ADR-0061)."""
     u = httpx.URL(url)
     hdrs = {**headers, "Host": u.netloc.decode("ascii")}
     ext = {"sni_hostname": u.raw_host.decode("ascii")}
-    async with httpx.AsyncClient(verify=verify or _tls_context(), trust_env=False, follow_redirects=False,
-                                 timeout=timeout) as client:
-        for n, address in enumerate(addresses, 1):
-            try:
-                async with client.stream("POST", u.copy_with(host=address), content=body, headers=hdrs,
-                                         extensions=ext) as r:
-                    return r.status_code
-            except httpx.ConnectError:
-                if n == len(addresses):
-                    raise
-    raise TargetRefused(REFUSED, "no_address")
+    backend = _ClosingBackend()
+    try:
+        async with httpx.AsyncClient(transport=_transport(verify or _tls_context(), backend), trust_env=False,
+                                     follow_redirects=False, timeout=timeout) as client:
+            for n, address in enumerate(addresses, 1):
+                try:
+                    async with client.stream("POST", u.copy_with(host=address), content=body, headers=hdrs,
+                                             extensions=ext) as r:
+                        return r.status_code
+                except httpx.ConnectError:
+                    if n == len(addresses):
+                        raise
+        raise TargetRefused(REFUSED, "no_address")
+    finally:
+        await backend.close_all()
 
 
 def http_send(url: str, body: bytes, headers: dict[str, str], timeout: float, *, addresses: list[str] | None = None,
