@@ -105,10 +105,14 @@ veryfast, CRF 18, AAC 128k), 합성 testsrc2 30fps 원본(8 Mbps, 4K는 30 Mbps)
 
 ## 시험
 
-`tests/integration/test_clip_job_bounds.py` 5개.
+`tests/integration/test_clip_job_bounds.py` 7개.
 - `test_clip_ffmpeg_limit_follows_clip_length`: 1·2.5·4초 클립의 ffmpeg·ffprobe 한도가 12·25·35초(최솟값 12·배수 10·전체 한도 35).
 - `test_clip_timeout_kills_ffmpeg_and_fails_without_retry`: 20초 자는 가짜 ffmpeg가 1초 한도에서 끝나고(프로세스 없음) 작업은
   FAILED(`CLIP_TIMEOUT`, 시도 1번), 목록에 원인 코드, 클립 자산·임시 파일 없음.
+- `test_clip_probe_timeout_keeps_clip_without_video_ext`: 20초 자는 가짜 ffprobe가 4초 한도에서 끝나고(프로세스 없음) 작업은
+  DONE(시도 1번, 원인 코드 없음), 클립 자산은 `video_ext` 없이 저장된다.
+- `test_worker_refuses_to_start_with_bad_job_types`: `WORKER_JOB_TYPES` 오타(`clip_exprot`)·빈 결과(포함 = 제외)면 `main()`이
+  컨테이너를 만들기 전에 `SystemExit`("워커 설정 오류: …")로 멈춘다.
 - `test_dedicated_clip_worker_split`: 기본 워커는 클립을 남기고 다른 작업을 하고, 전용 워커는 클립만 한다. 오타·빈 결과는 ValueError,
   Compose 모양의 환경변수(빈 값·쉼표)를 읽는다.
 - `test_long_clip_job_keeps_its_lease`: 임대 3초 정책에서 5.5초 걸리는 클립이 도는 동안 다른 워커의 회수·배정이 0회이고, 끝난 작업에
@@ -117,3 +121,6 @@ veryfast, CRF 18, AAC 128k), 합성 testsrc2 30fps 원본(8 Mbps, 4K는 30 Mbps)
 
 수정 전 코드에서 앞의 네 시험이 실패하는 것을 확인했다 — 한도 `[35, 35, 35]`, 가짜 ffmpeg를 20초 기다린 뒤 실패,
 기본 워커가 클립을 먼저 가져감(`'QUEUED' == 'DONE'`), 회수 1회·다른 워커가 가져감(`(1, ['job_…'], 1) == (0, [], 1)`).
+검토 뒤 더한 두 시험도 수정 전 코드에서 실패한다 — 가짜 ffprobe를 20초 기다림(`< 15` 실패), 잘못된 설정으로 컨테이너를 만듦.
+또 이 변경에서 해당 처리만 지우면 실패하는 것을 확인했다 — ffprobe 시간 초과를 잡지 않으면 `('QUEUED', 1, 'INTERNAL')`(재시도),
+`main()`의 작업 유형 확인을 지우면 컨테이너를 만든다.

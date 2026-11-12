@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 from sqlalchemy import text
 
+from app.db.models import Asset
 from app.seed import ORG_A
 from app.services import clips, pipeline
 from app.workers import main as worker
@@ -87,6 +88,57 @@ def test_clip_timeout_kills_ffmpeg_and_fails_without_retry(ictx, tmp_path: Path)
     with pytest.raises(ProcessLookupError):  # 시간 한도에서 ffmpeg 프로세스를 끝냈다
         os.kill(pid, 0)
     assert [p for p in os.listdir(work) if p.startswith("marine-")] == []  # 받아 둔 원본·임시 폴더도 지웠다
+
+
+def test_clip_probe_timeout_keeps_clip_without_video_ext(ictx, tmp_path: Path) -> None:
+    """결과 다시 읽기(ffprobe)가 한도를 넘기면 그 ffprobe만 끝내고, 클립은 길이 정보 없이 저장한다 (재시도·INTERNAL 아님)."""
+    ctx = ictx
+    src = _source(ctx, video(tmp_path, "testsrc2=size=320x240:rate=15", "a.mp4"))
+    pid_file = tmp_path / "ffprobe.pid"
+    fake = tmp_path / "slow-ffprobe.sh"  # 멈춘 다시 읽기 대역: 자기 PID를 남기고 20초 잔다
+    fake.write_text(f"#!/bin/sh\necho $$ > {pid_file}\nexec sleep 20\n")
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    s = ctx.c.settings.__dict__
+    s["ffprobe_path"], s["clip_timeout_min_s"], s["clip_timeout_factor"] = str(fake), 4, 0.5  # 한도 4초
+    job_id = _post_clip(ctx, src, 0, 1.0)
+    started = time.monotonic()
+    drain(ctx)
+    assert time.monotonic() - started < 15  # 스크립트의 20초를 기다리지 않는다
+    assert _job(ctx, job_id) == ("DONE", 1, None)
+    r = ctx.client.get(f"/v1/assets/{src}/clips", headers=ctx.as_user(MEMBER_A))
+    check(r, "GET", "/v1/assets/{asset_id}/clips")
+    [item] = r.json()["items"]
+    assert item["status"] == "DONE" and item.get("clip_asset_id"), item
+    with ctx.c.sessionmaker() as db:
+        child = db.get(Asset, item["clip_asset_id"])
+        assert child is not None and child.variant == "CLIP" and child.byte_size > 0
+        assert "video_ext" not in (child.ext or {})  # 길이 정보 없이 저장했다
+    pid = int(pid_file.read_text())
+    with pytest.raises(ProcessLookupError):  # 시간 한도에서 ffprobe 프로세스를 끝냈다
+        os.kill(pid, 0)
+
+
+def test_worker_refuses_to_start_with_bad_job_types(monkeypatch: pytest.MonkeyPatch) -> None:
+    """WORKER_JOB_TYPES 오타·빈 결과면 main()이 컨테이너를 만들기 전에 기동을 멈춘다 (모든 유형을 가져가지 않게)."""
+    from tests.conftest import test_settings
+
+    built: list[object] = []
+
+    def build(settings: object) -> object:
+        built.append(settings)
+        raise AssertionError("잘못된 설정으로 컨테이너를 만들었다")
+
+    monkeypatch.setattr(worker, "get_settings", lambda: test_settings())
+    monkeypatch.setattr(worker, "build_container", build)
+    for name in ("configure_logging", "start_http_server"):
+        monkeypatch.setattr(worker, name, lambda *_args, **_kwargs: None)
+    for include, exclude, word in (("clip_exprot", "", "clip_exprot"), ("clip_export", "clip_export", "없습니다")):
+        monkeypatch.setenv("WORKER_JOB_TYPES", include)
+        monkeypatch.setenv("WORKER_EXCLUDE_JOB_TYPES", exclude)
+        with pytest.raises(SystemExit) as exc:
+            worker.main()
+        assert str(exc.value).startswith("워커 설정 오류: ") and word in str(exc.value), exc.value
+    assert built == []
 
 
 def test_dedicated_clip_worker_split(ctx, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[no-untyped-def]
