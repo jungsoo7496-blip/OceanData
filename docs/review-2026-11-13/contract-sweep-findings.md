@@ -27,11 +27,11 @@
 | S14 | medium | `POST /v1/assets/{asset_id}/share-review` | missing-audit | 구현 | 고침 |
 | S15 | low | `POST /v1/assets/{asset_id}/share-requests` | wrong-status | 계약 문구 | 계약 문구 고침 |
 | S16 | low | `POST /v1/share-candidates` | wrong-status | 구현 | 고침 |
-| S17 | medium | `GET /v1/deid-reviews/{review_id}/frame` | missing-audit | 구현 | 미처리 |
+| S17 | medium | `GET /v1/deid-reviews/{review_id}/frame` | missing-audit | 구현 | 고침 (ADR-0075) |
 | S18 | medium | `POST /v1/deid-reviews/{review_id}/decision` | missing-behavior | 사람 결정 | 사람 결정 대기 |
-| S19 | medium | `GET /v1/deid-reviews/{review_id}/frame` | scope-or-permission | 구현 | 미처리 |
-| S20 | low | `POST /v1/deid-reviews/{review_id}/decision` | data-semantics | 구현 | 미처리 |
-| S21 | low | `PATCH /v1/assets/{asset_id}/tags` | data-semantics | 구현 | 미처리 |
+| S19 | medium | `GET /v1/deid-reviews/{review_id}/frame` | scope-or-permission | 구현 | 고침 (ADR-0075) |
+| S20 | low | `POST /v1/deid-reviews/{review_id}/decision` | data-semantics | 구현 | 고침 (ADR-0075) |
+| S21 | low | `PATCH /v1/assets/{asset_id}/tags` | data-semantics | 구현 | 고침 (ADR-0075) |
 | S22 | medium | `POST /v1/assets/{asset_id}/reprocess` | missing-behavior | 구현 | 미처리 |
 | S23 | medium | `PATCH /v1/assets/{asset_id}` | missing-audit | 구현 | 미처리 |
 | S24 | medium | `PATCH /v1/assets/{asset_id}` | missing-audit | 구현 | 미처리 |
@@ -76,6 +76,10 @@
 - **S14 심사 처리의 전이 주체 403** — share:review 권한은 있지만 그 전이의 주체가 아닌 역할이 받는 403에 `PERMISSION_DENIED` 감사(대상 자산, 동작, 전·후 상태)를 남긴다. 감사는 요청과 따로 확정한다. 표에 없는 전이(409)는 권한 거부로 남기지 않는다.
 - **S15 등급 변경 신청의 409** — `createShareRequest` 계약에 두 409를 명시한다. 하나는 목표 등급이 지금 등급과 같을 때의 `INVALID_STATE_TRANSITION`, 다른 하나는 멱등 키 충돌(`IDEMPOTENCY_CONFLICT`, 처리 중이면 `CONFLICT`)이다. 동작은 그대로다.
 - **S16 공유 후보 지정 본문** — 빈 `asset_ids`(session_id와 함께여도)와 중복 `asset_ids`는 400 `VALIDATION_ERROR`(`/asset_ids`, `too_short`·`unique`)다. 이때 어떤 자산도 후보가 되지 않는다.
+- **S17 운영자 원본 프레임 거부 감사** — 긴급 열람 승인이 없는 운영자가 다른 기관 원본 프레임을 요청하면 403과 함께 `PERMISSION_DENIED`(대상 원본, `reason: no_break_glass_grant`, 검수 ID)를 남긴다. 감사는 요청과 따로 확정돼, 거절된 요청 ID로 대조할 수 있다.
+- **S19 운영자 비식별본 프레임 범위** — 배정 검수자가 아닌 운영자는 원본 `share_status`가 PROCESSING·QUALITY_REVIEW·REPROCESS일 때만 비식별본 프레임을 받는다. 공유 철회·반려·승인 뒤에는 403과 `PERMISSION_DENIED`(`reason: not_under_review`)를 남긴다. 배정 검수자는 그대로 본다. 승인(APPROVED) 뒤에도 허용할지는 주인 결정 대기다(ADR-0075).
+- **S20 같은 회차 재검수 중복** — 열린 검수가 있는 비식별본에는 재검수를 새로 만들지 않고, 그 검수 ID를 `recheck_review_ids`로 돌려준다. 결정한 비식별본 자신과 불합격(FAILED) 비식별본은 옛 PASSED 검수가 있어도 다시 열지 않는다. 같은 회차의 미탐 결정이 겹치면 비식별본 행을 잠근 뒤 다시 확인해 하나만 연다. 두 세션 동시 결정 시험으로 고정했다(ADR-0075).
+- **S21 사람 태그 추가** — 모델이 단 자산 전체 태그를 사람이 추가하면 `source=HUMAN`(model_ref·confidence 없음)으로 바뀌어 날씨 보정이 지우지 않는다. 지운 것이 없는 REMOVE의 이력 기록은 계약이 정하지 않아 그대로 둔다.
 
 ## datasets (버전·배포·카탈로그) — 발견 5건
 
