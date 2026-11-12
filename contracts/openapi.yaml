@@ -4259,6 +4259,8 @@ paths:
       description: |
         13번 요구사항 5.3, 14번 요구사항 3.1 (T06-b). 이용기관은 볼 수 없다 (원본 ID·검수자는 내부 정보).
         제공기관이 보면 다른 기관 항목은 hidden_item_count로 개수만 준다.
+        계보는 다 만든(READY) 버전만 준다. 아직 만드는 중(BUILDING)이거나 만들지 못한(FAILED) 버전은 409 CONFLICT (13번 작업 32).
+        볼 수 없는 버전은 상태와 관계없이 404다.
       x-freeze: G5
       x-status: draft
       responses:
@@ -4270,6 +4272,7 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
 
   /v1/datasets/{dataset_id}/publish:
