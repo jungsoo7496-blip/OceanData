@@ -1919,7 +1919,10 @@ paths:
       tags: [assets]
       operationId: reprocessAsset
       summary: 처리 단계 재실행 (PLATFORM_OPERATOR, 다중 인증). 새 파생 자산을 계보에 연결한다
-      description: 05번 요구사항 7.2. 원본 자산에만 요청한다. FAILED 자산은 실패 직전 단계부터 다시 시작한다.
+      description: |
+        05번 요구사항 7.2. 원본 자산에만 요청한다. FAILED 자산은 실패 직전 단계부터 다시 시작한다.
+        무결성 검증 중에 실패한 자산(실패 직전 단계 VALIDATING)은 검증부터 다시 하고, 등록되면 보통 처리 순서를 처음부터 돈다.
+        이때 job_ids는 검증 작업이다.
       x-freeze: G1
       x-status: draft
       requestBody:

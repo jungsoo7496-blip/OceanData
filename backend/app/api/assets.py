@@ -224,8 +224,16 @@ def reprocess_asset(asset_id: str, body: ReprocessRequest, request: Request, db:
     for x in with_descendants(db, [a]):
         x.last_reprocessed_at = now
     db.flush()
-    job_id = c.queue.enqueue(jobs[0], {"asset_id": a.asset_id, "chain": jobs[1:], "run": run, "reprocess": True},
-                             organization_id=a.organization_id, dedupe_key=f"{jobs[0]}:{a.asset_id}:{run}")
+    if a.ingest_status in ("RECEIVED", "VALIDATING"):
+        # 무결성 검증에서 재시도를 다 써 FAILED가 됐던 자산이다. 처리 단계는 REGISTERED가 아니면 건너뛰므로 검증부터
+        # 다시 한다 — 검증은 VALIDATING을 이어 하고(ADR-0058) 등록되면 보통 처리 순서를 등록하므로 요청한 단계는 따로
+        # 넣지 않는다. 끝난 검증 작업이 원래 키를 쥐고 있어 이번 실행의 키를 쓴다 (ADR-0076)
+        job_id = c.queue.enqueue("integrity_verify", {"asset_id": a.asset_id, "run": run, "reprocess": True},
+                                 organization_id=a.organization_id, dedupe_key=f"integrity_verify:{a.asset_id}:{run}",
+                                 connection=db.connection())
+    else:
+        job_id = c.queue.enqueue(jobs[0], {"asset_id": a.asset_id, "chain": jobs[1:], "run": run, "reprocess": True},
+                                 organization_id=a.organization_id, dedupe_key=f"{jobs[0]}:{a.asset_id}:{run}")
     c.audit.record("REPROCESS_REQUESTED", principal=p, organization_id=a.organization_id, target_type="Asset",
                    target_id=a.asset_id, reason=body.reason, source_ip=client_ip(request), details={"steps": order})
     return {"asset_id": a.asset_id, "job_ids": [job_id]}

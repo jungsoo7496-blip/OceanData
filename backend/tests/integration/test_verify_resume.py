@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 
-from app.db.models import Asset, IntegrityLogEntry, OrgQuota, Upload
+from app.db.models import Asset, IntegrityLogEntry, JobRow, OrgQuota, Upload
 from app.seed import DEV_A_SENSOR, ORG_A, SES_A
 from app.services import ingest as ingest_mod
 from app.services.ingest import IntegrityVerifier
@@ -160,3 +160,39 @@ def test_revalidation_takes_the_integrity_lock_before_the_quota_row(ictx, monkey
     assert IntegrityVerifier(ictx.c).verify(aid) in ("REGISTERED", "READY_PRIVATE")
 
     assert seen == {"quota_row_was_free": True}, "무결성 로그 잠금을 잡을 때 이미 쿼터 행을 쥐고 있다 (잠금 순서 뒤집힘)"
+
+
+def test_reprocess_after_exhausted_verification_restarts_verification(ictx, monkeypatch) -> None:
+    """검증이 재시도를 다 써 FAILED(failed_from=VALIDATING)가 된 자산을 운영자가 재처리하면 검증부터 다시 해 등록한다
+    (계약 점검 S22, ADR-0076). 전에는 VALIDATING으로 돌려 놓고 요청한 처리 단계만 넣었다 — 처리 단계는 REGISTERED가
+    아니면 건너뛰므로 자산이 VALIDATING에 영구히 남고(다음 재처리·삭제 409) 업로드 예약도 풀리지 않았다."""
+    created, aid, size = _uploaded(ictx, 4242)
+    real = ictx.c.storage.iter_object
+
+    def broken(*_a, **_k):
+        raise TimeoutError("synthetic stream error")
+        yield b""  # pragma: no cover
+
+    monkeypatch.setattr(ictx.c.storage, "iter_object", broken)
+    for _ in range(20):  # 검증 작업이 재시도를 모두 쓸 때까지 (백오프 대기는 건너뛴다)
+        with ictx.c.engine.begin() as conn:
+            conn.execute(text("UPDATE jobs SET run_after = now() - interval '1 second' WHERE status = 'QUEUED'"))
+        if not worker.run_once(ictx.c, "t"):
+            break
+    monkeypatch.setattr(ictx.c.storage, "iter_object", real)  # 저장소가 돌아왔다
+    with ictx.c.sessionmaker() as db:
+        asset = db.get(Asset, aid)
+        assert (asset.ingest_status, asset.ingest_context["failed_from"]) == ("FAILED", "VALIDATING")
+    assert _quota(ictx) == {"used": 0, "reserved": size}
+
+    r = ictx.client.post(f"/v1/assets/{aid}/reprocess", json={"steps": ["META"], "reason": "저장소 복구 뒤 재처리"},
+                         headers=ictx.as_user(106, mfa=True))
+    assert r.status_code == 202, r.text
+    drain(ictx)  # 검증 작업만 처리한다
+
+    _assert_registered_once(ictx, created, size)
+    with ictx.c.sessionmaker() as db:
+        assert db.get(JobRow, r.json()["job_ids"][0]).job_type == "integrity_verify"
+        probes = db.scalars(select(JobRow).where(JobRow.asset_id == aid, JobRow.job_type == "media_probe")).all()
+    # 등록 뒤에는 보통 처리 순서(메타 추출 → 프록시 → 썸네일 …)가 한 번 등록된다. 요청한 단계를 따로 넣지 않는다
+    assert [(j.status, j.payload["chain"][:2]) for j in probes] == [("QUEUED", ["make_proxy", "make_thumbnail"])]
