@@ -62,5 +62,8 @@ S17·S21은 문서에 적힌 동작으로 되돌리는 일이다. S19는 '심사
 `on_conflict_do_update`를 되돌린다. 마이그레이션·계약 변경 없음.
 
 시험: `tests/integration/test_deid_frame_scope.py`(승인 없는 원본 프레임 403의 감사, 실제 철회 흐름에서 비식별본 프레임 403·감사·검수자 유지, 원본 share_status 8가지별 운영자·검수자 결과),
-`tests/integration/test_deid_recheck.py`(두 번째 미탐이 열린 재검수를 다시 쓰기, 재검수 미탐이 자신·불합격 비식별본을 다시 열지 않기),
-`tests/integration/test_tag_human_edit.py`(모델 FOG를 사람이 추가한 뒤 맑음 보정에도 HUMAN으로 남기). 수정 전 코드에서 6개 모두 실패하는 것을 확인했다.
+`tests/integration/test_deid_recheck.py`(두 번째 미탐이 열린 재검수를 다시 쓰기, 재검수 미탐이 자신·불합격 비식별본을 다시 열지 않기,
+앞 미탐 결정이 커밋 전일 때 뒤 결정이 비식별본 행 잠금에서 기다렸다가 앞 결정이 연 재검수 ID를 돌려주기),
+`tests/integration/test_tag_human_edit.py`(모델 FOG를 사람이 추가한 뒤 맑음 보정에도 HUMAN으로 남기). 수정 전 코드에서 7개 모두 실패하는 것을 확인했다.
+동시 결정 시험은 결정 경로가 아니라 서비스 함수(`deid.decide`)를 두 세션에서 직접 부른다. 차례로 결정하면 첫 확인에서 걸러져 잠근 뒤 다시 확인하는 분기를 타지 않기
+때문이다. 그 다시 확인을 빼거나 비식별본 행 잠금을 빼면 이 시험이 실패하는 것을 확인했다.

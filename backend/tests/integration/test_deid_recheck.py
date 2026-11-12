@@ -6,15 +6,18 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.db.models import Asset, AssetLineage, DeidReview
 from app.domain.ids import new_id
 from app.seed import DEV_A_CAMERA, ORG_A, PRJ_A, SES_A, fid
+from app.services import deid
 from tests.integration.test_catalog import _asset
 
 pytestmark = [pytest.mark.integration]
@@ -93,3 +96,53 @@ def test_missed_recheck_does_not_reopen_itself_or_failed(ctx) -> None:
     assert _decide(ctx, c_rid).json()["recheck_review_ids"] == []
     assert [s for _, s, _ in _reviews(ctx, a_child)] == ["PASSED", "MISSED"]
     assert _result(ctx, a_child) == "FAILED"
+
+
+def _lock_waiters(ctx: Any) -> int:
+    with ctx.c.engine.connect() as conn:
+        return int(conn.execute(text("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+                                     "AND wait_event_type = 'Lock'")).scalar_one())
+
+
+def _missed_in(ctx: Any, db: Any, rid: str) -> list[str]:
+    """결정 경로처럼 검수 행을 잠그고 미탐으로 결정한다. 커밋은 부른 쪽이 한다."""
+    rv = db.get(DeidReview, rid, with_for_update=True)
+    return deid.decide(ctx.c, db, rv, "MISSED", MISSED["missed"], [], None, {"REVIEWER"}, fid("usr", REVIEWER))
+
+
+def test_concurrent_missed_waits_on_child_lock_and_reuses_recheck(ctx) -> None:
+    """같은 회차의 미탐 결정 둘이 겹치면, 뒤 결정은 비식별본 행 잠금에서 기다렸다가 앞 결정이 연 재검수를 돌려준다.
+
+    차례로 결정하면 첫 확인에서 걸러져 '잠근 뒤 다시 확인'을 타지 않는다. 그래서 앞 결정을 커밋하지 않은 채 뒤 결정을
+    다른 스레드에서 서비스 함수로 직접 부른다 (ADR-0075 결정 3).
+    """
+    with ctx.c.sessionmaker.begin() as db:
+        a_child, _ = _mk(db, "PASSED")
+        _, b_rid = _mk(db, "ASSIGNED")
+        _, c_rid = _mk(db, "ASSIGNED")
+    race: dict[str, Any] = {}
+
+    def second() -> None:
+        try:
+            with ctx.c.sessionmaker.begin() as db2:
+                race["second"] = _missed_in(ctx, db2, c_rid)
+        except Exception as e:  # noqa: BLE001 - 스레드 밖에서 단언한다
+            race["error"] = e
+
+    with ctx.c.sessionmaker.begin() as db1:
+        (first,) = _missed_in(ctx, db1, b_rid)  # A 비식별본 행을 잠그고 재검수를 만들었다 (아직 커밋 전)
+        db1.flush()
+        t = threading.Thread(target=second)
+        t.start()
+        deadline = time.monotonic() + 20
+        while t.is_alive() and not _lock_waiters(ctx) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        race["waited"] = t.is_alive() and _lock_waiters(ctx) > 0
+    t.join(timeout=60)
+    assert not t.is_alive() and "error" not in race, race.get("error")
+    assert race["waited"], "뒤 결정이 A 비식별본 행 잠금을 기다리지 않았다"
+    assert race["second"] == [first], "잠금을 기다린 뒤 다시 확인하지 않고 재검수를 또 만들었다"
+    rows = _reviews(ctx, a_child)
+    assert [(s, rc) for _, s, rc in rows] == [("PASSED", False), ("ASSIGNED", True)]
+    assert [rid for rid, s, _ in rows if s == "ASSIGNED"] == [first]
+    assert _result(ctx, a_child) is None
