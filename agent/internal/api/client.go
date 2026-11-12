@@ -11,13 +11,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jungsoo7496-blip/oceandata/agent/internal/timex"
 )
 
 // Problem은 RFC 9457 오류 응답이다.
@@ -92,12 +94,6 @@ func New(baseURL string, hc *http.Client, creds *Credentials, version string) *C
 	return &Client{base: strings.TrimRight(baseURL, "/"), http: hc, creds: creds, ua: "marine-agent/" + version}
 }
 
-func isNetErr(err error) bool {
-	var ne net.Error
-	var ue *url.Error
-	return errors.As(err, &ne) || errors.As(err, &ue) || errors.Is(err, io.ErrUnexpectedEOF)
-}
-
 func readProblem(resp *http.Response) *Problem {
 	p := &Problem{Status: resp.StatusCode}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -105,12 +101,23 @@ func readProblem(resp *http.Response) *Problem {
 	if p.Code == "" {
 		p.Code = http.StatusText(resp.StatusCode)
 	}
-	if ra := resp.Header.Get("Retry-After"); ra != "" {
-		if d, err := time.ParseDuration(ra + "s"); err == nil {
-			p.RetryAfter = d
-		}
-	}
+	p.RetryAfter = retryAfter(resp.Header.Get("Retry-After"))
 	return p
+}
+
+// retryAfter는 Retry-After를 기다릴 시간으로 바꾼다. 계약(RetryAfter 머리: 정수 초)과 RFC 9110 delay-seconds처럼 숫자만
+// 받는다. HTTP 날짜·소수·음수·단위가 붙은 값은 0(평소 백오프)이다. 아주 큰 값은 timex 상한(약 68년)으로 자른다 —
+// 대기를 지금 시각에 더한 재시도 시각을 UnixNano로 저장하는데, 넘쳐 과거가 되면 다음 주기에 곧바로 다시 보냈다 (ADR-0040).
+func retryAfter(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" || strings.Trim(v, "0123456789") != "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil { // 숫자만인데 int64도 넘는다
+		n = timex.MaxSeconds
+	}
+	return timex.Seconds(n)
 }
 
 // Enroll은 1회용 등록 코드로 자격증명을 받는다 (POST /v1/agents/enroll).
@@ -123,7 +130,7 @@ func (c *Client) Enroll(ctx context.Context, code, agentVersion, osName string) 
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrOffline, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusCreated {
 		return nil, readProblem(resp)
 	}
@@ -156,12 +163,16 @@ func (c *Client) accessToken(ctx context.Context, force bool) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrOffline, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusUnauthorized {
 		return "", ErrRevoked
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", readProblem(resp)
+		problem := readProblem(resp)
+		if resp.StatusCode >= 500 {
+			return "", fmt.Errorf("%w: %v", ErrOffline, problem)
+		}
+		return "", problem
 	}
 	var tr struct {
 		AccessToken string `json:"access_token"`
@@ -171,9 +182,19 @@ func (c *Client) accessToken(ctx context.Context, force bool) (string, error) {
 		return "", err
 	}
 	c.token = tr.AccessToken
-	ttl := time.Duration(tr.ExpiresIn) * time.Second
-	c.tokenExp = time.Now().Add(ttl - ttl/5) // 만료 전에 갱신
+	c.tokenExp = tokenRefreshAt(time.Now(), tr.ExpiresIn)
 	return c.token, nil
+}
+
+// tokenRefreshAt은 토큰을 새로 받을 시각이다 (만료 전에 갱신: 수명의 80%). expires_in이 0 이하면 수명을 모르는 것으로
+// 보고 지금을 돌려준다 — 받은 토큰은 이번 요청에만 쓰고 다음 요청 때 새로 받는다. 아주 큰 값은 timex 상한으로 잘라
+// time.Duration 곱셈이 넘쳐 늘 만료(음수)되거나 엉뚱한 수명이 되지 않게 한다 (ADR-0040).
+func tokenRefreshAt(now time.Time, expiresIn int) time.Time {
+	if expiresIn <= 0 {
+		return now
+	}
+	ttl := timex.Seconds(int64(expiresIn))
+	return now.Add(ttl - ttl/5)
 }
 
 // Do는 인증된 JSON 요청을 보낸다. 401이면 토큰을 한 번 새로 받아 재시도하고, 그래도 401이면 ErrRevoked.
@@ -211,7 +232,7 @@ func (c *Client) Do(ctx context.Context, method, path string, in any, headers ma
 			_ = resp.Body.Close()
 			continue
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode == http.StatusUnauthorized {
 			return resp.StatusCode, ErrRevoked
 		}
@@ -234,6 +255,9 @@ func (c *Client) Do(ctx context.Context, method, path string, in any, headers ma
 
 // PutPart는 사전 서명 URL로 파트를 스토리지에 직접 보낸다. URL은 로그에 남기지 않는다.
 func (c *Client) PutPart(ctx context.Context, partURL string, r io.Reader, size int64) (string, error) {
+	if size == 0 {
+		r = http.NoBody // PUT에 명시적인 Content-Length: 0을 보내 서명과 맞춘다.
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, partURL, r)
 	if err != nil {
 		return "", errors.New("파트 URL 형식 오류")
@@ -246,7 +270,7 @@ func (c *Client) PutPart(ctx context.Context, partURL string, r io.Reader, size 
 		}
 		return "", fmt.Errorf("%w: 파트 전송 실패", ErrOffline)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode == http.StatusForbidden {
 		return "", &Problem{Status: 403, Code: "PART_URL_EXPIRED", Title: "파트 URL이 만료되었거나 거부되었습니다"}

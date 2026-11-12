@@ -7,7 +7,8 @@ import { useQuery } from '@tanstack/react-query'
 import AwsS3, { type AwsS3Part } from '@uppy/aws-s3'
 import Uppy, { type UppyFile } from '@uppy/core'
 import Dashboard from '@uppy/dashboard'
-import { Alert, Card, Form, Select, Space, Table, Tag, Typography } from 'antd'
+import ko_KR from '@uppy/locales/lib/ko_KR'
+import { Alert, Card, Form, Grid, Select, Space, Table, Tag, Typography } from 'antd'
 import { createSHA256 } from 'hash-wasm'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError, post, type Device, type Page, type Session } from '../lib/api'
@@ -58,14 +59,18 @@ export function Upload() {
   const ctx = useRef({ source, variant, session })
   ctx.current = { source, variant, session }
   const addRow = (r: Row) => setRows((x) => [r, ...x.filter((y) => y.name !== r.name)])
+  const narrow = Grid.useBreakpoint().sm === false // 휴대폰 폭: 이름을 입력 위로 (선택 상자가 카드 밖으로 나가지 않게)
 
   const uppy = useMemo(() => {
     const urls = new Map<string, { at: number; byPart: Map<number, string> }>()
+    // Uppy의 getChunkSize는 UppyFile이 아닌 file.data(Blob)를 전달한다.
+    const partSizes = new WeakMap<object, number>()
     const refreshUrls = async (uploadId: string) => {
       const pl = await api<{ pending_parts: { part_number: number; url: string }[] }>(`/v1/uploads/${uploadId}/parts`)
       urls.set(uploadId, { at: Date.now(), byPart: new Map(pl.pending_parts.map((p) => [p.part_number, p.url])) })
     }
-    const u = new Uppy<Meta, Body>({ autoProceed: false, restrictions: { maxNumberOfFiles: 50 } })
+    // 한국어 문구 (09번 요구사항 11.1) — @uppy/locales는 Uppy 같은 저장소의 문구 묶음(MIT, ADR-0016)
+    const u = new Uppy<Meta, Body>({ autoProceed: false, locale: ko_KR, restrictions: { maxNumberOfFiles: 50 } })
     u.addPreProcessor(async (ids) => {
       for (const id of ids) {
         const file = u.getFile(id) as F
@@ -91,6 +96,8 @@ export function Upload() {
             u.removeFile(id)
             continue
           }
+          if (!c.part_size) throw new Error('서버의 업로드 파트 크기를 확인하지 못했습니다')
+          partSizes.set(file.data, c.part_size)
           urls.set(c.upload_id!, { at: Date.now(), byPart: new Map((c.parts ?? []).map((p) => [p.part_number, p.url])) })
           u.setFileMeta(id, { uploadId: c.upload_id, assetId: c.asset_id, partSize: c.part_size, sha })
           // 이미 있는 세션이면 Uppy가 listParts로 받은 파트를 건너뛴다 (재개)
@@ -107,9 +114,12 @@ export function Upload() {
     u.use(AwsS3<Meta, Body>, {
       shouldUseMultipart: true,
       limit: 4,
-      // 서버가 정한 파트 크기를 그대로 쓴다 (실행 시 전달되는 값은 UppyFile이다)
-      getChunkSize: (file) => ((file as unknown as F).meta?.partSize as number | undefined)
-        ?? Math.max(64 * 1024 * 1024, Math.ceil(file.size / 10000)),
+      // 같은 Blob에 연결한 서버 파트 크기를 사용해 신규·재개 전송의 경계를 일치시킨다.
+      getChunkSize: (data) => {
+        const size = partSizes.get(data)
+        if (!size) throw new Error('서버의 업로드 파트 크기를 확인하지 못했습니다')
+        return size
+      },
       createMultipartUpload: async (file) => ({ uploadId: file.meta.uploadId as string, key: file.meta.assetId as string }),
       listParts: async (_file, { uploadId }) => {
         const pl = await api<{ completed_parts: { part_number: number; etag: string; size: number }[] }>(`/v1/uploads/${uploadId}/parts`)
@@ -142,7 +152,8 @@ export function Upload() {
 
   useEffect(() => {
     if (!target.current) return
-    uppy.use(Dashboard<Meta, Body>, { inline: true, target: target.current, height: 360, proudlyDisplayPoweredByUppy: false,
+    // 폭은 카드에 맞춘다 (기본 750px은 휴대폰 폭에서 문서를 넓힌다, 요구사항 11.2)
+    uppy.use(Dashboard<Meta, Body>, { inline: true, target: target.current, width: '100%', height: 360, proudlyDisplayPoweredByUppy: false,
       note: '파일을 끌어 놓거나 고르세요. 큰 파일은 나누어 바로 저장소로 보냅니다.' })
     return () => {
       const d = uppy.getPlugin('Dashboard')
@@ -155,9 +166,9 @@ export function Upload() {
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <Card title="업로드">
-        <Form layout="inline" style={{ marginBottom: 16, rowGap: 8 }}>
+        <Form layout={narrow ? 'vertical' : 'inline'} style={{ marginBottom: 16, rowGap: 8 }}>
           <Form.Item label="원천 장비" required>
-            <Select virtual={false} style={{ width: 240 }} value={source} onChange={setSource} aria-label="원천 장비"
+            <Select virtual={false} style={{ width: 240, maxWidth: '100%' }} value={source} onChange={setSource} aria-label="원천 장비"
               options={sources.map((d) => ({ value: d.device_id, label: `${d.name} (${d.collection_mode.slice(0, 2)})` }))} />
           </Form.Item>
           <Form.Item label="변형">
@@ -165,7 +176,7 @@ export function Upload() {
               options={['ORIGINAL', 'CLIP', 'PROXY', 'SAMPLE_FRAME'].map((v) => ({ value: v, label: v }))} />
           </Form.Item>
           <Form.Item label="실증회차">
-            <Select virtual={false} allowClear style={{ width: 240 }} value={session} onChange={setSession} aria-label="실증회차"
+            <Select virtual={false} allowClear style={{ width: 240, maxWidth: '100%' }} value={session} onChange={setSession} aria-label="실증회차"
               placeholder="모르면 비워 두세요 (회차 미상으로 보관)"
               options={(sessions.data?.items ?? []).map((s) => ({ value: s.session_id, label: `${s.label} ${s.title}` }))} />
           </Form.Item>

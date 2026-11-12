@@ -1,4 +1,4 @@
-// 실증회차 (09번 요구사항 5): 생성, 목록, 회차 미상 격리 자산을 회차에 지정.
+// 실증회차 (09번 요구사항 5): 생성, 목록(→ 회차 타임라인 SessionTimeline.tsx), 회차 미상 격리 자산을 회차에 지정.
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { App, Button, Card, DatePicker, Form, Input, Modal, Select, Space, Table, Typography } from 'antd'
 import { useState } from 'react'
@@ -42,14 +42,14 @@ export function Sessions({ me }: { me: Me }) {
       <Card title="실증회차" extra={me.roles.some((r) => r.startsWith('ORG_')) && <Button type="primary" onClick={() => setOpen(true)}>회차 만들기</Button>}>
         <Table rowKey="session_id" dataSource={sessions.data?.items ?? []} loading={sessions.isLoading} pagination={{ pageSize: 20 }}
           columns={[
-            { title: '표시값', dataIndex: 'label' },
+            { title: '표시값', dataIndex: 'label', render: (v: string, s) => <Link to={`/sessions/${s.session_id}`} aria-label={`${v} 타임라인`}>{v}</Link> },
             { title: '제목', dataIndex: 'title' },
             { title: '실증사업', dataIndex: 'project_id', render: projectName },
             { title: '시작', dataIndex: 'starts_at', render: kst },
             { title: '종료', dataIndex: 'ends_at', render: kst },
             { title: '장소', dataIndex: 'site' },
             { title: '장비 수', key: 'n', render: (_, s) => s.device_ids.length },
-            { title: '', key: 'rec', render: (_, s) => <Link to={`/sessions/${s.session_id}/records`}>기록</Link> },
+            { title: '', key: 'rec', render: (_, s) => <Space size="middle"><Link to={`/sessions/${s.session_id}`}>타임라인</Link><Link to={`/sessions/${s.session_id}/records`}>기록</Link></Space> },
           ]} />
         <Typography.Text type="secondary">폴더 이름을 회차 표시값과 같게 두면 에이전트가 회차를 자동으로 찾습니다.</Typography.Text>
       </Card>

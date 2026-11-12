@@ -1,15 +1,16 @@
-"""감사 로그 (02번 요구사항 7). 추가 전용 + 해시 체인. 주 트랜잭션과 별도 연결로 기록한다."""
+"""추가 전용 감사 로그와 해시 체인 (02번 요구사항 7)."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 from app.context import request_id_var
 from app.domain.ids import new_id
@@ -59,7 +60,8 @@ class AuditLogger:
                actor_kind: str | None = None, actor_id: str | None = None,
                organization_id: str | None = None, target_type: str | None = None,
                target_id: str | None = None, source_ip: str | None = None, reason: str | None = None,
-               details: dict[str, Any] | None = None) -> str:
+               details: dict[str, Any] | None = None, connection: Connection | None = None) -> str:
+        """실패 감사 등은 별도 커밋하고, 연결을 받은 성공 감사는 호출자 트랜잭션을 따른다."""
         now = self.clock.now()
         row = {
             "audit_id": new_id("audit"),
@@ -77,7 +79,7 @@ class AuditLogger:
             "reason": reason,
             "details": details or {},
         }
-        with self.engine.begin() as conn:
+        with (self.engine.begin() if connection is None else nullcontext(connection)) as conn:
             conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _LOCK_KEY})
             prev = conn.execute(text("SELECT row_hash FROM audit_log ORDER BY seq DESC LIMIT 1")).scalar()
             prev_hash = prev or GENESIS

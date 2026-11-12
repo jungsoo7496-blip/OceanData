@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 
-	"github.com/jungsoo7496-blip/oceandata/agent/internal/api"
 	"github.com/jungsoo7496-blip/oceandata/agent/internal/sensor"
 )
 
@@ -26,6 +26,15 @@ type Config struct {
 	LogKeep        int    `json:"log_keep"`
 	// UpdatePublicKey는 수동·자동 업데이트 서명 검증용 Ed25519 공개키(base64)다.
 	UpdatePublicKey string `json:"update_public_key,omitempty"`
+	// 자동 업데이트는 기본 비활성이다. 주소·주기·한도는 현장 설정에서 지정한다.
+	AutoUpdate            bool   `json:"auto_update"`
+	UpdateURL             string `json:"update_url,omitempty"`
+	UpdateSignatureURL    string `json:"update_signature_url,omitempty"`
+	UpdateIntervalS       int    `json:"update_interval_s"`
+	UpdateTimeoutS        int    `json:"update_timeout_s"`
+	UpdateMaxBytes        int64  `json:"update_max_bytes"`
+	UpdateStartupTimeoutS int    `json:"update_startup_timeout_s"`
+	UpdateStableS         int    `json:"update_stable_s"`
 	// SensorPlugins는 MQTT 등 Sensor_Plugin 설정이다 (07번). 비어 있으면 쓰지 않는다.
 	SensorPlugins []sensor.Config `json:"sensor_plugins,omitempty"`
 }
@@ -48,6 +57,21 @@ func (c *Config) Defaults() {
 	}
 	if c.LogKeep == 0 {
 		c.LogKeep = 5
+	}
+	if c.UpdateIntervalS == 0 {
+		c.UpdateIntervalS = 3600
+	}
+	if c.UpdateTimeoutS == 0 {
+		c.UpdateTimeoutS = 120
+	}
+	if c.UpdateMaxBytes == 0 {
+		c.UpdateMaxBytes = 64 << 20
+	}
+	if c.UpdateStartupTimeoutS == 0 {
+		c.UpdateStartupTimeoutS = 30
+	}
+	if c.UpdateStableS == 0 {
+		c.UpdateStableS = 5
 	}
 }
 
@@ -90,38 +114,34 @@ func Save(dir string, c *Config) error {
 	return writeAtomic(filepath.Join(dir, "config.json"), b, 0o600)
 }
 
-// SaveCredentials는 자격증명을 권한 0600 파일에 저장한다.
-// 확인 필요: Windows는 DPAPI 보호로 바꿔야 한다 (security.md). 지금은 ProgramData 아래 0600 파일이다.
-func SaveCredentials(dir string, cr *api.Credentials) error {
-	b, _ := json.Marshal(cr) // #nosec G117 -- 자격증명 저장이 목적이다. 권한 0600 파일에만 쓴다
-	return writeAtomic(filepath.Join(dir, "credentials.json"), b, 0o600)
-}
-
-func LoadCredentials(dir string) (*api.Credentials, error) {
-	p := filepath.Join(dir, "credentials.json")
-	if runtime.GOOS != "windows" {
-		if st, err := os.Stat(p); err == nil && st.Mode().Perm()&0o077 != 0 {
-			return nil, fmt.Errorf("자격증명 파일 권한이 너무 넓습니다 (%v). chmod 600 %s", st.Mode().Perm(), p)
-		}
-	}
-	b, err := os.ReadFile(p)
-	if err != nil {
-		return nil, fmt.Errorf("자격증명이 없습니다. 'marine-agent enroll'로 등록하세요: %w", err)
-	}
-	var cr api.Credentials
-	if err := json.Unmarshal(b, &cr); err != nil {
-		return nil, err
-	}
-	return &cr, nil
-}
+var atomicWriteMu sync.Mutex
 
 func writeAtomic(p string, b []byte, mode os.FileMode) error {
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, b, mode); err != nil {
+	// Windows 파일 교체는 같은 프로세스의 동시 Rename도 거부할 수 있으므로 드문 설정 쓰기를 직렬화한다.
+	atomicWriteMu.Lock()
+	defer atomicWriteMu.Unlock()
+	// 고정 .tmp 파일을 열지 않아 동시 저장 충돌과 기존 심볼릭 링크를 따라 쓰는 일을 피한다.
+	f, err := os.CreateTemp(filepath.Dir(p), "."+filepath.Base(p)+"-*")
+	if err != nil {
 		return err
 	}
-	if err := os.Chmod(tmp, mode); err != nil {
+	// 오류 경로 정리용: 먼저 닫아야 Windows에서도 임시 파일을 지울 수 있다. 정상 경로의 닫기 오류는 아래에서 확인하고,
+	// Rename 뒤에는 임시 이름이 없으므로 여기서 생기는 오류는 버린다.
+	defer func() {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+	}()
+	if err := f.Chmod(mode); err != nil {
 		return err
 	}
-	return os.Rename(tmp, p)
+	if _, err := f.Write(b); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), p)
 }

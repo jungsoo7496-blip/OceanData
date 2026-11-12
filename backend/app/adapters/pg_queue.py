@@ -8,15 +8,16 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 from app.domain.ids import new_id
 from app.ports.clock import ClockPort
-from app.ports.queue import Job
+from app.ports.queue import Job, JobInfo
 
 DEFAULT_POLICY = {"priority": 0, "resource_class": "CPU", "gpu_fallback": "CPU", "max_attempts": 5, "lease_s": 600}
 
@@ -33,10 +34,19 @@ class PgQueue:
         return dict(row) if row else {**DEFAULT_POLICY, "max_attempts": self.max_attempts}
 
     def enqueue(self, job_type: str, payload: dict[str, Any], *, priority: int | None = None,
-                organization_id: str | None = None, dedupe_key: str | None = None) -> str:
+                organization_id: str | None = None, dedupe_key: str | None = None,
+                dedupe_active_only: bool = False, connection: Connection | None = None) -> str:
+        """작업을 넣는다. connection이 없으면 따로 커밋하고, 있으면 호출자 트랜잭션을 따른다 (같이 확정·취소).
+
+        dedupe_key의 유일 색인은 작업 상태와 무관하게 걸려 있어, 끝난 작업도 키를 쥔다 (기본: 한 번만 도는 단계에 맞다).
+        dedupe_active_only=True면 끝난(DONE·FAILED) 작업의 키를 먼저 놓아 대기·실행 중일 때만 막는다 —
+        정기·수동 백업처럼 여러 번 돌아야 하는 작업이 첫 작업이 끝난 뒤에도 옛 작업 ID만 돌려받던 문제를 막는다."""
         job_id = new_id("job")
         now = self.clock.now()
-        with self.engine.begin() as conn:
+        with (self.engine.begin() if connection is None else nullcontext(connection)) as conn:
+            if dedupe_key is not None and dedupe_active_only:
+                conn.execute(text("""UPDATE jobs SET dedupe_key = dedupe_key || '#' || job_id
+                                    WHERE dedupe_key = :dk AND status IN ('DONE', 'FAILED')"""), {"dk": dedupe_key})
             pol = self._policy(conn, job_type)
             row = conn.execute(
                 text("""
@@ -129,9 +139,30 @@ class PgQueue:
                                        WHERE status='RUNNING' AND lease_expires_at < :now"""), {"now": now})
             return int(res.rowcount or 0)
 
+    def count_active(self, job_type: str, organization_id: str, *, connection: Connection | None = None) -> int:
+        """기관의 대기·실행 중(QUEUED·RUNNING, 재시도 대기 포함) 작업 수 (예: 구간 클립 기관별 한도)."""
+        with (self.engine.connect() if connection is None else nullcontext(connection)) as conn:
+            n = conn.execute(text("""SELECT count(*) FROM jobs WHERE job_type = :t AND organization_id = :o
+                                     AND status IN ('QUEUED', 'RUNNING')"""),
+                             {"t": job_type, "o": organization_id}).scalar_one()
+        return int(n)
+
     def depth_by_type(self) -> dict[str, int]:
         with self.engine.connect() as conn:
             rows = conn.execute(
                 text("SELECT job_type, count(*) FROM jobs WHERE status='QUEUED' GROUP BY job_type")
             ).all()
         return {r[0]: int(r[1]) for r in rows}
+
+    def jobs_for_asset(self, job_type: str, asset_id: str, limit: int = 100) -> list[JobInfo]:
+        """한 자산에 걸린 작업을 최근 것부터 (예: 구간 클립 진행 상황, 09번 요구사항 7.2)."""
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text("""SELECT job_id, job_type, status, payload, attempts, last_error_code, created_at, updated_at
+                        FROM jobs WHERE job_type = :t AND asset_id = :a
+                        ORDER BY created_at DESC, job_id DESC LIMIT :n"""),
+                {"t": job_type, "a": asset_id, "n": limit},
+            ).mappings().all()
+        return [JobInfo(**{**dict(r), "attempts": int(r["attempts"]),
+                           "payload": r["payload"] if isinstance(r["payload"], dict) else json.loads(r["payload"])})
+                for r in rows]

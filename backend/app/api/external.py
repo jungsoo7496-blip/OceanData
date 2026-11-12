@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import client_ip, container, get_db, require
+from app.api.deps import DB, client_ip, container, require
 from app.container import Container
 from app.db.models import ExternalSource
 from app.domain.normalize import parse_rfc3339
@@ -75,12 +75,12 @@ def view(s: ExternalSource) -> dict[str, Any]:
 
 
 @router.get("/v1/external-sources")
-def list_sources(db: Session = Depends(get_db), _: Principal = Depends(require("external_source:read"))) -> dict:
+def list_sources(db: Session = DB, _: Principal = Depends(require("external_source:read"))) -> dict:
     return {"items": [view(s) for s in db.execute(select(ExternalSource).order_by(ExternalSource.source_id)).scalars()]}
 
 
 @router.post("/v1/external-sources", status_code=201)
-def create_source(body: SourceCreate, request: Request, db: Session = Depends(get_db),
+def create_source(body: SourceCreate, request: Request, db: Session = DB,
                   c: Container = Depends(container), p: Principal = Depends(require("external_source:write"))) -> dict:
     if db.get(ExternalSource, body.source_id) is not None:
         raise ProblemError("CONFLICT", detail="같은 source_id가 있습니다")
@@ -117,12 +117,18 @@ def _source(db: Session, source_id: str) -> ExternalSource:
 
 
 @router.patch("/v1/external-sources/{source_id}")
-def update_source(source_id: str, body: SourcePatch, request: Request, db: Session = Depends(get_db),
+def update_source(source_id: str, body: SourcePatch, request: Request, db: Session = DB,
                   c: Container = Depends(container), p: Principal = Depends(require("external_source:write"))) -> dict:
     fields = body.model_dump(exclude_unset=True)
     if not fields:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "", "code": "minProperties",
                                                         "message": "바꿀 값이 없습니다"}])
+    null_fields = [name for name, value in fields.items() if value is None and name != "rate_limit_per_min"]
+    if null_fields:
+        raise ProblemError("VALIDATION_ERROR", errors=[
+            {"pointer": f"/{name}", "code": "not_nullable", "message": "비울 수 없는 항목입니다"}
+            for name in null_fields
+        ])
     s = _source(db, source_id)
     for k, v in fields.items():
         setattr(s, k, v)
@@ -138,7 +144,7 @@ class Backfill(BaseModel):
 
 
 @router.post("/v1/external-sources/{source_id}/backfill", status_code=202)
-def backfill(source_id: str, body: Backfill, request: Request, db: Session = Depends(get_db),
+def backfill(source_id: str, body: Backfill, request: Request, db: Session = DB,
              c: Container = Depends(container), p: Principal = Depends(require("external_source:write"))) -> dict:
     s = _source(db, source_id)
     if not s.supports_backfill:
@@ -155,7 +161,8 @@ def backfill(source_id: str, body: Backfill, request: Request, db: Session = Dep
     while cur < end:  # 한 작업은 max_window_s까지
         nxt = min(end, cur + timedelta(seconds=s.max_window_s))
         c.queue.enqueue("collect_source", {"source_id": s.source_id, "since": iso(cur), "until": iso(nxt)},
-                        dedupe_key=f"collect:{s.source_id}:{int(cur.timestamp())}:{int(nxt.timestamp())}")
+                        dedupe_key=f"collect:{s.source_id}:{int(cur.timestamp())}:{int(nxt.timestamp())}",
+                        dedupe_active_only=True)  # 같은 구간을 다시 요청하면 끝난 작업이 막지 않고 다시 돈다
         jobs += 1
         cur = nxt
     c.audit.record("EXTERNAL_SOURCE_BACKFILL", principal=p, target_type="ExternalSource", target_id=s.source_id,

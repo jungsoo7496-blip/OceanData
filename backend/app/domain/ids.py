@@ -15,7 +15,7 @@ PREFIXES = {
     "access_request": "acr", "grant": "grt", "distribution": "dlv", "job": "job", "record": "rec",
     "report": "rpt", "webhook": "whk", "api_key": "key", "user": "usr", "audit": "aud",
     "agreement": "agr", "integration_card": "icd", "break_glass": "brk", "deletion_certificate": "dlc",
-    "incident": "inc", "inspection": "isp", "review": "rvw", "backup_run": "bkr",
+    "incident": "inc", "inspection": "isp", "review": "rvw", "backup_run": "bkr", "policy_draft": "pdr",
 }
 
 

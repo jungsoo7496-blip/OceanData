@@ -17,6 +17,7 @@ from app.config import Settings
 from app.db.session import make_engine, make_sessionmaker
 from app.ports import ClockPort, IdentityPort, NotifierPort, QueuePort, StoragePort
 from app.services import sharing as _sharing_guard  # noqa: F401 - 공유 등급 우회 방지 가드 등록 (13번)
+from app.services import webhooks as _webhook_outbox  # noqa: F401 - 웹훅 outbox 발행 등록 (04번)
 from app.services.audit import AuditLogger
 from app.services.auth import Authenticator
 from app.services.tokens import MachineTokenIssuer
@@ -35,6 +36,9 @@ class Container:
     audit: AuditLogger
     machine_tokens: MachineTokenIssuer
     authenticator: Authenticator
+    # WARM 계층 저장소 (08번 요구사항 9). None이면 HOT 저장소(storage)를 함께 쓰고 버킷만 다르다.
+    # 자산 객체를 읽을 때는 app.services.tiers.locate()로 계층·존·키를 정한다
+    warm_storage: StoragePort | None = None
 
 
 def build_container(settings: Settings, **overrides: Any) -> Container:
@@ -44,6 +48,8 @@ def build_container(settings: Settings, **overrides: Any) -> Container:
         settings.idp_issuer_url, settings.idp_audience, internal_url=settings.idp_internal_url,
         mfa_acr_values=settings.idp_mfa_acr_values, timeout_s=settings.readiness_timeout_s)
     machine = MachineTokenIssuer(settings.device_token_signing_key.get_secret_value(), settings.device_token_ttl_s)
+    warm = overrides.get("warm_storage") or (
+        None if settings.warm_shares_hot_storage else S3Storage(settings.warm_s3_settings()))
     return Container(
         settings=settings, engine=engine, sessionmaker=make_sessionmaker(engine), clock=clock,
         storage=overrides.get("storage") or S3Storage(settings),
@@ -55,4 +61,5 @@ def build_container(settings: Settings, **overrides: Any) -> Container:
         audit=AuditLogger(engine, clock),
         machine_tokens=machine,
         authenticator=Authenticator(identity, machine, clock),
+        warm_storage=warm,
     )

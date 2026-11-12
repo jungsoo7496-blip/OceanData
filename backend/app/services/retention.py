@@ -22,6 +22,7 @@ from app.db.models import (
     DeletionCertificate,
     OrgQuota,
     RetentionPolicy,
+    Upload,
     User,
 )
 from app.domain.ids import new_id
@@ -34,6 +35,7 @@ FOREVER = datetime(9999, 12, 31, tzinfo=UTC)
 VARIANT_TARGET = {"ORIGINAL": "RAW", "PROXY": "PROXY", "THUMBNAIL": "THUMBNAIL", "SAMPLE_FRAME": "THUMBNAIL",
                   "CLIP": "CLIP", "DEID": "DEID", "LABEL": "DEID", "SENSOR_EXPORT": "SENSOR_EXPORT"}
 ALERT_STEPS = (80, 90, 100)
+VERIFYING_INGEST_STATES = ("RECEIVED", "VALIDATING")
 
 
 def target_for(asset: Asset) -> str:
@@ -97,21 +99,63 @@ class DeletionRefused(Exception):
         self.code, self.detail, self.affected = code, detail, affected or []
 
 
-def with_descendants(db: Session, roots: list[Asset]) -> list[Asset]:
-    """원 자산을 지우면 그 파생본도 함께 지운다 (계보로 찾음)."""
+class DeletionStorageFailed(Exception):
+    """저장소가 일부 객체를 지우지 못했다 — 삭제를 확정하지 않는다.
+
+    이미 지운 객체는 다시 요청하면 '이미 없음'으로 넘어간다 (ADR-0055)."""
+
+    def __init__(self, failed: list[dict[str, str]]) -> None:
+        super().__init__(f"저장소 객체 {len(failed)}개를 지우지 못했습니다")
+        self.failed = failed
+
+
+def _purge_object(place: Any, key: str, asset_id: str) -> bool:
+    """객체 하나를 지운다. 이미 없으면 지운 것이다. 지웠는지 확인되지 않으면 False.
+
+    삭제 호출이 실패해도 객체가 실제로 없으면(이미 지워졌다) 성공으로 본다. 있거나 확인할 수 없으면 실패다."""
+    try:
+        place.storage.delete_object(place.bucket, key)
+        return True
+    except Exception as exc:  # noqa: BLE001 - 아래에서 실제로 남았는지 확인한다
+        log.warning("delete_object_failed", extra={"asset_id": asset_id, "tier": place.tier,
+                                                   "error_type": type(exc).__name__})
+    try:
+        return bool(place.storage.head_object(place.bucket, key) is None)
+    except Exception:  # noqa: BLE001 - 확인할 수 없으면 지웠다고 말하지 않는다
+        return False
+
+
+def with_descendants(db: Session, roots: list[Asset], *, lock: bool = False) -> list[Asset]:
+    """원 자산을 지우면 그 파생본도 함께 지운다 (계보로 찾음).
+
+    lock이면(삭제) 단계마다 자산 행을 잠그고 최신 값으로 다시 읽은 뒤 그 파생본을 찾는다.
+    파생본을 만드는 작업(구간 클립)은 원 자산 행을 잠그고 살아 있는지 확인한 뒤 기록하므로, 그사이 확정된
+    파생본이 삭제·삭제 증명에서 빠지지 않는다 (ADR-0033). 기다리는 동안 다른 요청이 지운 자산은 뺀다.
+    잠금 순서는 자산 행 → 필요한 업로드 행(대기 없이) → 기관 쿼터 행 (delete_assets)."""
+    if lock:
+        roots = lock_live(db, [a.asset_id for a in roots])
     seen = {a.asset_id: a for a in roots}
     frontier = list(seen)
     while frontier:
         kids = db.execute(select(AssetLineage.child_asset_id).where(AssetLineage.parent_asset_id.in_(frontier))) \
             .scalars().all()
-        frontier = []
-        for k in kids:
-            if k not in seen:
-                a = db.get(Asset, k)
-                if a is not None and a.deleted_at is None:
-                    seen[k] = a
-                    frontier.append(k)
+        new = sorted(set(kids) - set(seen))
+        if lock:
+            found = lock_live(db, new)
+        else:
+            found = [a for a in (db.get(Asset, k) for k in new) if a is not None and a.deleted_at is None]
+        seen.update((a.asset_id, a) for a in found)
+        frontier = [a.asset_id for a in found]
     return list(seen.values())
+
+
+def lock_live(db: Session, asset_ids: list[str]) -> list[Asset]:
+    """자산 행을 asset_id 순으로 잠그고(FOR UPDATE) 최신 값으로 다시 읽는다. 이미 삭제된 자산은 뺀다."""
+    if not asset_ids:
+        return []
+    rows = db.execute(select(Asset).where(Asset.asset_id.in_(asset_ids)).order_by(Asset.asset_id).with_for_update()
+                      .execution_options(populate_existing=True)).scalars().all()
+    return [a for a in rows if a.deleted_at is None]
 
 
 def affected_by(db: Session, assets: list[Asset]) -> list[dict[str, Any]]:
@@ -134,6 +178,28 @@ def affected_by(db: Session, assets: list[Asset]) -> list[dict[str, Any]]:
     return out
 
 
+def _abort_pending_uploads(c: Container, db: Session, organization_id: str, assets: list[Asset]) -> set[str]:
+    from app.services.ingest import IngestService
+
+    if any(a.ingest_status in VERIFYING_INGEST_STATES for a in assets):
+        raise DeletionRefused("CONFLICT", "검증 중인 자산이 있습니다. 잠시 뒤 다시 시도하세요")
+    pending = {a.asset_id for a in assets if a.ingest_status == "UPLOADING"}
+    if not pending:
+        return pending
+
+    # 완료·만료는 업로드를 먼저 잠근다. 이미 자산을 잠근 삭제는 그 업로드를 기다리지 않는다.
+    uploads = db.scalars(select(Upload).where(
+        Upload.asset_id.in_(pending), Upload.organization_id == organization_id, Upload.status == "UPLOADING",
+    ).order_by(Upload.upload_id).with_for_update(skip_locked=True)).all()
+    if len(uploads) != len(pending) or {up.asset_id for up in uploads} != pending:
+        raise DeletionRefused("CONFLICT", "진행 중인 업로드를 확인할 수 없습니다. 잠시 뒤 다시 시도하세요")
+
+    service = IngestService(c, db)
+    for up in uploads:
+        service.abort(up, preserve_asset=True)
+    return pending
+
+
 def delete_assets(c: Container, db: Session, *, organization_id: str, assets: list[Asset], scope: str,
                   target_id: str, reason: str | None, requested_by: str, confirm_affected: bool) -> DeletionCertificate:
     held = [a.asset_id for a in assets if a.legal_hold]
@@ -141,29 +207,39 @@ def delete_assets(c: Container, db: Session, *, organization_id: str, assets: li
         raise DeletionRefused("CONFLICT", f"법적 보류 중인 자산이 있어 삭제할 수 없습니다 ({len(held)}건)",
                               [{"asset_id": x, "reason": "LEGAL_HOLD"} for x in held])
     affected = affected_by(db, assets)
+    granted = [x for x in affected if x["cited_by"] == "DATASET"]
+    if granted:  # 유효한 이용 권한이 있는 데이터셋 버전은 재확인으로도 지울 수 없다 — 철회가 먼저 (요구사항 5.3, T15-c)
+        raise DeletionRefused("CONFLICT", "유효한 이용 권한이 있는 데이터셋에 포함된 자산은 삭제할 수 없습니다. "
+                              "이용 권한을 먼저 철회하세요", granted)
     if affected and not confirm_affected:  # 영향 목록 확인 후 재확인 (요구사항 5.4)
-        raise DeletionRefused("CONFLICT", "인용 중인 증빙·데이터셋이 있습니다. confirm_affected=true로 다시 요청하세요",
+        raise DeletionRefused("CONFLICT", "인용 중인 증빙·보고서가 있습니다. confirm_affected=true로 다시 요청하세요",
                               affected)
+    aborted = _abort_pending_uploads(c, db, organization_id, assets)
     now = c.clock.now()
     objects: list[dict[str, Any]] = []
+    purge: list[tuple[Any, str, str]] = []  # (계층, 객체 키, 자산 ID) — DB가 받아들인 뒤에 지운다
     backed_up = False
     q = db.execute(select(OrgQuota).where(OrgQuota.organization_id == organization_id).with_for_update()) \
         .scalar_one_or_none()
     cert_id = new_id("deletion_certificate")
+    from app.services import tiers
+
+    used = tiers.in_use(c, db)
     for a in assets:
-        if a.storage_key and a.storage_zone:
-            try:
-                c.storage.delete_object(c.settings.buckets[a.storage_zone], a.storage_key)
-            except Exception as exc:  # noqa: BLE001 - 이미 없는 객체도 삭제 완료로 본다
-                log.warning("delete_object_failed", extra={"asset_id": a.asset_id, "error_type": type(exc).__name__})
+        # 바이너리가 없는 자산(C0, 취소된 업로드의 흔적)에는 지울 객체가 없다 — 증명에도 넣지 않는다
+        if a.asset_id not in aborted and a.has_binary and a.storage_key and a.storage_zone:
+            # 쓰는 모든 계층에서 지운다: 계층 이동 중 사본·유예 중인 원래 객체도 남기지 않는다 (08번 요구사항 9)
+            purge.extend((place, a.storage_key, a.asset_id) for place in tiers.zone_places(c, a.storage_zone, used))
             objects.append({"asset_id": a.asset_id, "object_key": a.storage_key, "checksum_sha256": a.checksum_sha256,
                             "byte_size": a.byte_size})
-            if q is not None and a.has_binary:
+            if q is not None:
                 if a.storage_zone == "QUARANTINE":
                     q.quarantine_bytes = max(0, q.quarantine_bytes - a.byte_size)
                 else:
                     q.used_bytes = max(0, q.used_bytes - a.byte_size)
-        if is_backup_target(a):
+                if a.backup_requested_at is not None:  # 신청 백업 용량도 뺀다 (백업 사본은 보존 주기 뒤 사라짐)
+                    q.backup_bytes = max(0, q.backup_bytes - a.byte_size)
+        if a.asset_id not in aborted and is_backup_target(a):
             backed_up = True
         a.deleted_at, a.deletion_certificate_id, a.storage_key, a.updated_at = now, cert_id, None, now
     cert = DeletionCertificate(
@@ -172,7 +248,10 @@ def delete_assets(c: Container, db: Session, *, organization_id: str, assets: li
         # 독립 백업 사본은 백업 보존 주기가 끝나면 사라진다 (요구사항 5.2)
         backup_copies_expire_at=now + timedelta(days=c.settings.backup_retention_days) if backed_up else None)
     db.add(cert)
-    db.flush()
+    db.flush()  # DB 제약(사유의 NUL 등)이 걸리면 여기서 멈춘다 — 저장소 객체는 아직 그대로다
+    failed = [{"asset_id": aid, "tier": place.tier} for place, key, aid in purge if not _purge_object(place, key, aid)]
+    if failed:  # 못 지운 객체를 '지웠다'고 증명하지 않는다. 호출자가 트랜잭션을 되돌린다 (재시도하면 이어서 지운다)
+        raise DeletionStorageFailed(failed)
     return cert
 
 
@@ -187,7 +266,8 @@ def certificate_view(cert: DeletionCertificate) -> dict[str, Any]:
 
 def _expired(db: Session, now: datetime) -> Any:
     return select(Asset).join(RetentionPolicy, RetentionPolicy.policy_id == Asset.retention_policy_id) \
-        .where(Asset.deleted_at.is_(None), Asset.retention_until <= now, RetentionPolicy.expiry_action == "DELETE")
+        .where(Asset.deleted_at.is_(None), Asset.retention_until <= now, RetentionPolicy.expiry_action == "DELETE",
+               Asset.ingest_status.not_in(("UPLOADING", *VERIFYING_INGEST_STATES)))
 
 
 def dry_run(db: Session, now: datetime) -> dict[str, Any]:
@@ -204,7 +284,13 @@ def dry_run(db: Session, now: datetime) -> dict[str, Any]:
         t[0] += 1
         t[1] += a.byte_size if a.has_binary else 0
         victims.append(a)
-    warnings = affected_by(db, victims)
+    warnings = [
+        {
+            **citation,
+            "reason": "IN_DATASET_VERSION" if citation["cited_by"] == "DATASET" else "CITED_BY_APPROVED_EVIDENCE",
+        }
+        for citation in affected_by(db, victims)
+    ]
     return {"generated_at": iso(now), "targets": [{"target": k, "count": v[0], "bytes": v[1]}
                                                    for k, v in sorted(targets.items())],
             "total_count": sum(v[0] for v in targets.values()), "total_bytes": sum(v[1] for v in targets.values()),
@@ -212,8 +298,14 @@ def dry_run(db: Session, now: datetime) -> dict[str, Any]:
 
 
 def execute_expired(c: Container, db: Session, now: datetime) -> list[DeletionCertificate]:
-    """만료 동작 실행 (요구사항 3.4). 기관별 삭제 증명 하나씩. 인용 중인 자산은 건너뛴다."""
-    rows = [a for a in db.execute(_expired(db, now)).scalars().all() if not a.legal_hold]
+    """만료 동작 실행 (요구사항 3.4). 기관별 삭제 증명 하나씩. 인용 중인 자산은 건너뛴다.
+
+    대상 자산 행을 asset_id 순으로 먼저 잠근다 — API 삭제·파생 작업(구간 클립)과 같은 '자산 행 → 기관 쿼터 행'
+    순서이고, 파생 작업이 원 자산을 잠그고 기록하는 중이면 끝날 때까지 기다린다.
+    기다리는 동안 바뀐 행(이미 삭제됨 등)은 다시 판단한다."""
+    stmt = _expired(db, now).order_by(Asset.asset_id).with_for_update(of=Asset) \
+        .execution_options(populate_existing=True)
+    rows = [a for a in db.execute(stmt).scalars().all() if not a.legal_hold]
     cited = {w["asset_id"] for w in affected_by(db, rows)}
     by_org: dict[str, list[Asset]] = {}
     for a in rows:
@@ -221,11 +313,23 @@ def execute_expired(c: Container, db: Session, now: datetime) -> list[DeletionCe
             by_org.setdefault(a.organization_id, []).append(a)
     certs = []
     for org, assets in sorted(by_org.items()):
-        certs.append(delete_assets(c, db, organization_id=org, assets=assets, scope="RETENTION",
-                                   target_id=f"retention-{now.date().isoformat()}", reason="보존 기간 만료",
-                                   requested_by="SERVICE", confirm_affected=False))
+        try:
+            # 기관마다 따로 확정한다: 저장소 삭제가 실패한 기관의 DB 변경만 되돌리고 앞 기관의 삭제는 남긴다 (ADR-0055)
+            with db.begin_nested():
+                cert = delete_assets(c, db, organization_id=org, assets=assets, scope="RETENTION",
+                                     target_id=f"retention-{now.date().isoformat()}", reason="보존 기간 만료",
+                                     requested_by="SERVICE", confirm_affected=False)
+        except DeletionStorageFailed as exc:
+            log.error("retention_delete_failed", extra={"organization_id": org, "objects": len(exc.failed)})
+            c.notifier.send(Notification(
+                kind="retention.delete_failed", organization_id=None, subject="보존 만료 삭제 실패",
+                body=f"기관 {org}: 저장소 객체 {len(exc.failed)}개를 지우지 못해 이번 삭제를 확정하지 않았습니다. "
+                     "저장소가 돌아오면 다음 실행이 이어서 지웁니다",
+                data={"organization_id": org, "objects": len(exc.failed)}))
+            continue
+        certs.append(cert)
         c.audit.record("RETENTION_DELETED", actor_kind="SERVICE", actor_id="retention", organization_id=org,
-                       target_type="DeletionCertificate", target_id=certs[-1].certificate_id,
+                       target_type="DeletionCertificate", target_id=cert.certificate_id,
                        details={"count": len(assets)})
     return certs
 
@@ -248,16 +352,26 @@ def notify_expiring(c: Container, db: Session, now: datetime) -> int:
 
 
 def reconcile(c: Container, db: Session) -> list[dict[str, Any]]:
-    """DB 사용량과 스토리지 실측 대조 (요구사항 2.3). 차이가 있으면 운영자에게 알린다."""
+    """DB 사용량과 스토리지 실측 대조 (요구사항 2.3). 차이가 있으면 운영자에게 알린다.
+
+    HOT·WARM 계층 버킷을 모두 잰다. 계층 이동 중 사본과 유예 중인 원래 객체(잠시 두 벌)는 빼고 비교한다."""
+    from app.services import tier_mover, tiers
+
+    zones = ("RAW", "PROCESSED", "EVIDENCE", "QUARANTINE")
+    places = tiers.all_places(c, zones, tiers.in_use(c, db))
     diffs = []
     for q in db.execute(select(OrgQuota)).scalars():
         measured = 0
-        for zone in ("RAW", "PROCESSED", "EVIDENCE", "QUARANTINE"):
+        for place in places:
             try:
-                measured += sum(o.size for o in c.storage.list_objects(c.settings.buckets[zone],
-                                                                       q.organization_id + "/"))
+                measured += sum(o.size for o in place.storage.list_objects(place.bucket, q.organization_id + "/"))
             except Exception as exc:  # noqa: BLE001 - 버킷이 없으면 0으로 보고 기록만
-                log.warning("reconcile_list_failed", extra={"zone": zone, "error_type": type(exc).__name__})
+                log.warning("reconcile_list_failed", extra={"zone": place.zone, "tier": place.tier,
+                                                            "error_type": type(exc).__name__})
+        try:
+            measured -= tier_mover.transient_bytes(c, db, q.organization_id, zones)
+        except Exception as exc:  # noqa: BLE001 - 확인하지 못하면 빼지 않는다 (차이로 드러난다)
+            log.warning("reconcile_transient_failed", extra={"error_type": type(exc).__name__})
         recorded = q.used_bytes + q.quarantine_bytes
         if measured != recorded:
             diffs.append({"organization_id": q.organization_id, "recorded": recorded, "measured": measured})

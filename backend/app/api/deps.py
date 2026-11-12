@@ -41,7 +41,15 @@ def get_db(c: Container = Depends(container)) -> Iterator[Session]:
         db.close()
 
 
-def get_principal(request: Request, db: Session = Depends(get_db), c: Container = Depends(container)) -> Principal:
+# 모든 경로가 DB 세션을 이 표시로 받는다. scope="function"이면 경로 함수가 끝난 직후, 응답을 보내기 전에
+# get_db의 마무리(커밋)가 돈다. FastAPI 0.118 이상에서 기본(request 범위)은 응답을 보낸 뒤에 마무리하므로
+# 커밋이 실패해도 클라이언트는 이미 2xx를 받고 작업은 없다. 의존성 캐시 키에 범위가 들어가서 한 곳이라도
+# `Depends(get_db)`로 받으면 같은 요청 안에서 세션이 둘로 갈린다 — 시험이 모든 경로를 훑는다
+# (tests/unit/test_db_dependency_scope.py). ADR-0053.
+DB = Depends(get_db, scope="function")
+
+
+def get_principal(request: Request, db: Session = DB, c: Container = Depends(container)) -> Principal:
     # 요청으로 받은 기관 ID로 범위를 바꾸지 않는다 (02번 요구사항 2.6)
     for name in FORBIDDEN_SCOPE_INPUTS:
         if name in request.query_params:
@@ -53,20 +61,24 @@ def get_principal(request: Request, db: Session = Depends(get_db), c: Container 
                                                         "message": "기관 범위는 인증 정보로만 정합니다"}])
     auth = request.headers.get("authorization", "")
     scheme, _, token = auth.partition(" ")
+    audit_path = getattr(request.scope.get("route"), "path", None) or request.url.path[:100]
     if scheme.lower() != "bearer" or not token.strip():
         c.audit.record("AUTH_FAILED", result="DENIED", source_ip=client_ip(request),
-                       details={"reason": "missing_token", "path": request.url.path})
+                       details={"reason": "missing_token", "path": audit_path})
         raise ProblemError("UNAUTHENTICATED", headers={"WWW-Authenticate": "Bearer"})
     try:
         principal = c.authenticator.authenticate(db, token.strip())
     except AuthFailed as exc:
         c.audit.record("AUTH_FAILED", result="DENIED", source_ip=client_ip(request),
-                       details={"reason": exc.reason, "path": request.url.path})
+                       details={"reason": exc.reason, "path": audit_path})
         raise ProblemError("UNAUTHENTICATED", headers={"WWW-Authenticate": "Bearer"}) from None
     organization_id_var.set(principal.organization_id)
     request.state.principal = principal
     limiter = request.app.state.__dict__.setdefault("limiter", Limiter(c.settings.rate_limit_per_minute))
     limiter.check(f"{principal.kind}:{principal.principal_id}")  # 클라이언트별 분당 요청 수 (04번 요구사항 9)
+    from app.api.contract_query import check_request_against_contract
+
+    check_request_against_contract(request)  # 조회 조건은 계약 스키마로 (인증 뒤, 04번 요구사항 10.2)
     return principal
 
 
@@ -88,7 +100,7 @@ def require(action: str) -> Callable[..., Principal]:
 
 
 def load_scoped(db: Session, c: Container, request: Request, model: type[T], ident: str, principal: Principal,
-                *, purpose: str = "metadata") -> T:
+                *, purpose: str = "metadata", audit_device_scope: bool = False) -> T:
     try:
         return get_scoped(db, model, ident, principal, purpose=purpose)
     except NotFoundInScope as exc:
@@ -96,6 +108,9 @@ def load_scoped(db: Session, c: Container, request: Request, model: type[T], ide
             c.audit.record("CROSS_ORG_ACCESS_ATTEMPT", result="DENIED", principal=principal,
                            organization_id=exc.owner_org, target_type=exc.model, target_id=ident,
                            source_ip=client_ip(request), details={"path": request.url.path})
+        elif audit_device_scope and principal.kind == "DEVICE":
+            c.audit.record("DEVICE_SCOPE_VIOLATION", result="DENIED", principal=principal,
+                           organization_id=principal.organization_id, target_type=exc.model, target_id=ident)
         raise ProblemError("NOT_FOUND") from None
 
 

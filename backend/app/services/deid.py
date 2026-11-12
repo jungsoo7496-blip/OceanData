@@ -43,7 +43,7 @@ def _size(a: Asset) -> tuple[int, int]:
 
 def deidentify(c: Container, asset_id: str, job_id: str | None, payload: dict[str, Any]) -> str:
     """Deid_Job (요구사항 1~3). payload: classes, method, tracking, manual_regions(검수자 추가 영역)."""
-    from app.services.pipeline import _run, create_derived, local_copy, tool_version
+    from app.services.pipeline import _run, create_derived, local_copy, tool_version, work_dir
 
     s = c.settings
     with c.sessionmaker() as db:
@@ -57,7 +57,7 @@ def deidentify(c: Container, asset_id: str, job_id: str | None, payload: dict[st
     width, height = _size(a)
     detector = build_detector(s)
     started = time.perf_counter()
-    with local_copy(c, a) as src, tempfile.TemporaryDirectory(prefix="marine-deid-") as tmp:
+    with local_copy(c, a) as src, tempfile.TemporaryDirectory(prefix="marine-deid-", dir=work_dir(c)) as tmp:
         found = detector.detect(a, src, classes, s.deid_sample_fps)
         regions = rules.track(found, s.deid_track_gap_s) if payload.get("tracking", s.deid_tracking) else found
         manual = [rules.Region("MANUAL", float(r["t0"]), float(r["t1"]), int(r["x"]), int(r["y"]), int(r["w"]),

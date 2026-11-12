@@ -1,8 +1,9 @@
-// 자산 탐색·상세·영상 뷰어 (09번 요구사항 6, 7).
-import { useQuery } from '@tanstack/react-query'
-import { Alert, Button, Card, Descriptions, Input, Select, Space, Table, Tag, Typography } from 'antd'
-import { useState } from 'react'
+// 자산 탐색·상세·영상 뷰어·구간 클립 (09번 요구사항 6, 7).
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Alert, App, Button, Card, Descriptions, Input, InputNumber, Select, Space, Table, Tag, Typography } from 'antd'
+import { useRef, useState, type RefObject } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
+import type { components } from '../contract/api.gen'
 import { api, ApiError, post, type Asset, type Device, type Me, type Page, type Session } from '../lib/api'
 import { bytes, kst, QUARANTINE_LABEL, SCOPE_LABEL, STATUS_LABEL } from '../lib/format'
 import { explain } from '../lib/problems'
@@ -75,6 +76,83 @@ export function Assets({ me }: { me: Me }) {
   )
 }
 
+type ClipJob = components['schemas']['ClipJob']
+const CLIP_STATUS: Record<ClipJob['status'], { label: string; color: string }> = {
+  QUEUED: { label: '대기', color: 'default' }, RUNNING: { label: '만드는 중', color: 'processing' },
+  DONE: { label: '완료', color: 'green' }, FAILED: { label: '실패', color: 'red' },
+}
+const CLIP_ERROR: Record<string, string> = {
+  SOURCE_UNAVAILABLE: '원 영상이 격리·삭제되어 만들지 못했습니다',
+  CLIP_ENCODE_FAILED: '영상을 자르지 못했습니다 (파일 손상 가능 — 운영기관에 문의)',
+  QUOTA_EXCEEDED: '기관 저장 쿼터가 모자라 저장하지 못했습니다 (자료를 정리하거나 쿼터 증설을 문의한 뒤 다시 요청)',
+}
+const CLIP_SOURCE_STATUS = ['REGISTERED', 'PROXIED', 'READY_PRIVATE']
+const mmss = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`
+const ms = (s: number) => Math.round(s * 1000) / 1000
+
+// 구간 클립 내보내기 (요구사항 7.2): 재생 위치나 숫자로 구간을 정하면 작업 큐가 원 영상에서 잘라 파생 자산(CLIP)으로 연결한다
+function ClipCard({ asset, videoRef, playing }: { asset: Asset; videoRef: RefObject<HTMLVideoElement>; playing: boolean }) {
+  const { message } = App.useApp()
+  const qc = useQueryClient()
+  const duration = asset.video_ext?.duration_s
+  const [start, setStart] = useState<number | null>(null)
+  const [end, setEnd] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const clips = useQuery({
+    queryKey: ['clips', asset.asset_id],
+    queryFn: () => api<{ items: ClipJob[] }>(`/v1/assets/${asset.asset_id}/clips`),
+    refetchInterval: (q) => (q.state.data?.items.some((c) => c.status === 'QUEUED' || c.status === 'RUNNING') ? 5000 : false),
+  })
+  const create = useMutation({
+    mutationFn: () => post<ClipJob>(`/v1/assets/${asset.asset_id}/clips`, { start_s: start, end_s: end }),
+    onSuccess: () => {
+      setError(null)
+      void message.success('클립 작업을 등록했습니다. 완료되면 아래 목록과 계보에 나타납니다')
+      void qc.invalidateQueries({ queryKey: ['clips', asset.asset_id] })
+      void qc.invalidateQueries({ queryKey: ['lineage', asset.asset_id] })
+    },
+    onError: (e) => setError(e instanceof ApiError
+      ? (e.problem.errors?.map((x) => x.message).join(' / ') || e.problem.detail || explain(e.code).cause) : String(e)),
+  })
+  const here = (set: (v: number) => void) => {
+    const t = videoRef.current?.currentTime
+    if (t !== undefined) set(ms(t))
+  }
+  const ready = CLIP_SOURCE_STATUS.includes(asset.ingest_status) && !!duration
+  const invalid = start === null || end === null || end <= start || (!!duration && end > duration)
+  return (
+    <Card title="구간 클립 내보내기">
+      {!ready ? (
+        <Alert type="info" showIcon message={duration ? '이 상태의 영상은 자를 수 없습니다' : '영상 길이를 아직 모릅니다. 메타 추출이 끝나면 자를 수 있습니다'} />
+      ) : (
+        <Space direction="vertical" style={{ width: '100%' }}>
+          {error && <Alert type="error" showIcon message={error} closable onClose={() => setError(null)} />}
+          <Space wrap>
+            <InputNumber aria-label="시작 (초)" addonBefore="시작" addonAfter="초" min={0} max={duration} step={0.1} value={start} onChange={(v) => setStart(v)} />
+            <Button onClick={() => here(setStart)} disabled={!playing}>현재 위치를 시작으로</Button>
+            <InputNumber aria-label="끝 (초)" addonBefore="끝" addonAfter="초" min={0} max={duration} step={0.1} value={end} onChange={(v) => setEnd(v)} />
+            <Button onClick={() => here(setEnd)} disabled={!playing}>현재 위치를 끝으로</Button>
+            <Button type="primary" disabled={invalid} loading={create.isPending} onClick={() => create.mutate()}>클립 만들기</Button>
+          </Space>
+          <Typography.Text type="secondary">
+            영상 길이 {mmss(duration)} · 원 영상에서 프레임 단위로 다시 인코딩해 자르며, 결과는 이 영상의 파생 자산(CLIP, 비공개)이 됩니다.
+            {!playing && ' 위에서 프록시를 재생하면 재생 위치로 구간을 정할 수 있습니다.'}
+          </Typography.Text>
+        </Space>
+      )}
+      <Table size="small" style={{ marginTop: 16 }} rowKey="job_id" loading={clips.isLoading} pagination={false}
+        locale={{ emptyText: '요청한 클립이 없습니다' }} dataSource={clips.data?.items ?? []}
+        columns={[
+          { title: '구간', key: 'r', render: (_, c) => `${mmss(c.start_s)} ~ ${mmss(c.end_s)} (${ms(c.end_s - c.start_s)}초)` },
+          { title: '요청', dataIndex: 'requested_at', render: kst },
+          { title: '상태', key: 's', render: (_, c) => <Tag color={CLIP_STATUS[c.status].color}>{CLIP_STATUS[c.status].label}</Tag> },
+          { title: '결과', key: 'o', render: (_, c) => c.clip_asset_id ? <Link to={`/assets/${c.clip_asset_id}`}>클립 자산 보기</Link>
+            : c.status === 'FAILED' ? (CLIP_ERROR[c.error_code ?? ''] ?? c.error_code ?? '실패') : c.status === 'DONE' ? '삭제됨' : '—' },
+        ]} />
+    </Card>
+  )
+}
+
 interface Lineage { descendants: { asset_id: string; relation: string }[]; ancestors: { asset_id: string; relation: string }[] }
 
 export function AssetDetail({ me }: { me: Me }) {
@@ -82,6 +160,7 @@ export function AssetDetail({ me }: { me: Me }) {
   const asset = useQuery({ queryKey: ['asset', assetId], queryFn: () => api<Asset>(`/v1/assets/${assetId}`) })
   const lineage = useQuery({ queryKey: ['lineage', assetId], queryFn: () => api<Lineage>(`/v1/assets/${assetId}/lineage`) })
   const [video, setVideo] = useState<string | null>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
   const [error, setError] = useState<string | null>(null)
   const proxy = lineage.data?.descendants.find((d) => d.relation === 'PROXY')
   const isOrg = me.roles.some((r) => r.startsWith('ORG_'))
@@ -123,13 +202,14 @@ export function AssetDetail({ me }: { me: Me }) {
       {proxy && isOrg && (
         <Card title="프록시 재생">
           {video ? (
-            <video src={video} controls style={{ maxWidth: '100%' }} aria-label="프록시 영상" />
+            <video ref={videoRef} src={video} controls style={{ maxWidth: '100%' }} aria-label="프록시 영상" />
           ) : (
             <Button type="primary" onClick={() => void play(proxy.asset_id)}>재생</Button>
           )}
-          <Typography.Paragraph type="secondary">구간 클립 내보내기는 준비 중입니다 (09번 요구사항 7.2).</Typography.Paragraph>
         </Card>
       )}
+      {isOrg && a.organization_id === me.organization_id && a.data_type === 'VIDEO' && a.has_binary
+        && ['ORIGINAL', 'CLIP'].includes(a.variant) && <ClipCard asset={a} videoRef={videoRef} playing={!!video} />}
       {env?.observations?.length ? (
         <Card title="촬영 당시 환경 (가장 가까운 공공 관측)">
           <Table size="small" pagination={false} rowKey="metric" dataSource={env.observations}

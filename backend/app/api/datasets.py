@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import client_ip, container, get_db, require
+from app.api.deps import DB, client_ip, container, require
 from app.container import Container
 from app.db.models import (
     AccessDecision,
@@ -59,8 +59,16 @@ def _load_dataset(db: Session, p: Principal, dataset_id: str) -> Dataset:
     return ds
 
 
-def _view(db: Session, p: Principal, ds: Dataset) -> dict:
-    return datasets.dataset_view(db, ds, datasets.visible_versions(db, ds, consumer=_consumer(p)))
+def _with_samples(c: Container, view: dict, versions: list[DatasetVersion]) -> dict:
+    """최신 READY 버전의 샘플 썸네일 단기 URL (요구사항 7.1). 보이는 버전에서만 고른다."""
+    ready = [v for v in versions if v.status == "READY"]
+    samples = datasets.sample_urls(c, ready[-1] if ready else None)
+    return {**view, "samples": samples} if samples else view
+
+
+def _view(db: Session, c: Container, p: Principal, ds: Dataset) -> dict:
+    vs = datasets.visible_versions(db, ds, consumer=_consumer(p))
+    return _with_samples(c, datasets.dataset_view(db, ds, vs), vs)
 
 
 class DatasetCreate(BaseModel):
@@ -69,7 +77,7 @@ class DatasetCreate(BaseModel):
 
 
 @router.post("/v1/datasets", status_code=201)
-def create_dataset(body: DatasetCreate, request: Request, db: Session = Depends(get_db),
+def create_dataset(body: DatasetCreate, request: Request, db: Session = DB,
                    c: Container = Depends(container), p: Principal = Depends(require("dataset:write"))) -> dict:
     ds = Dataset(dataset_id=new_id("dataset"), title=body.title, published=False, created_by=p.principal_id,
                  created_at=c.clock.now())
@@ -81,7 +89,8 @@ def create_dataset(body: DatasetCreate, request: Request, db: Session = Depends(
 
 
 @router.get("/v1/datasets")
-def list_datasets(db: Session = Depends(get_db), p: Principal = Depends(require("dataset:read"))) -> dict:
+def list_datasets(db: Session = DB, c: Container = Depends(container),
+                  p: Principal = Depends(require("dataset:read"))) -> dict:
     stmt = select(Dataset).order_by(Dataset.dataset_id)
     if _consumer(p):
         stmt = stmt.where(Dataset.published.is_(True))
@@ -92,25 +101,25 @@ def list_datasets(db: Session = Depends(get_db), p: Principal = Depends(require(
         vs = datasets.visible_versions(db, ds, consumer=_consumer(p))
         if _consumer(p) and not vs:
             continue
-        out.append(datasets.dataset_view(db, ds, vs))
+        out.append(_with_samples(c, datasets.dataset_view(db, ds, vs), vs))
     return {"items": out, "next_cursor": None}
 
 
 @router.get("/v1/datasets/{dataset_id}")
-def get_dataset(dataset_id: str, db: Session = Depends(get_db),
+def get_dataset(dataset_id: str, db: Session = DB, c: Container = Depends(container),
                 p: Principal = Depends(require("dataset:read"))) -> dict:
-    return _view(db, p, _load_dataset(db, p, dataset_id))
+    return _view(db, c, p, _load_dataset(db, p, dataset_id))
 
 
 class VersionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
-    item_asset_ids: list[str] = Field(min_length=1, max_length=1000)
+    item_asset_ids: list[str] = Field(min_length=1, max_length=20000)
     data_card: dict[str, Any]
 
 
 @router.post("/v1/datasets/{dataset_id}/versions", status_code=201)
-def create_version(dataset_id: str, body: VersionCreate, request: Request, db: Session = Depends(get_db),
+def create_version(dataset_id: str, body: VersionCreate, request: Request, db: Session = DB,
                    c: Container = Depends(container), p: Principal = Depends(require("dataset:write")),
                    idempotency_key: str | None = Header(default=None)) -> JSONResponse:
     def create() -> tuple[int, dict]:
@@ -120,8 +129,15 @@ def create_version(dataset_id: str, body: VersionCreate, request: Request, db: S
         if db.execute(select(DatasetVersion).where(DatasetVersion.dataset_id == ds.dataset_id,
                                                    DatasetVersion.version == body.version)).scalar() is not None:
             raise ProblemError("CONFLICT", detail="같은 버전이 이미 있습니다 (버전은 바꿀 수 없고 새 번호로 만든다)")
-        v = datasets.build_version(c, db, ds, body.version, sorted(set(body.item_asset_ids)), body.data_card,
-                                   p.principal_id)
+        ids = sorted(set(body.item_asset_ids))
+        if len(ids) > c.settings.dataset_sync_max_items:  # 큰 버전은 작업 큐에서 (13번 작업 32)
+            bv, job_id = datasets.start_build(c, db, ds, body.version, ids, body.data_card, p.principal_id)
+            c.audit.record("DATASET_VERSION_BUILD_STARTED", principal=p, target_type="DatasetVersion",
+                           target_id=bv.dataset_version_id, source_ip=client_ip(request),
+                           details={"items": bv.item_count, "job_id": job_id})
+            return 202, {"dataset_version_id": bv.dataset_version_id, "version": bv.version, "status": "BUILDING",
+                         "item_count": bv.item_count, "job_id": job_id}
+        v = datasets.build_version(c, db, ds, body.version, ids, body.data_card, p.principal_id)
         c.audit.record("DATASET_VERSION_CREATED", principal=p, target_type="DatasetVersion",
                        target_id=v.dataset_version_id, source_ip=client_ip(request),
                        details={"items": v.item_count, "manifest_sha256": v.manifest_sha256})
@@ -136,7 +152,7 @@ def create_version(dataset_id: str, body: VersionCreate, request: Request, db: S
 
 
 @router.get("/v1/datasets/{dataset_id}/versions/{dataset_version_id}/lineage")
-def get_version_lineage(dataset_id: str, dataset_version_id: str, db: Session = Depends(get_db),
+def get_version_lineage(dataset_id: str, dataset_version_id: str, db: Session = DB,
                         p: Principal = Depends(require("dataset:lineage"))) -> dict:
     """항목별 원본·처리 모델·검수자 (13번 요구사항 5.3, 14번 요구사항 3.1). 제공기관은 자기 항목만."""
     ds = _load_dataset(db, p, dataset_id)
@@ -144,20 +160,23 @@ def get_version_lineage(dataset_id: str, dataset_version_id: str, db: Session = 
     org = None if _operator(p) else p.organization_id
     if v is None or v.dataset_id != ds.dataset_id or (org is not None and org not in v.provider_organization_ids):
         raise ProblemError("NOT_FOUND")
+    if v.status != "READY":
+        raise ProblemError("CONFLICT", detail=f"아직 다 만들지 못한 버전입니다 ({v.status})")
     return datasets.version_lineage(db, v, org)
 
 
 @router.post("/v1/datasets/{dataset_id}/publish")
-def publish_dataset(dataset_id: str, request: Request, db: Session = Depends(get_db),
+def publish_dataset(dataset_id: str, request: Request, db: Session = DB,
                     c: Container = Depends(container), p: Principal = Depends(require("dataset:write"))) -> dict:
     ds = db.get(Dataset, dataset_id, with_for_update=True)
     if ds is None:
         raise ProblemError("NOT_FOUND")
     vs = datasets.visible_versions(db, ds, consumer=False)
-    if not vs:
-        raise ProblemError("RULE_VIOLATION", detail="버전이 없는 데이터셋은 게시할 수 없습니다",
-                           unmet_conditions=[{"condition": "데이터셋 버전 1개 이상", "actual": "0"}])
-    problems = contracts.schema_problems("dataset-version-manifest", vs[-1].manifest)
+    ready = [v for v in vs if v.status == "READY"]  # 다 만든 버전 기준 (13번 작업 32)
+    if not ready:
+        raise ProblemError("RULE_VIOLATION", detail="다 만든 버전이 없는 데이터셋은 게시할 수 없습니다",
+                           unmet_conditions=[{"condition": "READY 데이터셋 버전 1개 이상", "actual": "0"}])
+    problems = contracts.schema_problems("dataset-version-manifest", ready[-1].manifest)
     if problems:  # 데이터 카드 필수 항목 (요구사항 6.2)
         raise ProblemError("RULE_VIOLATION", detail="데이터 카드 필수 항목이 비어 있습니다",
                            unmet_conditions=[{"condition": x.pointer, "actual": x.message} for x in problems[:20]])
@@ -188,7 +207,7 @@ class AccessCreate(BaseModel):
 
 
 @router.post("/v1/access-requests", status_code=201)
-def create_access_request(body: AccessCreate, request: Request, db: Session = Depends(get_db),
+def create_access_request(body: AccessCreate, request: Request, db: Session = DB,
                           c: Container = Depends(container), p: Principal = Depends(require("access_request:create")),
                           idempotency_key: str | None = Header(default=None)) -> JSONResponse:
     def create() -> tuple[int, dict]:
@@ -221,7 +240,7 @@ def _requests_for(db: Session, p: Principal) -> Any:
 
 
 @router.get("/v1/access-requests")
-def list_access_requests(db: Session = Depends(get_db), p: Principal = Depends(require("access_request:read"))) -> dict:
+def list_access_requests(db: Session = DB, p: Principal = Depends(require("access_request:read"))) -> dict:
     return {"items": [datasets.request_view(db, r) for r in db.execute(_requests_for(db, p)).scalars()]}
 
 
@@ -232,7 +251,7 @@ class Decision(BaseModel):
 
 
 @router.post("/v1/access-requests/{access_request_id}/decisions")
-def decide_access_request(access_request_id: str, body: Decision, request: Request, db: Session = Depends(get_db),
+def decide_access_request(access_request_id: str, body: Decision, request: Request, db: Session = DB,
                           c: Container = Depends(container),
                           p: Principal = Depends(require("access_request:decide"))) -> dict:
     req = db.execute(_requests_for(db, p).where(AccessRequest.access_request_id == access_request_id)
@@ -278,7 +297,7 @@ def _grants_for(p: Principal) -> Any:
 
 
 @router.get("/v1/grants")
-def list_grants(db: Session = Depends(get_db), p: Principal = Depends(require("grant:read"))) -> dict:
+def list_grants(db: Session = DB, p: Principal = Depends(require("grant:read"))) -> dict:
     return {"items": [grant_view(g) for g in db.execute(_grants_for(p)).scalars()]}
 
 
@@ -288,7 +307,7 @@ class Revoke(BaseModel):
 
 
 @router.post("/v1/grants/{grant_id}/revoke")
-def revoke_grant(grant_id: str, body: Revoke, request: Request, db: Session = Depends(get_db),
+def revoke_grant(grant_id: str, body: Revoke, request: Request, db: Session = DB,
                  c: Container = Depends(container), p: Principal = Depends(require("grant:revoke"))) -> dict:
     g = db.execute(_grants_for(p).where(Grant.grant_id == grant_id).with_for_update()).scalar_one_or_none()
     if g is None:
@@ -300,7 +319,7 @@ def revoke_grant(grant_id: str, body: Revoke, request: Request, db: Session = De
 
 
 @router.post("/v1/grants/{grant_id}/destruction-confirmation")
-def confirm_destruction(grant_id: str, request: Request, db: Session = Depends(get_db),
+def confirm_destruction(grant_id: str, request: Request, db: Session = DB,
                         c: Container = Depends(container),
                         p: Principal = Depends(require("grant:confirm_destruction"))) -> dict:
     g = db.execute(_grants_for(p).where(Grant.grant_id == grant_id).with_for_update()).scalar_one_or_none()
@@ -321,7 +340,7 @@ class DistributionCreate(BaseModel):
 
 
 @router.post("/v1/distributions", status_code=201)
-def create_distribution(body: DistributionCreate, request: Request, db: Session = Depends(get_db),
+def create_distribution(body: DistributionCreate, request: Request, db: Session = DB,
                         c: Container = Depends(container),
                         p: Principal = Depends(require("distribution:create"))) -> dict:
     g = db.execute(_grants_for(p).where(Grant.grant_id == body.grant_id)).scalar_one_or_none()
@@ -342,7 +361,7 @@ def create_distribution(body: DistributionCreate, request: Request, db: Session 
 
 
 @router.get("/v1/usage-history")
-def usage_history(db: Session = Depends(get_db), p: Principal = Depends(require("usage_history:read"))) -> dict:
+def usage_history(db: Session = DB, p: Principal = Depends(require("usage_history:read"))) -> dict:
     """제공기관: 자기 자산이 든 데이터셋 버전의 신청·결정·권한·다운로드 이력."""
     vids = select(DatasetVersion.dataset_version_id).where(
         DatasetVersion.provider_organization_ids.any(p.organization_id))  # type: ignore[arg-type]
@@ -370,7 +389,7 @@ def usage_history(db: Session = Depends(get_db), p: Principal = Depends(require(
 
 
 @router.get("/v1/catalog/dcat")
-def dcat(db: Session = Depends(get_db), c: Container = Depends(container)) -> JSONResponse:
+def dcat(db: Session = DB, c: Container = Depends(container)) -> JSONResponse:
     """모든 항목이 L4인 게시 데이터셋만 DCAT 3 JSON-LD로 (요구사항 12). 광역 허브 프로파일은 확인 필요."""
     out = []
     for ds in db.execute(select(Dataset).where(Dataset.published.is_(True)).order_by(Dataset.dataset_id)).scalars():

@@ -13,9 +13,11 @@ OSS-CANDIDATES의 채택 항목(Ant Design, TanStack Query, Uppy `@uppy/aws-s3`,
 | react-router-dom | MIT | 역할별 진입·화면 이동 (09번 요구사항 1) |
 | hash-wasm | MIT | 브라우저에서 대용량 파일 SHA-256을 조각 단위로 계산 (전체를 메모리에 올리지 않음). 매니페스트에 필요 |
 | dayjs | MIT | Ant Design 날짜 선택기 |
+| @uppy/locales 4.8.4 (정확한 버전) | MIT | 업로드 대시보드 한국어 문구 ko_KR (09번 요구사항 11.1). Uppy 같은 저장소의 문구 묶음 — 2026-11-05 추가, 설치된 @uppy/core 4.5.3 이전 마지막 4.x |
 
-- Refine(OSS-CANDIDATES PoC)은 쓰지 않았다. 이번 범위의 화면이 CRUD보다 업무 흐름 위주라서다. 운영 콘솔의 정책 편집 화면을 만들 때 다시 검토한다.
+- Refine(OSS-CANDIDATES PoC)은 쓰지 않았다. 이번 범위의 화면이 CRUD보다 업무 흐름 위주라서다. 운영 콘솔의 정책 편집 화면을 만들 때 다시 검토한다. (2026-11-05 정책 편집 화면도 Ant Design 표·대화상자로 충분해 Refine 없이 만들었다, ADR-0038)
 - 폼은 Ant Design Form으로 통일했다 (React Hook Form PoC는 하지 않음).
 
 ## 알려진 문제
 - Uppy 대시보드 내부 요소가 axe `aria-allowed-attr`(critical)에 걸린다. 외부 라이브러리 문제라 `web/e2e/portal.mjs`에서 `.uppy-Dashboard`를 검사에서 빼고 여기 기록한다. Uppy 판올림 때 다시 확인한다.
+  - 2026-11-05: Uppy Dashboard 4.1.3에서 남은 것은 inline 대시보드 안쪽 div의 `aria-modal="false"`뿐이다. CI 접근성 검사(`web/e2e/a11y-mock.mjs`)는 그 노드만 빼고, 안내 문구 대비는 CSS로 고쳤다 (ADR-0039).

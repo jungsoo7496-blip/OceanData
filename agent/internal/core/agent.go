@@ -15,6 +15,8 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -33,6 +35,7 @@ import (
 	"github.com/jungsoo7496-blip/oceandata/agent/internal/sensor"
 	"github.com/jungsoo7496-blip/oceandata/agent/internal/state"
 	"github.com/jungsoo7496-blip/oceandata/agent/internal/sysinfo"
+	"github.com/jungsoo7496-blip/oceandata/agent/internal/timex"
 )
 
 const SchemaVersion = "1.0.0"
@@ -56,6 +59,8 @@ type Agent struct {
 	Version string
 	// Now는 시험에서 바꿀 수 있다.
 	Now func() time.Time
+	// OnReady는 로컬 상태 확인 뒤 한 번 호출한다. 오프라인도 정상 기동이므로 서버 연결과 분리한다.
+	OnReady func()
 
 	policy   atomic.Pointer[api.Policy]
 	limiter  *sched.Limiter
@@ -89,16 +94,73 @@ func (a *Agent) setErr(ctx context.Context, code string) {
 
 // ---------------------------------------------------------------- 정책
 
+// 정책 숫자 항목의 계약 범위 (contracts/schemas/device-policy.schema.json의 minimum·maximum, ADR-0040).
+// 상한은 제품 한도가 아니라 time.Duration·동시 실행 수 계산이 넘치지 않는 기술 한도다.
+const (
+	minHeartbeatIntervalS = 30
+	maxPolicySeconds      = timex.MaxSeconds // heartbeat_interval_s·size_stable_s
+	maxParallelParts      = 10000            // 업로드 파트 번호 상한(openapi.yaml PartUrl.part_number)과 같다
+	defaultParallelParts  = 4
+	maxPolicyInt32        = math.MaxInt32 // transfer_windows[].max_kbps·watch_rules[].priority
+)
+
+// CodePolicyInvalid는 계약 범위를 벗어난 정책을 거부했을 때 하트비트 last_error_code로 보고하는 코드다.
+const CodePolicyInvalid = "POLICY_INVALID"
+
+// ErrPolicyInvalid는 정책의 숫자 값이 계약 범위를 벗어났다는 뜻이다. 그 정책은 저장·적용하지 않는다.
+var ErrPolicyInvalid = errors.New("정책 값이 계약 범위를 벗어났습니다")
+
+// checkPolicy는 에이전트가 시간·동시 전송 수·대역폭·규칙 순위로 쓰는 숫자가 계약 범위 안인지 본다.
+func checkPolicy(p *api.Policy) error {
+	type field struct {
+		path            string
+		value, low, max int
+	}
+	fields := []field{
+		{"/heartbeat_interval_s", p.HeartbeatIntervalS, minHeartbeatIntervalS, maxPolicySeconds},
+		{"/size_stable_s", p.SizeStableS, 1, maxPolicySeconds},
+		{"/max_parallel_parts", p.MaxParallelParts, 1, maxParallelParts},
+	}
+	for i, w := range p.TransferWindows {
+		if w.MaxKbps != nil { // null은 제한 없음
+			fields = append(fields, field{fmt.Sprintf("/transfer_windows/%d/max_kbps", i), *w.MaxKbps, 1, maxPolicyInt32})
+		}
+	}
+	for i, r := range p.WatchRules {
+		fields = append(fields, field{fmt.Sprintf("/watch_rules/%d/priority", i), r.Priority, 0, maxPolicyInt32})
+	}
+	for _, f := range fields {
+		if f.value < f.low || f.value > f.max {
+			return fmt.Errorf("%w: %s=%d (범위 %d~%d)", ErrPolicyInvalid, f.path, f.value, f.low, f.max)
+		}
+	}
+	return nil
+}
+
 // RefreshPolicy는 서버 정책을 받아 적용한다. 실패하면 마지막으로 저장한 정책을 쓴다 (오프라인 시작).
+// 숫자 값이 계약 범위를 벗어난 정책(Go 정수에 담기지 않는 수 포함)은 저장·적용하지 않고 이전 정책을 그대로 쓰며,
+// 하트비트 last_error_code로 POLICY_INVALID를 보고한다 (ADR-0040).
 func (a *Agent) RefreshPolicy(ctx context.Context) error {
-	var p api.Policy
-	_, err := a.Client.Do(ctx, "GET", "/v1/devices/"+a.Cfg.DeviceID+"/policy", nil, nil, &p)
+	p := api.Policy{MaxParallelParts: defaultParallelParts} // 선택 필드 생략과 명시적 0을 구분한다
+	status, err := a.Client.Do(ctx, "GET", "/v1/devices/"+a.Cfg.DeviceID+"/policy", nil, nil, &p)
+	var typeErr *json.UnmarshalTypeError
+	var problem *api.Problem
+	switch {
+	case err == nil:
+		err = checkPolicy(&p)
+	case status/100 == 2 && errors.As(err, &typeErr): // 응답은 받았지만 값이 Go 형에 담기지 않는다 (int64를 넘는 수 등)
+		err = fmt.Errorf("%w: %v", ErrPolicyInvalid, err)
+	case status == http.StatusUnprocessableEntity && errors.As(err, &problem) && problem.Code == "RULE_VIOLATION":
+		err = fmt.Errorf("%w: %v", ErrPolicyInvalid, problem)
+	}
+	if errors.Is(err, ErrPolicyInvalid) {
+		a.setErr(ctx, CodePolicyInvalid)
+		a.Log.Error("서버 정책 값이 계약 범위를 벗어나 적용하지 않습니다. 이전 정책을 계속 씁니다",
+			"error", err.Error(), "policy_version", p.PolicyVersion)
+	}
 	if err != nil {
 		if a.policy.Load() == nil {
-			if cached, _ := a.Store.KV(ctx, KeyPolicy); cached != "" && json.Unmarshal([]byte(cached), &p) == nil {
-				a.applyPolicy(ctx, &p)
-				a.Log.Warn("서버 정책을 받지 못해 저장된 정책을 씁니다", "policy_version", p.PolicyVersion)
-			}
+			a.useCachedPolicy(ctx)
 		}
 		return err
 	}
@@ -106,6 +168,22 @@ func (a *Agent) RefreshPolicy(ctx context.Context) error {
 	_ = a.Store.SetKV(ctx, KeyPolicy, string(b))
 	a.applyPolicy(ctx, &p)
 	return nil
+}
+
+// useCachedPolicy는 마지막으로 저장한 정책을 적용한다. 예전 버전이 범위 검사 없이 저장했을 수 있어 다시 검사한다.
+func (a *Agent) useCachedPolicy(ctx context.Context) {
+	cached, _ := a.Store.KV(ctx, KeyPolicy)
+	p := api.Policy{MaxParallelParts: defaultParallelParts}
+	if cached == "" || json.Unmarshal([]byte(cached), &p) != nil {
+		return
+	}
+	if err := checkPolicy(&p); err != nil {
+		a.setErr(ctx, CodePolicyInvalid)
+		a.Log.Error("저장된 정책 값이 계약 범위를 벗어나 쓰지 않습니다", "error", err.Error(), "policy_version", p.PolicyVersion)
+		return
+	}
+	a.applyPolicy(ctx, &p)
+	a.Log.Warn("서버 정책을 받지 못했거나 쓸 수 없어 저장된 정책을 씁니다", "policy_version", p.PolicyVersion)
 }
 
 func (a *Agent) applyPolicy(ctx context.Context, p *api.Policy) {
@@ -116,7 +194,7 @@ func (a *Agent) applyPolicy(ctx context.Context, p *api.Policy) {
 		p.HeartbeatIntervalS = 300
 	}
 	if p.MaxParallelParts <= 0 {
-		p.MaxParallelParts = 4
+		p.MaxParallelParts = defaultParallelParts
 	}
 	old := a.policy.Swap(p)
 	if old == nil || old.PolicyVersion != p.PolicyVersion {
@@ -204,7 +282,7 @@ func (a *Agent) Scan(ctx context.Context) (int, error) {
 		return 0, errors.New("정책이 없습니다")
 	}
 	now := a.Now()
-	stable := time.Duration(p.SizeStableS) * time.Second
+	stable := timex.Seconds(int64(p.SizeStableS)) // 정책 값과 별개로 변환도 넘치지 않게 한다 (ADR-0040)
 	seen := map[string]bool{}
 	added := 0
 	err := filepath.WalkDir(a.Cfg.WatchRoot, func(path string, d fs.DirEntry, err error) error {
@@ -302,7 +380,7 @@ func hashFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // 읽기 전용
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil { // 스트리밍 (요구사항 4.1)
 		return "", err
@@ -310,18 +388,20 @@ func hashFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// manifest는 업로드 등록 본문과 그 Idempotency-Key를 만든다. 키는 본문(client.local_collection_id 제외)의 정본 JSON을
+// 해시한 값이다 — 서버는 같은 키에 다른 본문이 오면 409 IDEMPOTENCY_CONFLICT로 거부하므로, 키가 본문의 함수여야 같은 파일의
+// 재시도는 처음 응답을 되받고(본문이 같다) 다른 본문(다른 파일 이름·에이전트 버전·정책)은 새 요청이 된다 (ADR-0054, 지시서 12번 F1).
+// 같은 내용이 새로 와도 서버가 체크섬으로 ALREADY_REGISTERED 또는 진행 중 세션을 돌려주므로 중복 자산은 생기지 않는다.
 func (a *Agent) manifest(p *api.Policy, f *state.File, abs string) (map[string]any, string) {
 	rule := findRule(p, f.RuleID)
 	dtype, variant := dataTypeOf(rule, f.RelPath), variantOf(rule)
-	idemSrc := strings.Join([]string{f.SourceDeviceID, f.SHA256, variant, f.SessionLabel, rule.RuleID}, "|")
-	sum := sha256.Sum256([]byte(idemSrc))
-	localID := "lc-" + hex.EncodeToString(sum[:])[:32]
+	client := map[string]any{"kind": "AGENT", "version": a.Version}
 	m := map[string]any{
 		"schema_version": SchemaVersion, "source_system_id": f.SourceDeviceID, "watch_rule_id": rule.RuleID,
 		"data_type": dtype, "variant": variant, "data_role": rule.DataRoleDefault,
 		"file": map[string]any{"original_filename": filepath.Base(abs), "original_relative_path": f.RelPath,
 			"byte_size": f.Size, "checksum_sha256": f.SHA256, "mime_type": rules.MimeType(abs)},
-		"client": map[string]any{"kind": "AGENT", "version": a.Version, "local_collection_id": localID},
+		"client": client,
 	}
 	if f.SessionLabel != "" {
 		m["session_label"] = f.SessionLabel
@@ -335,6 +415,11 @@ func (a *Agent) manifest(p *api.Policy, f *state.File, abs string) (map[string]a
 		}
 	}
 	m["timestamp_quality"] = tq
+	// map은 키 순서로 직렬화되므로 같은 본문은 항상 같은 바이트다. 실패할 수 없는 값만 들어 있다.
+	canon, _ := json.Marshal(m)
+	sum := sha256.Sum256(canon)
+	localID := "lc-" + hex.EncodeToString(sum[:])[:32]
+	client["local_collection_id"] = localID
 	return m, localID
 }
 
@@ -379,7 +464,7 @@ func (a *Agent) ProcessOnce(ctx context.Context) (int, error) {
 		case errors.Is(err, api.ErrOffline):
 			_ = a.Store.SetKV(ctx, KeyConnected, "false")
 			a.setErr(ctx, "NETWORK_UNREACHABLE")
-			_ = a.Store.Retry(ctx, f.ID, "NETWORK_UNREACHABLE", sched.Backoff(f.Attempts, time.Duration(a.Cfg.MaxBackoffS)*time.Second))
+			_ = a.Store.Retry(ctx, f.ID, "NETWORK_UNREACHABLE", sched.Backoff(f.Attempts, a.maxBackoff()))
 			return n, err // 연결이 없으면 나머지도 기다린다
 		default:
 			a.Log.Warn("파일 처리 실패", "path", f.RelPath, "error", err.Error())
@@ -393,6 +478,11 @@ func (a *Agent) processFile(ctx context.Context, p *api.Policy, f *state.File) e
 	st, err := os.Stat(abs)
 	if err != nil {
 		return a.Store.MarkStatus(ctx, f.ID, state.Failed, "LOCAL_FILE_MISSING")
+	}
+	if pending, err := a.Store.ReceiptPending(ctx, f.ID); err != nil {
+		return err
+	} else if pending {
+		return a.confirmReceipt(ctx, f)
 	}
 	if f.Status == state.Uploading && f.UploadID != "" {
 		return a.resume(ctx, p, f, abs)
@@ -422,12 +512,23 @@ func (a *Agent) processFile(ctx context.Context, p *api.Policy, f *state.File) e
 	switch created.Status {
 	case "ALREADY_REGISTERED", "METADATA_ONLY_REGISTERED":
 		a.Log.Info("서버에 이미 있거나 메타데이터만 등록", "path", f.RelPath, "status", created.Status, "http", status)
-		return a.Store.MarkDone(ctx, f.ID, created.AssetID) // 다시 보내지 않는다 (요구사항 5.4)
+		if created.AssetID == "" {
+			return a.Store.MarkStatus(ctx, f.ID, state.Failed, "REGISTRATION_ASSET_MISSING")
+		}
+		if src := p.Source(f.SourceDeviceID); src != nil && src.CollectionMode == "C0_METADATA_ONLY" {
+			// C0는 바이너리를 수집하지 않으므로 수집 무결성 로그·영수증이 생기지 않는다.
+			return a.Store.MarkDone(ctx, f.ID, created.AssetID)
+		}
+		if created.Status == "METADATA_ONLY_REGISTERED" {
+			return a.Store.MarkStatus(ctx, f.ID, state.Failed, "UNEXPECTED_METADATA_ONLY")
+		}
+		return a.awaitReceipt(ctx, f, created.AssetID)
 	case "UPLOAD_CREATED":
 		if err := a.Store.MarkUploading(ctx, f.ID, created.UploadID, created.AssetID); err != nil {
 			return err
 		}
 		f.UploadID, f.AssetID = created.UploadID, created.AssetID
+		f.Status = state.Uploading
 		var done []api.CompletedPart
 		pending := created.Parts
 		if len(pending) < created.PartCount { // 응답의 URL 수가 한도로 잘렸으면 목록을 다시 받는다
@@ -449,7 +550,7 @@ func (a *Agent) resume(ctx context.Context, p *api.Policy, f *state.File, abs st
 			return a.Store.Reset(ctx, f.ID)
 		}
 		if errors.As(err, &pr) && pr.Status == 409 { // 이미 완료된 세션
-			return a.Store.MarkDone(ctx, f.ID, f.AssetID)
+			return a.awaitReceipt(ctx, f, f.AssetID)
 		}
 		return a.handleProblem(ctx, f, err)
 	}
@@ -482,7 +583,78 @@ func (a *Agent) sendAndComplete(ctx context.Context, p *api.Policy, f *state.Fil
 		return a.handleProblem(ctx, f, err)
 	}
 	a.Log.Info("업로드 완료", "path", f.RelPath, "asset_id", us.AssetID, "ingest_status", us.IngestStatus)
-	return a.Store.MarkDone(ctx, f.ID, f.AssetID)
+	if us.AssetID != f.AssetID {
+		return a.Store.MarkStatus(ctx, f.ID, state.Failed, "UPLOAD_ASSET_MISMATCH")
+	}
+	return a.awaitReceipt(ctx, f, f.AssetID)
+}
+
+func (a *Agent) awaitReceipt(ctx context.Context, f *state.File, assetID string) error {
+	if assetID == "" {
+		return a.Store.MarkStatus(ctx, f.ID, state.Failed, "RECEIPT_ASSET_MISSING")
+	}
+	if err := a.Store.AwaitReceipt(ctx, f, assetID); err != nil {
+		return err
+	}
+	f.AssetID = assetID
+	return a.confirmReceipt(ctx, f)
+}
+
+// maxBackoff는 재시도 간격 상한(설정 max_backoff_s)이다.
+func (a *Agent) maxBackoff() time.Duration { return timex.Seconds(int64(a.Cfg.MaxBackoffS)) }
+
+func (a *Agent) receiptRetry(ctx context.Context, f *state.File) error {
+	return a.Store.Retry(ctx, f.ID, "RECEIPT_PENDING", sched.Backoff(f.Attempts, a.maxBackoff()))
+}
+
+func (a *Agent) confirmReceipt(ctx context.Context, f *state.File) error {
+	status := ""
+	if f.UploadID != "" {
+		var us api.UploadStatus
+		_, err := a.Client.Do(ctx, "GET", "/v1/uploads/"+f.UploadID, nil, nil, &us)
+		if err != nil {
+			var pr *api.Problem
+			if errors.As(err, &pr) && pr.Status == 404 {
+				return a.receiptRetry(ctx, f)
+			}
+			return a.handleProblem(ctx, f, err)
+		}
+		if us.AssetID != f.AssetID {
+			return a.Store.MarkStatus(ctx, f.ID, state.Failed, "UPLOAD_ASSET_MISMATCH")
+		}
+		status = us.IngestStatus
+		switch status {
+		case "QUARANTINED", "REJECTED", "FAILED":
+			return a.Store.MarkStatus(ctx, f.ID, state.Failed, "SERVER_"+status)
+		case "UPLOADING", "RECEIVED", "VALIDATING", "REGISTERED", "PROXIED", "READY_PRIVATE":
+		default:
+			return a.Store.MarkStatus(ctx, f.ID, state.Failed, "UPLOAD_STATUS_INVALID")
+		}
+	}
+	receipt, err := a.Client.Receipt(ctx, f.AssetID)
+	if err != nil {
+		var pr *api.Problem
+		if errors.As(err, &pr) && pr.Status == 404 {
+			return a.receiptRetry(ctx, f)
+		}
+		return a.handleProblem(ctx, f, err)
+	}
+	if receipt.AssetID != f.AssetID || receipt.ChecksumSHA256 != f.SHA256 || receipt.ByteSize == nil || *receipt.ByteSize != f.Size {
+		return a.Store.MarkStatus(ctx, f.ID, state.Failed, "RECEIPT_MISMATCH")
+	}
+	_, timeErr := time.Parse(time.RFC3339, receipt.RegisteredAt)
+	entryHash, hashErr := hex.DecodeString(receipt.IntegrityEntryHash)
+	if timeErr != nil || receipt.IntegrityLogEntryID == "" || hashErr != nil || len(entryHash) != sha256.Size {
+		return a.Store.MarkStatus(ctx, f.ID, state.Failed, "RECEIPT_INVALID")
+	}
+	if f.UploadID != "" && status != "REGISTERED" && status != "PROXIED" && status != "READY_PRIVATE" {
+		return a.receiptRetry(ctx, f)
+	}
+	raw, err := json.Marshal(receipt)
+	if err != nil {
+		return err
+	}
+	return a.Store.MarkDoneWithReceipt(ctx, f, string(raw))
 }
 
 func (a *Agent) sendParts(ctx context.Context, p *api.Policy, abs string, size, partSize int64,
@@ -494,7 +666,7 @@ func (a *Agent) sendParts(ctx context.Context, p *api.Policy, abs string, size, 
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()            // 읽기 전용
 	sem := make(chan struct{}, p.MaxParallelParts) // 동시 전송 수 (요구사항 5.1)
 	var mu sync.Mutex
 	var out []api.CompletedPart
@@ -545,7 +717,7 @@ func (a *Agent) handleProblem(ctx context.Context, f *state.File, err error) err
 	}
 	var pr *api.Problem
 	if !errors.As(err, &pr) {
-		_ = a.Store.Retry(ctx, f.ID, "UNEXPECTED", sched.Backoff(f.Attempts, time.Duration(a.Cfg.MaxBackoffS)*time.Second))
+		_ = a.Store.Retry(ctx, f.ID, "UNEXPECTED", sched.Backoff(f.Attempts, a.maxBackoff()))
 		return err
 	}
 	a.setErr(ctx, pr.Code)
@@ -554,7 +726,7 @@ func (a *Agent) handleProblem(ctx context.Context, f *state.File, err error) err
 		a.Log.Warn("서버가 정책 위반으로 거부해 보내지 않습니다", "path", f.RelPath, "detail", pr.Detail)
 		return a.Store.MarkStatus(ctx, f.ID, state.Excluded, "SERVER_RULE_VIOLATION")
 	case "QUOTA_EXCEEDED", "RATE_LIMITED", "STORAGE_UNAVAILABLE", "SERVICE_UNAVAILABLE", "CONFLICT":
-		wait := sched.Backoff(f.Attempts+3, time.Duration(a.Cfg.MaxBackoffS)*time.Second)
+		wait := sched.Backoff(f.Attempts+3, a.maxBackoff())
 		if pr.RetryAfter > 0 {
 			wait = pr.RetryAfter
 		}
@@ -715,6 +887,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.reenroll.Store(true)
 		return api.ErrRevoked
 	}
+	if a.OnReady != nil {
+		a.OnReady()
+	}
 	backoff := 0
 	for a.policy.Load() == nil {
 		if err := a.RefreshPolicy(ctx); err != nil && a.policy.Load() == nil {
@@ -722,7 +897,7 @@ func (a *Agent) Run(ctx context.Context) error {
 				_ = a.Store.SetKV(ctx, KeyReenroll, "true")
 				return err
 			}
-			wait := sched.Backoff(backoff, time.Duration(a.Cfg.MaxBackoffS)*time.Second)
+			wait := sched.Backoff(backoff, a.maxBackoff())
 			a.Log.Warn("정책을 받을 수 없어 기다립니다", "error", err.Error(), "retry_in", wait.String())
 			backoff++
 			select {
@@ -734,7 +909,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	watcher := a.startWatcher(ctx)
 	if watcher != nil {
-		defer watcher.Close()
+		defer func() { _ = watcher.Close() }()
 	}
 	var wg sync.WaitGroup
 	loop := func(name string, every func() time.Duration, fn func() error, wake <-chan struct{}) {
@@ -754,12 +929,12 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 		}()
 	}
-	loop("scan", func() time.Duration { return time.Duration(a.Cfg.ScanIntervalS) * time.Second },
+	loop("scan", func() time.Duration { return timex.Seconds(int64(a.Cfg.ScanIntervalS)) },
 		func() error { _, err := a.Scan(ctx); return err }, nil)
 	uploadBackoff := 0
 	loop("upload", func() time.Duration {
 		if uploadBackoff > 0 {
-			return sched.Backoff(uploadBackoff, time.Duration(a.Cfg.MaxBackoffS)*time.Second)
+			return sched.Backoff(uploadBackoff, a.maxBackoff())
 		}
 		return 5 * time.Second
 	}, func() error {
@@ -771,16 +946,15 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 		return err
 	}, a.wake)
-	loop("heartbeat", func() time.Duration { return time.Duration(a.policy.Load().HeartbeatIntervalS) * time.Second },
-		func() error { _, err := a.Heartbeat(ctx); return err }, nil)
-	loop("policy", func() time.Duration { return time.Duration(a.Cfg.PolicyRefreshS) * time.Second },
+	loop("heartbeat", a.heartbeatInterval, func() error { _, err := a.Heartbeat(ctx); return err }, nil)
+	loop("policy", func() time.Duration { return timex.Seconds(int64(a.Cfg.PolicyRefreshS)) },
 		func() error { return a.RefreshPolicy(ctx) }, nil)
 	if len(a.Cfg.SensorPlugins) > 0 {
 		a.startSensorPlugins(ctx, &wg)
 		obsBackoff := 0
 		loop("observations", func() time.Duration {
 			if obsBackoff > 0 {
-				return sched.Backoff(obsBackoff, time.Duration(a.Cfg.MaxBackoffS)*time.Second)
+				return sched.Backoff(obsBackoff, a.maxBackoff())
 			}
 			return 5 * time.Second
 		}, func() error {
@@ -796,6 +970,12 @@ func (a *Agent) Run(ctx context.Context) error {
 	<-ctx.Done()
 	wg.Wait()
 	return nil
+}
+
+// heartbeatInterval은 하트비트 루프의 대기 시간이다. 정책은 적용 전에 계약 범위를 검사했지만 변환도 따로 넘치지 않게 한다:
+// 아주 큰 주기가 time.Duration 곱셈에서 음수가 되면 루프가 쉬지 않고 하트비트를 보냈다 (ADR-0040).
+func (a *Agent) heartbeatInterval() time.Duration {
+	return timex.Seconds(int64(a.policy.Load().HeartbeatIntervalS))
 }
 
 // startWatcher는 fsnotify로 변경을 감지해 스캔을 앞당긴다. 실패해도 주기 스캔으로 동작한다.
@@ -832,7 +1012,10 @@ func (a *Agent) startWatcher(ctx context.Context) *fsnotify.Watcher {
 				if pending.CompareAndSwap(false, true) { // 이벤트를 2초 모아 한 번 스캔
 					time.AfterFunc(2*time.Second, func() { pending.Store(false); _, _ = a.Scan(ctx) })
 				}
-			case <-w.Errors:
+			case err := <-w.Errors:
+				if err != nil { // 이벤트 유실(대기열 넘침 등)은 주기 스캔이 보완한다
+					a.Log.Debug("파일 감시 오류", "error", err.Error())
+				}
 			}
 		}
 	}()

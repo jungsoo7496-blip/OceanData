@@ -314,18 +314,55 @@ def test_validation_errors_on_create(ictx) -> None:
     assert r.status_code == 400  # 계약에 없는 필드
 
 
-def test_source_location_is_transformed_to_4326(ictx) -> None:
+@pytest.mark.parametrize("explicit_location", [None, {"type": "Point", "coordinates": [129.1, 35.1]}],
+                         ids=["transform-source", "prefer-explicit-location"])
+def test_source_location_is_transformed_to_4326(ictx, explicit_location: dict | None) -> None:
     h = ictx.as_user(102)
     data = mp4_bytes(5 * MB, seed=10)
-    m = manifest(data, source_location={"crs": "EPSG:3857",
-                                        "geometry": {"type": "Point", "coordinates": [14080000.0, 4160000.0]}})
-    created = ictx.client.post("/v1/uploads", json=m, headers=h).json()
-    a = ictx.client.get(f"/v1/assets/{created['asset_id']}", headers=h).json()
-    lon, lat = a["location"]["coordinates"]
-    assert 126.4 < lon < 126.6 and 34.8 < lat < 35.1
-    assert a["source_location"]["crs"] == "EPSG:3857" and a["location_precision"] == "EXACT_RESTRICTED"
+    source = {"crs": "EPSG:3857", "geometry": {"type": "Point", "coordinates": [14080000.0, 4160000.0]}}
+    m = manifest(data, source_location=source)
+    if explicit_location is not None:
+        m["location"] = explicit_location
+    created = ictx.client.post("/v1/uploads", json=m, headers=h)
+    assert created.status_code == 201, created.text
+    check(created, "POST", "/v1/uploads")
+    asset_id = created.json()["asset_id"]
+    response = ictx.client.get(f"/v1/assets/{asset_id}", headers=h)
+    assert response.status_code == 200, response.text
+    check(response, "GET", "/v1/assets/{asset_id}")
+    asset = response.json()
+    assert asset["location"]["type"] == "Point"
+    assert asset["source_location"] == source and asset["location_precision"] == "EXACT_RESTRICTED"
+    if explicit_location is None:
+        assert asset["location"]["coordinates"] == pytest.approx([126.482792004, 34.971435354], abs=1e-7, rel=0)
+        transform = {"from_crs": "EPSG:3857", "to_crs": "EPSG:4326", "method": "ST_Transform"}
+    else:
+        assert asset["location"] == explicit_location
+        transform = None
     with ictx.c.sessionmaker() as db:
-        assert db.get(Asset, created["asset_id"]).ingest_context["location_transform"]["from_crs"] == "EPSG:3857"
+        stored = db.get(Asset, asset_id)
+        assert stored.source_location == source
+        assert stored.ingest_context.get("location_transform") == transform
+
+
+@pytest.mark.parametrize(("geometry", "error_code", "pointer"), [
+    ({"type": "Point", "coordinates": [0, 0]}, "null_island", "/source_location/geometry/coordinates"),
+    ({"type": "MultiPoint", "coordinates": [[14080000, 4160000]]}, "transform_failed", "/source_location/geometry"),
+    ({"type": "LineString", "coordinates": []}, "transform_failed", "/source_location/geometry"),
+], ids=["null-island", "multipoint", "empty-linestring"])
+def test_invalid_transformed_source_location_does_not_create_upload(ictx, geometry: dict, error_code: str,
+                                                                    pointer: str) -> None:
+    data = mp4_bytes(128)
+    payload = manifest(data, source_location={"crs": "EPSG:3857", "geometry": geometry})
+    response = ictx.client.post("/v1/uploads", json=payload, headers=ictx.as_user(102))
+    assert response.status_code == 400, response.text
+    check(response, "POST", "/v1/uploads")
+    problem = response.json()
+    assert problem["code"] == "VALIDATION_ERROR"
+    assert [(error["pointer"], error["code"]) for error in problem["errors"]] == [(pointer, error_code)]
+    with ictx.c.sessionmaker() as db:
+        assert db.scalars(select(Asset.asset_id)).all() == []
+        assert db.scalars(select(Upload.upload_id)).all() == []
 
 
 def test_download_url_rules(ictx) -> None:

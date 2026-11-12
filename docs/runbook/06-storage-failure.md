@@ -9,5 +9,9 @@
 2. 스토리지 복구 후 `$COMPOSE restart api worker`.
 3. 장애 동안 실패해 FAILED가 된 처리 작업: 운영자 재처리 `POST /v1/assets/{id}/reprocess`(다중 인증).
 4. `make verify-integrity`로 표본 객체 해시 확인, 일일 사용량 대조 결과(운영 콘솔) 확인.
+5. WARM 계층(ADR-0036)만 문제면 `/readyz`는 준비 상태 그대로 `warnings`에 `storage_tier_unavailable:WARM`을 낸다. HOT 업로드·조회는
+   계속되고 WARM 자산 조회·계층 이동만 실패한다(이동은 원래 객체를 지우지 않고 재시도·FAILED). 복구 전 새 이동을 막으려면
+   `TIERING_ENABLED=false`, 상태는 `python -m app.cli tiers`로 본다. `tier.source_problem` 알림은 원래 객체가 기록과 다르다는 뜻이므로
+   `make verify-integrity`부터 한다.
 
 **완료 확인:** 업로드 한 건 성공, 수집 모니터링 UPLOAD_FAILURE_RATE·PROCESSING_BACKLOG 경보 해제, 무결성 표본 검증 정상.

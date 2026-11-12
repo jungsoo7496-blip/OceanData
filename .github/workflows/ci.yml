@@ -27,9 +27,12 @@ jobs:
         run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.21.2 detect --source /repo --no-banner --redact -v
 
   backend:
-    runs-on: ubuntu-latest
+    # PG16 클라이언트를 기본 저장소에서 제공하는 LTS를 사용한다 (08번, ADR-0022).
+    runs-on: ubuntu-24.04
     env:
       TEST_DATABASE_URL: postgresql+pg8000://marine_owner:ci-owner@127.0.0.1:5432/marine
+      PG_DUMP_BIN: /usr/lib/postgresql/16/bin/pg_dump
+      PG_RESTORE_BIN: /usr/lib/postgresql/16/bin/pg_restore
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -40,8 +43,15 @@ jobs:
           docker run -d --name pg -p 5432:5432 -e POSTGRES_USER=marine_owner -e POSTGRES_PASSWORD=ci-owner \
             -e POSTGRES_DB=marine -e APP_DB_PASSWORD=ci-app marine-postgres:ci
           for i in $(seq 1 60); do docker exec pg pg_isready -U marine_owner -d marine && break; sleep 1; done
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg postgresql-client-16
+      - name: 백업 런타임 이미지·PG16 도구 확인
+        run: |
+          docker build -t marine-api:ci -f backend/Dockerfile .
+          docker run --rm marine-api:ci /usr/lib/postgresql/16/bin/pg_dump --version
+          docker run --rm marine-api:ci /usr/lib/postgresql/16/bin/pg_restore --version
       - run: pip install -e "backend[dev]"
+      - name: 수용·릴리스 도구 회귀 시험
+        run: python -m unittest discover -s tools/tests -q
       - name: 린트·타입·정적 보안
         working-directory: backend
         run: |
@@ -73,7 +83,14 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run lint
       - run: npm run typecheck
+      - run: npm run check:api  # 계약 → TS 타입 재생성 일치 (09번 작업 16)
       - run: npm run build
+      - name: 접근성 검사용 Chromium (package-lock에 고정된 playwright-core 판, 헤드리스 실행만 하므로 headless shell만)
+        run: node node_modules/playwright-core/cli.js install --with-deps --only-shell chromium
+      # 09번 작업 15 (요구사항 11.2): 빌드 결과를 계약 모양 합성 /v1 응답으로 띄워 역할별 화면·대화상자를 검사한다.
+      # axe WCAG 2.0·2.1 A·AA serious·critical 0건, 390px 폭 가로 넘침 없음, 링크 초점 표시 (web/e2e/README.md)
+      - name: 접근성 검사
+        run: npm run test:a11y
       - run: npm audit --omit=dev --audit-level=high
 
   agent:
@@ -86,11 +103,35 @@ jobs:
         run: docker run -d -p 1883:1883 eclipse-mosquitto:2.0.20 mosquitto -c /mosquitto-no-auth.conf
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: {go-version: "1.26.10", cache-dependency-path: agent/go.sum}
+        with: {go-version: "1.26.11", cache-dependency-path: agent/go.sum}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: 계약 SDK 재생성 일치 검사
+        working-directory: .
+        run: |
+          pip install -r tools/requirements.txt
+          python tools/generate_agent_api.py --check
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
+      # golangci-lint(GPL-3.0)는 별도 개발 도구로만 실행하고 go.mod에 넣지 않는다. 설정은 agent/.golangci.yml
+      - run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run ./...
+      # *_windows.go 검사: 린터는 이 러너용으로 빌드하고 분석만 GOOS=windows로 한다
+      - run: go run -exec "env GOOS=windows" github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run ./...
       - run: go test -race ./...
       - run: GOOS=windows go build -o /dev/null ./cmd/marine-agent
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       # G304·G703: 관리자가 설정한 감시 폴더·CLI 인자로 받은 로컬 경로를 읽는 것이 이 도구의 기능이다
       - run: go run github.com/securego/gosec/v2/cmd/gosec@v2.30.0 -exclude=G304,G703 ./...
+
+  agent-windows:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    defaults: {run: {working-directory: agent}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: "1.26.11", cache-dependency-path: agent/go.sum}
+      - name: Windows DPAPI·기동 복원·강제 종료·진단 회귀시험
+        run: go test -count=1 -timeout 3m ./internal/config ./internal/update ./internal/core ./cmd/marine-agent
+      - run: go vet ./...
+      - run: go build ./cmd/marine-agent

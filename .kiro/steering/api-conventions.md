@@ -52,7 +52,7 @@ fileMatchPattern: ["backend/app/api/**", "contracts/**", "web/src/api/**", "agen
 ## 요청·응답
 - 목록: 커서 기반 페이지네이션 `?limit=&cursor=`, 응답 `{"items": [...], "next_cursor": "..."}`. limit 기본 50, 최대 500.
 - 목록·검색 응답에 전체 건수를 기본으로 넣지 않는다. 넣는다면 권한 범위 필터를 적용한 뒤 센다 (자동완성·집계도 같다).
-- 쓰기 요청은 `Idempotency-Key` 헤더를 받는다. 같은 키·같은 본문은 처음 응답을 다시 주고 `Idempotent-Replayed: true`를 붙인다. 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT.
+- 쓰기 요청은 `Idempotency-Key` 헤더를 받는다. 같은 키·같은 본문은 처음 응답을 다시 주고 `Idempotent-Replayed: true`를 붙인다. 같은 키·다른 본문은 409 IDEMPOTENCY_CONFLICT. 같은 키의 앞선 요청이 처리 중이면 확정될 때까지(최대 2초) 기다렸다가 같은 응답을 준다(2초를 넘거나 기다리는 요청이 많으면 409 CONFLICT + Retry-After). 서버는 요청 트랜잭션을 응답 전에 확정하므로 2xx는 DB에 확정된 일에만 나간다(ADR-0053).
 - 배치 요청(관측값 등): 본문 전체가 형식 오류면 400. 형식이 맞으면 200과 항목별 결과(`ACCEPTED` / `DUPLICATE` / `REJECTED` + 사유 코드)를 돌려준다.
 - 오래 걸리는 작업은 `202 Accepted` + 상태 조회 경로를 돌려준다.
 - 대용량 바이너리는 API 서버를 통과시키지 않는다. 사전 서명 URL로 스토리지에 직접 보낸다.

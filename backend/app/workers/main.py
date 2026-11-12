@@ -3,6 +3,7 @@
 - 작업 유형은 `register()`로 등록한다. 다른 스펙(07 센서 파싱, 14 비식별 등)도 같은 방식으로 더한다 (05번 요구사항 2.4)
 - 실패는 지수 백오프로 최대 시도(job_policies.max_attempts)까지 재시도하고, 다 쓰면 FAILED (요구사항 7.1)
 - 주기 정리: 임대 만료 작업 회수(1.3), 만료 업로드 세션 정리(04번 3.3), 무결성 로그 일 단위 앵커(5.2)
+- 04번 웹훅 전송은 따로 도는 스레드가 맡는다 — 느린 수신 서버가 작업 처리·정리 주기를 멈추지 않게 (ADR-0041)
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import logging
 import os
 import signal
 import socket
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -22,7 +24,8 @@ from app.config import get_settings
 from app.container import Container, build_container
 from app.logging_setup import configure_logging
 from app.metrics import JOB_DURATION, JOB_FAILURES, JOBS_DONE, JOBS_QUEUED, WORKER_REGISTRY
-from app.ports.queue import Job
+from app.ports.queue import Job, PermanentJobError
+from app.services.monitoring import OperatorWebhookDispatcher
 
 log = logging.getLogger("worker")
 
@@ -135,6 +138,9 @@ def _env_join(c: Container, job: Job) -> Any:
         env = external.join_env(c, db, a)
         if env is not None:
             a.env_context = env
+            from app.services.tagging import apply_weather
+
+            apply_weather(db, c.settings, a, c.clock.now())  # 날씨 태그 관측값 보정 (14번 요구사항 6.3)
     return "OK" if env is not None and env["observations"] else "NO_MATCH"
 
 
@@ -149,6 +155,49 @@ def _backup(c: Container, job: Job) -> Any:
 
 
 register("backup", _backup)  # 08번 계층형 백업 (ADR-0021)
+
+
+def _dataset_build(c: Container, job: Job) -> Any:
+    from app.services import datasets
+
+    return datasets.finish_build(c, job.payload["dataset_version_id"])
+
+
+def _dataset_build_failed(c: Container, job: Job, error: str) -> None:
+    """재시도가 다 떨어지면 BUILDING에 남지 않게 FAILED로 (운영자가 새 버전으로 다시)."""
+    from app.db.models import DatasetVersion
+
+    with c.sessionmaker.begin() as db:
+        v = db.get(DatasetVersion, job.payload["dataset_version_id"], with_for_update=True)
+        if v is not None and v.status == "BUILDING":
+            v.status, v.build_error = "FAILED", f"작업 실패: {error}"[:500]
+
+
+register("dataset_build", _dataset_build, _dataset_build_failed)  # 13번 작업 32
+
+
+def _clip_export(c: Container, job: Job) -> Any:
+    from app.services import clips
+
+    return clips.make_clip(c, job.job_id, job.payload)
+
+
+register("clip_export", _clip_export)  # 09번 구간 클립 내보내기 (요구사항 7.2)
+
+
+def _tier_move(c: Container, job: Job) -> Any:
+    from app.services import tier_mover
+
+    return tier_mover.handle_job(c, job)
+
+
+def _tier_move_failed(c: Container, job: Job, code: str) -> None:
+    from app.services import tier_mover
+
+    tier_mover.job_exhausted(c, job, code)
+
+
+register("tier_move", _tier_move, _tier_move_failed)  # 08번 Hot/Warm 계층 이동 (요구사항 9, ADR-0036)
 register("collect_source", _collect_source)  # 12번 (실패는 큐의 지수 백오프)
 register("env_join", _env_join)  # 12번  # 14번 (PROCESSING_STEPS에 TAG가 있을 때 영상 처리 뒤)
 
@@ -162,12 +211,15 @@ def run_once(c: Container, worker_id: str) -> bool:
     start = time.perf_counter()
     try:
         handler.fn(c, job)
-    except Exception as exc:  # noqa: BLE001 - 모든 실패는 재시도 대상, 최대 시도 후 FAILED
-        code = exc.code if isinstance(exc, RetryableError) else "INTERNAL"
-        delay = exc.retry_in_s if isinstance(exc, RetryableError) and exc.retry_in_s else backoff_s(job.attempts)
+    except Exception as exc:  # noqa: BLE001 - 재시도 대상, 최대 시도 후 FAILED (PermanentJobError는 바로 FAILED)
+        known = isinstance(exc, (RetryableError, PermanentJobError))
+        code = exc.code if isinstance(exc, (RetryableError, PermanentJobError)) else "INTERNAL"
+        delay: float | None = None
+        if not isinstance(exc, PermanentJobError):
+            delay = exc.retry_in_s if isinstance(exc, RetryableError) and exc.retry_in_s else backoff_s(job.attempts)
         JOB_FAILURES.labels(job.job_type, code).inc()
         retried = c.queue.fail(job.job_id, code, delay)
-        if isinstance(exc, RetryableError):
+        if known:
             log.warning("job_retry" if retried else "job_failed", extra={"job_id": job.job_id,
                                                                          "job_type": job.job_type, "error_code": code})
         else:
@@ -191,7 +243,35 @@ def sweep(c: Container) -> int:
         n = IngestService(c, db).sweep_expired()
     if n:
         log.info("expired_uploads_swept", extra={"count": n})
+    from app.services.pipeline import sweep_stale_work
+
+    stale = sweep_stale_work(c)  # 비정상 종료로 남은 임시 파일 (05번 작업 13)
+    if stale:
+        log.info("stale_work_files_removed", extra={"count": stale})
     return n
+
+
+def start_webhook_dispatcher(c: Container, stop: threading.Event) -> threading.Thread:
+    """04번 웹훅 전송 전용 스레드 (ADR-0041).
+
+    작업 처리·임대 회수·정리 주기와 떼어 둬서 느린 수신 서버가 그것들을 멈추지 않게 한다. 보낼 것이 있으면
+    라운드를 이어 돌고, 없거나 실패하면 WEBHOOK_DISPATCH_INTERVAL_S만큼 쉰다. stop이 설정되면 라운드 사이에
+    끝난다(보내던 건은 임대가 끝난 뒤 다른 워커가 다시 보낸다)."""
+    from app.services import webhooks
+
+    def run() -> None:
+        while not stop.is_set():
+            busy = False
+            try:
+                busy = any(webhooks.deliver_due(c, stop=stop).values())
+            except Exception as exc:  # noqa: BLE001 - DB 장애 등. 다음 주기에 다시
+                log.error("webhooks_failed", exc_info=exc)
+            if not busy:
+                stop.wait(c.settings.webhook_dispatch_interval_s)
+
+    thread = threading.Thread(target=run, name="webhook-dispatcher", daemon=True)
+    thread.start()
+    return thread
 
 
 def maintenance(c: Container) -> None:
@@ -220,12 +300,31 @@ def maintenance(c: Container) -> None:
         changed = datasets.expire(c, db)
         if any(changed.values()):
             log.info("grants_expired", extra=changed)
+    # 긴급 열람 만료 회수 (02번 요구사항 8.4). 접근 판단은 만료 시각으로 바로 막고, 여기서는 상태·감사를 맞춘다
+    from app.services import break_glass
+
+    with c.sessionmaker.begin() as db:
+        ended = break_glass.expire(db, c.clock.now())
+    for g in ended:
+        c.audit.record("BREAK_GLASS_EXPIRED", actor_kind="SYSTEM", actor_id="worker", organization_id=g.organization_id,
+                       target_type="BreakGlassGrant", target_id=g.grant_id)
+    # 하루 한 번: 기관별 사용량 스냅숏 → 용량 예측·리드타임 알림 (08번 요구사항 8·10)
+    from app.services import capacity
+
+    today = c.clock.now().date()
+    retention.run_daily(c, "usage_snapshot", lambda db: {"orgs": capacity.snapshot(c, db, today)})
+    retention.run_daily(c, "capacity_forecast", lambda db: capacity.notify_if_near(c, db, today))
     # 정기 백업 (08번 요구사항 6.1): BACKUP_ENABLED일 때 BACKUP_INTERVAL_H마다
     from app.services import backup
 
     with c.sessionmaker.begin() as db:
         if backup.due(c, db):
-            c.queue.enqueue("backup", {"requested_by": "schedule"}, dedupe_key="backup")
+            c.queue.enqueue("backup", {"requested_by": "schedule"}, dedupe_key="backup", dedupe_active_only=True)
+    # Hot/Warm 계층 (08번 요구사항 9): 유예가 지난 원래 객체 삭제(이동을 꺼도 끝까지)·정책 규칙으로 새 이동 고르기
+    from app.services import tier_mover
+
+    tier_mover.finish_due(c)
+    tier_mover.schedule(c)
     # 하루 한 번: 기한 지난 정기 점검 알림 (11번 요구사항 6.3)
     from app.services import inspections
 
@@ -233,7 +332,7 @@ def maintenance(c: Container) -> None:
                         lambda db: {"overdue": inspections.notify_overdue(c, db, c.clock.now())})
 
 
-def watch(c: Container) -> Any:
+def watch(c: Container, operator_webhooks: OperatorWebhookDispatcher | None = None) -> Any:
     """감시 규칙 평가 (11번)와 근거 손상 감지 (10번). 워커가 여럿이어도 한 번에 하나만 한다."""
     from sqlalchemy import text
 
@@ -244,6 +343,8 @@ def watch(c: Container) -> Any:
         if not db.execute(text("SELECT pg_try_advisory_xact_lock(hashtext('watch_rules'))")).scalar():
             return None
         res = monitoring.evaluate(c, db)
+    if operator_webhooks is not None:
+        operator_webhooks.submit(res.operator_alerts)
     with c.sessionmaker.begin() as db:  # 10번 근거 손상 감지 (Evidence_Integrity_Checker)
         if db.execute(text("SELECT pg_try_advisory_xact_lock(hashtext('evidence_check'))")).scalar():
             flagged = evidence.check_damage(c, db)
@@ -280,11 +381,19 @@ def main() -> None:
     log.info("worker_started", extra={"worker_id": worker_id, "job_types": sorted(HANDLERS),
                                       "resource_classes": settings.worker_resource_classes})
     last_depth = 0.0
+    webhooks_stop = threading.Event()
+    alert_secret = settings.alert_webhook_secret
+    operator_webhooks = (
+        OperatorWebhookDispatcher(settings.alert_webhook_url, alert_secret.get_secret_value() if alert_secret else None,
+                                  webhooks_stop)
+        if settings.alert_webhook_url else None
+    )
     periodic: list[tuple[float, Callable[[], Any], str]] = [
         (300, lambda: sweep(c), "sweep"),
         (settings.job_lease_reap_interval_s, lambda: maintenance(c), "maintenance"),
-        (settings.watch_eval_interval_s, lambda: watch(c), "watch"),  # 11번 감시 규칙
+        (settings.watch_eval_interval_s, lambda: watch(c, operator_webhooks), "watch"),  # 11번 감시 규칙
     ]
+    webhooks_thread = start_webhook_dispatcher(c, webhooks_stop)  # 04번 웹훅 (작업 루프와 다른 스레드)
     last_run = {name: 0.0 for _, _, name in periodic}
     while not stopping["flag"]:
         now = time.monotonic()
@@ -301,6 +410,10 @@ def main() -> None:
             last_depth = now
         if not run_once(c, worker_id):
             time.sleep(settings.worker_poll_interval_s)
+    webhooks_stop.set()
+    webhooks_thread.join(timeout=settings.webhook_timeout_s * 2)  # 진행 중인 라운드만 마치게 (못 마치면 임대 뒤 재전송)
+    if operator_webhooks is not None:
+        operator_webhooks.join()
     log.info("worker_stopped")
 
 

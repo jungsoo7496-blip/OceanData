@@ -114,13 +114,14 @@
 | fsnotify | BSD-3 | 채택 | 06 | 폴더 감시 |
 | modernc.org/sqlite | BSD-3 | 채택 | 06 | 순수 Go SQLite (Local_State) |
 | kardianos/service | Zlib | 채택 | 06 | Windows 서비스·systemd 등록 |
-| creativeprojects/go-selfupdate | MIT | PoC | 06 | 자동 업데이트 (서명 검증 방식 확인) |
+| creativeprojects/go-selfupdate | MIT | 교체 primitive 채택 | 06 | v1.7.0 Linux·Windows 실제 프로세스 PoC 후 update 하위 패키지만 채택. 서명·기동 감독은 자체 계층 (ADR-0024) |
 | eclipse/paho.mqtt.golang | EPL-2.0 / EDL-1.0 (EDL 선택) | 채택 | 07 | Sensor_Plugin MQTT 구독 |
 | pgBackRest | MIT | PoC | 08 | DB 백업·시점 복구 |
 | datamodel-code-generator | MIT | 채택 | 03 | contracts JSON Schema → Pydantic 모델 |
 | openapi-typescript | MIT | 채택 | 09 | contracts OpenAPI → TypeScript 타입 |
 | oapi-codegen | Apache-2.0 | 채택 | 06 | contracts OpenAPI → Go 클라이언트 |
 | Locust | MIT | 채택 | 17 | 부하 시험 (T12) |
+| golangci-lint | GPL-3.0 | 채택 (개발 도구만) | 01·06 | Go 정적 분석. `go run …@v2.15.0`로 별도 프로세스 실행, go.mod·납품물에 넣지 않음 (ADR-0032) |
 | @axe-core/playwright | MPL-2.0 | 채택 | 09·17 | KWCAG 자동 검사 보조 |
 | 한글 폰트 (Noto Sans KR 등) | OFL-1.1 | 채택 | 10 | PDF 한글 출력 |
 | ONNX Runtime | MIT | 채택 | 05·14 | 이미 스택 |

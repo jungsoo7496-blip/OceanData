@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import client_ip, container, get_db, load_scoped, page_params, require
+from app.api.deps import DB, client_ip, container, load_scoped, page_params, require
 from app.api.pagination import paginate
 from app.container import Container
 from app.db.models import ApiKey, AuditLog, Device, DeviceCredential, EnrollmentCode
@@ -38,8 +38,10 @@ def issue_token(request: Request,
                 client_id: Annotated[str, Form(max_length=128)],
                 client_secret: Annotated[str, Form(max_length=256)],
                 scope: Annotated[str | None, Form()] = None,
-                db: Session = Depends(get_db), c: Container = Depends(container)) -> JSONResponse:
-    _auth_limiter.check(f"{client_ip(request)}:{client_id}")
+                db: Session = DB, c: Container = Depends(container)) -> JSONResponse:
+    source = client_ip(request)
+    _auth_limiter.check(f"token-ip:{source}")
+    _auth_limiter.check(f"token-client:[{source}]:{client_id}")
     now = c.clock.now()
     requested = frozenset(scope.split()) if scope else None
 
@@ -74,10 +76,11 @@ def issue_token(request: Request,
 
 # ---- 등록 코드·에이전트 등록
 @router.post("/v1/devices/{device_id}/enrollment-codes", tags=["agents"], status_code=201)
-def create_enrollment_code(device_id: str, request: Request, db: Session = Depends(get_db),
+def create_enrollment_code(device_id: str, request: Request, db: Session = DB,
                            c: Container = Depends(container),
                            p: Principal = Depends(require("enrollment_code:create"))) -> dict:
     device = load_scoped(db, c, request, Device, device_id, p)
+    db.refresh(device, with_for_update={"key_share": True})
     if device.kind != "COLLECTOR":
         raise ProblemError("RULE_VIOLATION", detail="등록 코드는 수집기 장비에만 발급합니다",
                            unmet_conditions=[{"condition": "kind=COLLECTOR", "actual": device.kind}])
@@ -89,8 +92,10 @@ def create_enrollment_code(device_id: str, request: Request, db: Session = Depen
     db.add(EnrollmentCode(code_hash=hash_secret(code), device_id=device.device_id,
                           organization_id=device.organization_id, expires_at=expires, created_by=p.principal_id,
                           created_at=now))
+    db.flush()
     c.audit.record("ENROLLMENT_CODE_ISSUED", principal=p, organization_id=device.organization_id,
-                   target_type="Device", target_id=device.device_id, source_ip=client_ip(request))
+                   target_type="Device", target_id=device.device_id, source_ip=client_ip(request),
+                   connection=db.connection())
     return {"code": code, "expires_at": iso(expires)}
 
 
@@ -102,21 +107,27 @@ class EnrollRequest(BaseModel):
 
 
 @router.post("/v1/agents/enroll", tags=["agents"], status_code=201)
-def enroll_agent(body: EnrollRequest, request: Request, db: Session = Depends(get_db),
+def enroll_agent(body: EnrollRequest, request: Request, db: Session = DB,
                  c: Container = Depends(container)) -> JSONResponse:
     _auth_limiter.check(f"enroll:{client_ip(request)}")
+    code_hash = hash_secret(body.enrollment_code)
+    # 발급·등록·폐기는 수집기 행을 먼저 잠근다. 코드는 잠금 획득 뒤 다시 읽어 폐기를 반영한다.
+    device = db.execute(
+        select(Device).join(EnrollmentCode, EnrollmentCode.device_id == Device.device_id)
+        .where(EnrollmentCode.code_hash == code_hash).with_for_update(of=Device, key_share=True)
+    ).scalar_one_or_none()
+    rec = db.get(EnrollmentCode, code_hash) if device is not None else None
     now = c.clock.now()
-    rec = db.execute(select(EnrollmentCode).where(EnrollmentCode.code_hash == hash_secret(body.enrollment_code))
-                     .with_for_update()).scalar_one_or_none()
     if rec is None or rec.used_at is not None or rec.expires_at <= now:
         reason = "unknown" if rec is None else ("used" if rec.used_at else "expired")
+        organization_id = rec.organization_id if rec is not None else None
+        db.rollback()  # 성공한 변경이 없으므로 잠금을 놓고 실패 감사를 별도로 기록한다.
         c.audit.record("AGENT_ENROLL_FAILED", result="DENIED", actor_kind="MACHINE", source_ip=client_ip(request),
-                       organization_id=rec.organization_id if rec else None, details={"reason": reason})
+                       organization_id=organization_id, details={"reason": reason})
         if rec is None:
             raise ProblemError("UNAUTHENTICATED", detail="등록 코드가 올바르지 않습니다")
-        raise ProblemError("GONE", detail="이미 사용했거나 만료된 등록 코드입니다" if rec.used_at
+        raise ProblemError("GONE", detail="이미 사용했거나 만료된 등록 코드입니다" if reason == "used"
                            else "만료된 등록 코드입니다", extra={"reason": reason.upper()})
-    device = db.get(Device, rec.device_id)
     if device is None or device.status == "REVOKED":
         raise ProblemError("GONE", detail="폐기된 장비입니다")
     rec.used_at = now
@@ -129,29 +140,44 @@ def enroll_agent(body: EnrollRequest, request: Request, db: Session = Depends(ge
     db.add(DeviceCredential(client_id=client_id, device_id=device.device_id, organization_id=device.organization_id,
                             secret_hash=hash_secret(secret), status="ACTIVE", created_at=now))
     device.status = "ACTIVE"
+    db.flush()
     c.audit.record("DEVICE_ENROLLED", actor_kind="DEVICE", actor_id=device.device_id,
                    organization_id=device.organization_id, target_type="Device", target_id=device.device_id,
-                   source_ip=client_ip(request), details={"agent_version": body.agent_version, "os": body.os})
+                   source_ip=client_ip(request), details={"agent_version": body.agent_version, "os": body.os},
+                   connection=db.connection())
     resp = {"device_id": device.device_id, "client_id": client_id, "client_secret": secret,
             "token_endpoint": "/v1/auth/token"}  # nosec B105
     return JSONResponse(resp, status_code=201, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/v1/devices/{device_id}/credentials/revoke", tags=["agents"])
-def revoke_device_credentials(device_id: str, request: Request, db: Session = Depends(get_db),
+def revoke_device_credentials(device_id: str, request: Request, db: Session = DB,
                               c: Container = Depends(container),
                               p: Principal = Depends(require("device_credential:revoke"))) -> dict:
     device = load_scoped(db, c, request, Device, device_id, p)
+    db.refresh(device, with_for_update={"key_share": True})
+    if device.kind != "COLLECTOR":
+        raise ProblemError("RULE_VIOLATION", detail="자격증명 폐기는 수집기 장비에만 적용합니다",
+                           unmet_conditions=[{"condition": "kind=COLLECTOR", "actual": device.kind}])
     now = c.clock.now()
     n = 0
     for cred in db.execute(select(DeviceCredential).where(DeviceCredential.device_id == device.device_id,
                                                           DeviceCredential.status == "ACTIVE")).scalars():
         cred.status, cred.revoked_at = "REVOKED", now
         n += 1
+    # 폐기 전에 발급했지만 쓰지 않은 등록 코드도 무효로 한다 — 장비가 재등록 대기로 돌아가므로 남은 코드(최대 24시간)로
+    # 다시 등록되면 폐기가 무력해진다 (02번 요구사항 5.4). 재등록은 폐기 뒤 새로 발급한 코드로만.
+    codes = 0
+    for rec in db.execute(select(EnrollmentCode).where(EnrollmentCode.device_id == device.device_id,
+                                                       EnrollmentCode.used_at.is_(None),
+                                                       EnrollmentCode.expires_at > now)).scalars():
+        rec.expires_at = now
+        codes += 1
     device.status = "PENDING_ENROLLMENT"
+    db.flush()
     c.audit.record("DEVICE_CREDENTIAL_REVOKED", principal=p, organization_id=device.organization_id,
                    target_type="Device", target_id=device.device_id, source_ip=client_ip(request),
-                   details={"revoked": n})
+                   details={"revoked": n, "enrollment_codes_invalidated": codes}, connection=db.connection())
     return {"device_id": device.device_id, "revoked_credentials": n}
 
 
@@ -170,7 +196,7 @@ def _key_view(k: ApiKey) -> dict:
 
 
 @router.post("/v1/api-keys", tags=["auth"], status_code=201)
-def create_api_key(body: ApiKeyCreate, request: Request, db: Session = Depends(get_db),
+def create_api_key(body: ApiKeyCreate, request: Request, db: Session = DB,
                    c: Container = Depends(container),
                    p: Principal = Depends(require("api_key:create"))) -> JSONResponse:
     now = c.clock.now()
@@ -189,7 +215,7 @@ def create_api_key(body: ApiKeyCreate, request: Request, db: Session = Depends(g
 
 
 @router.get("/v1/api-keys", tags=["auth"])
-def list_api_keys(db: Session = Depends(get_db), p: Principal = Depends(require("api_key:read")),
+def list_api_keys(db: Session = DB, p: Principal = Depends(require("api_key:read")),
                   page: dict = Depends(page_params)) -> dict:
     stmt = select(ApiKey).where(ApiKey.organization_id == p.organization_id)
     rows, nxt = paginate(db, stmt, ApiKey.api_key_id, page["limit"], page["cursor"])
@@ -197,7 +223,7 @@ def list_api_keys(db: Session = Depends(get_db), p: Principal = Depends(require(
 
 
 @router.post("/v1/api-keys/{api_key_id}/revoke", tags=["auth"])
-def revoke_api_key(api_key_id: str, request: Request, db: Session = Depends(get_db),
+def revoke_api_key(api_key_id: str, request: Request, db: Session = DB,
                    c: Container = Depends(container), p: Principal = Depends(require("api_key:revoke"))) -> dict:
     key = load_scoped(db, c, request, ApiKey, api_key_id, p)
     if key.revoked_at is None:
@@ -209,7 +235,7 @@ def revoke_api_key(api_key_id: str, request: Request, db: Session = Depends(get_
 
 # ---- 감사 기록 조회
 @router.get("/v1/audit-logs", tags=["auth"])
-def list_audit_logs(db: Session = Depends(get_db), p: Principal = Depends(require("audit:read")),
+def list_audit_logs(db: Session = DB, p: Principal = Depends(require("audit:read")),
                     page: dict = Depends(page_params)) -> dict:
     stmt = select(AuditLog)
     if not p.has_role("PLATFORM_OPERATOR"):  # ORG_ADMIN: 자기 기관 데이터 관련 기록만 (02번 요구사항 7.5)

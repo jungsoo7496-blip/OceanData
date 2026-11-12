@@ -6,21 +6,27 @@ from fastapi import FastAPI
 
 from app import API_VERSION
 from app.api import (
+    admin_policies,
     agents,
     assets,
     auth,
+    break_glass,
     catalog,
     context,
     datasets,
     deid,
     external,
     lifecycle,
+    models_registry,
     monitoring,
     observations,
+    onboarding,
+    policy_drafts,
     reports,
     sharing,
     system,
     uploads,
+    webhooks,
 )
 from app.config import get_settings
 from app.container import Container, build_container
@@ -37,7 +43,13 @@ def create_app(c: Container | None = None) -> FastAPI:
     app = FastAPI(title="해양 실증데이터 플랫폼 API", version=API_VERSION, docs_url="/docs", redoc_url=None,
                   openapi_url="/openapi.json")
     app.state.container = c
+    from app.services.storage_check import warn_on_startup
+
+    warn_on_startup(c)  # 서버 측 암호화를 요청했는데 지원하지 않으면 기동 경고 (08번 요구사항 1.4)
     install_error_handlers(app)
+    from app.api.contract_query import _validators
+
+    _validators()  # 조회 조건 검사기를 시작할 때 만든다 (계약 파일이 깨졌으면 요청마다가 아니라 기동 때 실패)
     app.add_middleware(RequestContextMiddleware)
     app.include_router(system.router)
     app.include_router(auth.router)
@@ -48,6 +60,12 @@ def create_app(c: Container | None = None) -> FastAPI:
     app.include_router(agents.router)
     app.include_router(observations.router)
     app.include_router(lifecycle.router)
+    app.include_router(onboarding.router)
+    app.include_router(policy_drafts.router)
+    app.include_router(break_glass.router)
+    app.include_router(webhooks.router)
+    app.include_router(admin_policies.router)
+    app.include_router(models_registry.router)
     app.include_router(monitoring.router)
     app.include_router(reports.router)
     app.include_router(sharing.router)

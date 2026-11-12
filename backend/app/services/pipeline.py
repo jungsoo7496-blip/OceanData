@@ -28,9 +28,9 @@ from app.db.models import Asset, AssetLineage, Upload
 from app.domain import states
 from app.domain.ids import new_id
 from app.domain.normalize import check_location
-from app.domain.quality import evaluate
 from app.metrics import PIPELINE_FRAMES, PIPELINE_SECONDS
 from app.services.ingest import Quota, append_integrity, object_key, zone_for
+from app.services.quality import apply_rules, load_rules
 
 log = logging.getLogger(__name__)
 VIDEO_STEPS = ("media_probe", "make_proxy", "make_thumbnail")
@@ -59,15 +59,58 @@ def tool_version(binary: str) -> str:
         return binary
 
 
+class WorkSpaceShortage(Exception):
+    """임시 디스크 여유가 모자라다 — 작업 큐가 백오프 뒤 다시 시도한다 (05번 작업 13)."""
+
+
+def work_dir(c: Container) -> str:
+    d = c.settings.work_dir or tempfile.gettempdir()
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def ensure_work_space(c: Container, need_bytes: int) -> None:
+    """받아 둘 크기 × 배수 + 최소 여유가 남는지 (대용량 영상이 디스크를 가득 채워 다른 작업을 죽이지 않게)."""
+    free = shutil.disk_usage(work_dir(c)).free
+    want = int(need_bytes * c.settings.work_size_factor) + c.settings.work_min_free_bytes
+    if free < want:
+        log.warning("work_space_shortage", extra={"free": free, "want": want})
+        raise WorkSpaceShortage(f"임시 디스크 여유 부족: {free} < {want}")
+
+
+def sweep_stale_work(c: Container, now_ts: float | None = None) -> int:
+    """비정상 종료로 남은 marine-* 임시 파일·폴더를 지운다 (워커 시작·주기 정리)."""
+    now_ts = now_ts if now_ts is not None else time.time()
+    d, n = work_dir(c), 0
+    for name in os.listdir(d):
+        if not name.startswith("marine-"):
+            continue
+        p = os.path.join(d, name)
+        try:
+            if now_ts - os.path.getmtime(p) < c.settings.work_stale_after_s:
+                continue
+            if os.path.isdir(p):
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                os.unlink(p)
+            n += 1
+        except OSError:
+            continue
+    return n
+
+
 @contextmanager
 def local_copy(c: Container, asset: Asset) -> Iterator[str]:
-    """객체를 임시 파일로 스트리밍해 받아 둔다 (메모리에 올리지 않는다)."""
-    bucket = c.settings.buckets[asset.storage_zone or zone_for(asset.variant)]
-    fd, path = tempfile.mkstemp(prefix="marine-", suffix="." + (asset.mime_type.split("/")[-1] or "bin"))
+    """객체를 임시 파일로 스트리밍해 받아 둔다 (메모리에 올리지 않는다). 여유 공간을 먼저 확인한다.
+    위치는 자산의 계층(HOT·WARM)에서 정한다 (08번 요구사항 9)."""
+    from app.services import tiers
+
+    ensure_work_space(c, int(asset.byte_size or 0))
+    fd, path = tempfile.mkstemp(prefix="marine-", suffix="." + (asset.mime_type.split("/")[-1] or "bin"),
+                                dir=work_dir(c))
     try:
         with os.fdopen(fd, "wb") as f:
-            for chunk in c.storage.iter_object(bucket, asset.storage_key or ""):
-                f.write(chunk)
+            tiers.download(c, asset, f)
         yield path
     finally:
         try:
@@ -135,7 +178,8 @@ def media_probe(c: Container, asset_id: str) -> str:
         asset = db.get(Asset, asset_id)
         if asset is None or not asset.has_binary or asset.ingest_status != "REGISTERED":
             return "SKIPPED"
-        snapshot = Asset(**{k: getattr(asset, k) for k in ("storage_zone", "storage_key", "variant", "mime_type")})
+        snapshot = Asset(**{k: getattr(asset, k) for k in ("asset_id", "storage_tier", "storage_zone", "storage_key",
+                                                           "variant", "mime_type")})
     with local_copy(c, snapshot) as path:
         r = _run([c.settings.ffprobe_path, "-v", "error", "-print_format", "json", "-show_format", "-show_streams",
                   path], c.settings.ffmpeg_timeout_s)
@@ -147,6 +191,7 @@ def media_probe(c: Container, asset_id: str) -> str:
             return quarantine_corrupt(c, asset_id)
     with c.sessionmaker.begin() as db:
         asset = db.execute(select(Asset).where(Asset.asset_id == asset_id).with_for_update()).scalar_one()
+        rules = load_rules(db)
         asset.ext = {**(asset.ext or {}), "video_ext": {**(asset.ext or {}).get("video_ext", {}), **meta["video_ext"]}}
         ts = asset.timestamp_quality or {}
         if ts.get("source", "UNKNOWN") == "UNKNOWN" and meta["creation_time"] is not None:
@@ -160,14 +205,9 @@ def media_probe(c: Container, asset_id: str) -> str:
             asset.provenance = {**asset.provenance, "original_timestamps": originals}
         if asset.location is None and meta["location"] is not None:
             asset.location, asset.location_precision = meta["location"], "EXACT_RESTRICTED"
-        asset.quality_status, asset.quality_reasons = evaluate(_fields(asset), facts={"playable": True})
+        apply_rules(asset, rules, c.clock.now(), facts={"playable": True})
         asset.updated_at = c.clock.now()
     return "OK"
-
-
-def _fields(a: Asset) -> dict[str, Any]:
-    return {"data_type": a.data_type, "mime_type": a.mime_type, "byte_size": a.byte_size,
-            "checksum_sha256": a.checksum_sha256, "timestamp_quality": a.timestamp_quality}
 
 
 def quarantine_corrupt(c: Container, asset_id: str) -> str:
@@ -176,17 +216,20 @@ def quarantine_corrupt(c: Container, asset_id: str) -> str:
         asset.ingest_status = states.transition("ingest_status", asset.ingest_status, "QUARANTINED", {"SERVICE"})
         asset.quarantine_reason = "CORRUPT_FILE"
         asset.quality_status, asset.quality_reasons = "FAILED", ["not_playable"]
+        context = asset.ingest_context or {}
+        asset.ingest_context = {**context, "quality_facts": {**context.get("quality_facts", {}), "playable": False}}
         from app.services.retention import apply_retention
 
         apply_retention(db, asset, c.clock.now())
         asset.updated_at = c.clock.now()
-        bucket, key = c.settings.buckets[asset.storage_zone or "RAW"], asset.storage_key or ""
+        key = asset.storage_key or ""
         size = asset.byte_size
         org = asset.organization_id
         if asset.storage_zone != "QUARANTINE":
-            try:
-                c.storage.move_object(bucket, key, c.settings.buckets["QUARANTINE"], key)
-                asset.storage_zone = "QUARANTINE"
+            from app.services import tiers
+
+            try:  # 격리 존은 HOT에만 있다 — WARM에 있던 객체도 HOT 격리 버킷으로 옮긴다 (08번 요구사항 9)
+                tiers.relocate(c, asset, zone="QUARANTINE", key=key)
                 q = Quota(c, db)._row(org)
                 q.used_bytes, q.quarantine_bytes = max(0, q.used_bytes - size), q.quarantine_bytes + size
             except Exception as exc:  # noqa: BLE001
@@ -207,19 +250,41 @@ def _sha256_file(path: str) -> tuple[str, int]:
 
 
 def create_derived(c: Container, db: Session, parent: Asset, path: str, *, variant: str, mime: str,
-                   relation: str, tool: str, job_id: str | None) -> Asset:
+                   relation: str, tool: str, job_id: str | None, provenance_extra: dict[str, Any] | None = None,
+                   overrides: dict[str, Any] | None = None) -> Asset:
     """원 자산에서 만든 파생 자산을 저장하고 계보·무결성 로그를 남긴다 (요구사항 4.4, 5.1).
 
     파생본은 원 자산의 data_role·sensitivity_class를 물려받고 PRIVATE으로 시작한다 (domain.md 3·4장).
+    provenance_extra는 출처 정보에 더하고(예: 구간 클립의 clip_range_s), overrides는 물려받은 값을 바꾼다
+    (예: 구간 클립의 촬영 시각·video_ext). 같은 결과가 이미 있으면 둘 다 적용하지 않고 기존 자산을 돌려준다.
+    단계(same_result → new_derived → 객체 저장 → record_derived)를 따로 부르면 객체를 먼저 올리고
+    다른 트랜잭션에서 기록할 수 있다 (구간 클립, clips.store_clip).
     """
     sha, size = _sha256_file(path)
     now = c.clock.now()
-    existing = db.execute(select(Asset).where(Asset.organization_id == parent.organization_id,
-                                              Asset.source_system_id == parent.source_system_id,
-                                              Asset.checksum_sha256 == sha, Asset.deleted_at.is_(None))) \
-        .scalar_one_or_none()
+    existing = same_result(db, parent, sha)
     if existing is not None:  # 같은 결과가 이미 있으면 계보만 확인한다 (재실행 멱등)
         return existing
+    child = new_derived(c, db, parent, sha=sha, size=size, variant=variant, mime=mime, relation=relation, tool=tool,
+                        job_id=job_id, now=now, provenance_extra=provenance_extra, overrides=overrides)
+    assert child.storage_zone is not None and child.storage_key is not None  # new_derived가 정한다
+    c.storage.upload_file(c.settings.buckets[child.storage_zone], child.storage_key, path, mime)
+    record_derived(c, db, parent, child, relation=relation, tool=tool, now=now)
+    return child
+
+
+def same_result(db: Session, parent: Asset, sha: str) -> Asset | None:
+    """같은 기관·장비에 같은 체크섬의 살아 있는 자산 (파생 작업을 다시 해도 새 자산을 만들지 않는다)."""
+    return db.execute(select(Asset).where(Asset.organization_id == parent.organization_id,
+                                          Asset.source_system_id == parent.source_system_id,
+                                          Asset.checksum_sha256 == sha, Asset.deleted_at.is_(None))) \
+        .scalar_one_or_none()
+
+
+def new_derived(c: Container, db: Session, parent: Asset, *, sha: str, size: int, variant: str, mime: str,
+                relation: str, tool: str, job_id: str | None, now: datetime,
+                provenance_extra: dict[str, Any] | None = None, overrides: dict[str, Any] | None = None) -> Asset:
+    """아직 저장하지 않은 파생 자산 (ID·객체 키·보존 정책까지 정한다, 세션에는 넣지 않는다)."""
     child = Asset(
         asset_id=new_id("asset"), schema_version=parent.schema_version, organization_id=parent.organization_id,
         project_id=parent.project_id, session_id=parent.session_id, source_system_id=parent.source_system_id,
@@ -234,22 +299,35 @@ def create_derived(c: Container, db: Session, parent: Asset, path: str, *, varia
         # 확인 필요: domain.md 5장 표에 파이프라인이 파생 자산을 만드는 행((없음) → READY_PRIVATE, SERVICE)이 없다
         ingest_status="READY_PRIVATE",
         provenance={"ingest_channel": "PIPELINE", "parent_asset_ids": [parent.asset_id], "transform": relation,
-                    "tool_version": tool, **({"job_id": job_id} if job_id else {})},
+                    "tool_version": tool, **({"job_id": job_id} if job_id else {}), **(provenance_extra or {})},
         ext={}, created_at=now, updated_at=now)
+    for k, v in (overrides or {}).items():
+        setattr(child, k, v)
     child.storage_zone = zone_for(variant)
     child.storage_key = object_key(child)
     from app.services.retention import apply_retention
 
     apply_retention(db, child, now)  # 파생본 보존 정책 (08번)
-    c.storage.upload_file(c.settings.buckets[child.storage_zone], child.storage_key, path, mime)
+    child.storage_tier = "HOT"  # 새 객체는 언제나 HOT에 쓴다 (08번 요구사항 9, 옮기는 것은 Tier_Mover)
+    return child
+
+
+def record_derived(c: Container, db: Session, parent: Asset, child: Asset, *, relation: str, tool: str,
+                   now: datetime, enforce_quota: bool = False) -> None:
+    """저장한 객체의 파생 자산·계보·무결성 로그·기관 사용량을 기록한다.
+
+    enforce_quota면 쿼터 행을 잠근 뒤 업로드와 같은 규칙으로 여유를 확인한다 — 넘으면 ProblemError(QUOTA_EXCEEDED)로
+    트랜잭션을 되돌리고, 올린 객체는 호출자가 지운다. 잠금 순서는 무결성 로그 → 쿼터 행 (다른 파생 작업과 같다).
+    """
     db.add(child)
     db.flush()
     db.add(AssetLineage(child_asset_id=child.asset_id, parent_asset_id=parent.asset_id, relation=relation,
                         tool_version=tool, run_by="SERVICE", created_at=now))
     append_integrity(db, child, c.clock.now())
-    q = Quota(c, db)._row(parent.organization_id)
-    q.used_bytes += size  # PROCESSED 존도 기관 사용량에 들어간다 (domain.md 9장)
-    return child
+    quota = Quota(c, db)
+    q = quota.require_room(parent.organization_id, child.byte_size) if enforce_quota \
+        else quota._row(parent.organization_id)
+    q.used_bytes += child.byte_size  # PROCESSED 존도 기관 사용량에 들어간다 (domain.md 9장)
 
 
 def _short_side_scale(short: int) -> str:
@@ -286,7 +364,7 @@ def make_proxy(c: Container, asset_id: str, job_id: str | None = None) -> str:
             return "SKIPPED"
         db.expunge(parent)
     encoder = s.proxy_hw_encoder if (s.gpu_enabled and s.proxy_hw_encoder) else "libx264"
-    with local_copy(c, parent) as src, tempfile.TemporaryDirectory(prefix="marine-proxy-") as tmp:
+    with local_copy(c, parent) as src, tempfile.TemporaryDirectory(prefix="marine-proxy-", dir=work_dir(c)) as tmp:
         out = os.path.join(tmp, "proxy.mp4")
         args = proxy_args(s, src, out, encoder)
         started = time.perf_counter()
@@ -318,7 +396,7 @@ def make_thumbnail(c: Container, asset_id: str, job_id: str | None = None) -> st
             return "SKIPPED"
         db.expunge(parent)
     duration = float(((parent.ext or {}).get("video_ext") or {}).get("duration_s") or 0)
-    with local_copy(c, parent) as src, tempfile.TemporaryDirectory(prefix="marine-thumb-") as tmp:
+    with local_copy(c, parent) as src, tempfile.TemporaryDirectory(prefix="marine-thumb-", dir=work_dir(c)) as tmp:
         out = os.path.join(tmp, "thumb.jpg")
         r = _run(thumbnail_args(s, src, out, duration), s.ffmpeg_timeout_s)
         if r.returncode != 0 or not os.path.exists(out):
@@ -408,7 +486,10 @@ def sensor_parse(c: Container, asset_id: str) -> str:
         elif asset.byte_size > c.settings.sensor_file_max_bytes:
             run.row_errors = [{"row": 0, "reason": "FILE_TOO_LARGE"}]
         else:
-            content = c.storage.get_object(c.settings.buckets[asset.storage_zone or "RAW"], asset.storage_key)
+            from app.services import tiers
+
+            storage, bucket = tiers.locate(c, asset)
+            content = storage.get_object(bucket, asset.storage_key)
             parsed = parse_rows(content, mapping.mapping)
             fmt = (mapping.mapping.get("timestamp") or {}).get("format")
             res = ingest_items(c, db, organization_id=asset.organization_id, device=device, items=parsed.items,

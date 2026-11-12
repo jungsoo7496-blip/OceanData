@@ -13,9 +13,10 @@
 - [x] 9. domain import 검사 — 요구사항 7.3 · 시험 `test_domain_layer_has_no_framework_imports`
 - [x] 10. Alembic 0001 (down 포함) — 요구사항 5.1, 5.2 · CI에서 up→down→up
 - [x] 11. Compose·make up·버킷 생성 — 요구사항 1.1, 1.2, 1.4, 1.5 (2026-11-04 클라우드 환경에서 전체 healthy 확인)
-- [ ] 12. make up 실패 경로 시험 (서비스 하나를 일부러 실패시켜 이름 출력·비0 종료 확인) — 요구사항 1.3 (스크립트는 있음, 자동 시험 없음)
+- [x] 12. make up 실패 경로 시험 — 요구사항 1.2, 1.3 · `tools/tests/test_compose_up.py`(가짜 docker로 헬스체크 실패 서비스 이름 출력·비0 종료, 정상 종료한 migrate 제외, .env 없음 2, 모두 정상 0). CI `python -m unittest discover -s tools/tests`에서 실행
 - [x] 13. 시험 데이터·반복 실행 — 요구사항 6.1, 6.2
 - [x] 14. 합성 영상·대용량 파일 — 요구사항 6.3~6.5 (`make sample-video`, `LARGE_GB=10`)
 - [x] 15. /v1/system/capabilities — 요구사항 11.1, 11.2 · 시험 `test_capabilities_requires_auth_and_hides_settings`
 - [x] 16. CI 파이프라인 — 요구사항 9.1~9.5 (Go 린트·gosec은 06번에서 agent/ 생기면 활성)
-- [ ] 17. golangci-lint 설정 — 요구사항 9.1 (06번과 함께)
+- [x] 17. golangci-lint 설정 — 요구사항 9.1 · `agent/.golangci.yml`(v2 형식, standard 린터 errcheck·govet·ineffassign·staticcheck·unused + gofmt, 제외 규칙 없음). v2.15.0을 `go run`으로 실행(GPL-3.0 개발 도구라 go.mod에 넣지 않음). CI agent 작업·`make agent-lint`에서 Linux와 `GOOS=windows`로 두 번 검사. 처음 지적 43건(Windows 전용 2건 포함)을 모두 코드에서 처리하고 설정 제외·nolint는 0건: 쓰기 파일 닫기 오류 확인·반환 4건(진단 zip, 워커 로그·상태 DB, 감독 로그), 버리던 채널 오류 기록 3건, 설정 임시 파일을 닫은 뒤 지우도록 순서 수정 2건, staticcheck 3건·미사용 함수 1건 수정, 읽기 전용 닫기·응답 본문·rows.Close·Commit 뒤 Rollback·임시 파일 삭제·LocalFree 30건은 `_ =`로 명시
+- [x] 18. HTTP 라이브러리(httpx·httpcore) 로그는 WARNING 이상만 — 요구사항 4.3, 4.4 · 웹훅 URL의 경로에 든 토큰이 INFO 요청 줄로 로그에 남던 것(정리기는 쿼리만 지운다), 시험 `test_webhook_url_not_logged.py`, 웹훅 설정 4개를 `.env.example`·Compose 워커에 추가 (ADR-0057, 지시서 12번)

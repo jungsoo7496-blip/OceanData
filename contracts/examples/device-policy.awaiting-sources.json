@@ -1,0 +1,9 @@
+{
+  "policy_version": "pv-0",
+  "collector_device_id": "dev_00000000000000000000000301",
+  "sources": [],
+  "watch_rules": [],
+  "heartbeat_interval_s": 60,
+  "size_stable_s": 30,
+  "timezone": "UTC"
+}

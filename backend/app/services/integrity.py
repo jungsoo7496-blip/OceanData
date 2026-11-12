@@ -12,6 +12,7 @@ from sqlalchemy import func, select, text
 from app.container import Container
 from app.db.models import Asset, IntegrityAnchor, IntegrityLogEntry
 from app.services.ingest import GENESIS, integrity_payload
+from app.services.tiers import locate
 
 
 def anchor_previous_days(c: Container) -> int:
@@ -80,7 +81,8 @@ def verify_integrity(c: Container, sample_size: int | None = None, seed: int | N
                 continue
             h = hashlib.sha256()
             try:
-                for chunk in c.storage.iter_object(c.settings.buckets[a.storage_zone], a.storage_key):
+                storage, bucket = locate(c, a)  # 자산의 지금 계층 (08번 요구사항 9)
+                for chunk in storage.iter_object(bucket, a.storage_key):
                     h.update(chunk)
             except Exception:  # noqa: BLE001 - 없는 객체도 보고 대상
                 rep.missing_objects.append(e.asset_id)

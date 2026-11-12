@@ -31,7 +31,7 @@ class PlatformUser(HttpUser):
                     "file": {"original_filename": f"load-{sha[:8]}.bin", "byte_size": SIZE,
                              "mime_type": "application/octet-stream", "checksum_sha256": sha},
                     "timestamp_quality": {"source": "UNKNOWN", "verified": False},
-                    "client": {"kind": "SDK", "version": "loadtest"}}
+                    "client": {"kind": "API", "version": "loadtest"}}
         with self.client.post("/v1/uploads", json=manifest, name="POST /v1/uploads", catch_response=True) as r:
             if r.status_code not in (200, 201):
                 r.failure(f"{r.status_code}")

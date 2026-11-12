@@ -8,16 +8,16 @@
     "reason": "15번 엣지 수집기"
   },
   "T02-g": {
-    "status": "NOT_IMPLEMENTED",
-    "reason": "웹 업로드 재개는 브라우저 E2E(web/e2e)로 수동 확인, 자동 수용시험 미작성"
+    "status": "NOT_RUN",
+    "reason": "tools/web_acceptance.py로 탭 종료·동일 세션 재개·파트 재전송 방지·전체 해시 시험을 실행해야 판정"
   },
   "T03-a": {
     "status": "NEEDS_HARDWARE",
     "reason": "10GB 시험은 운영 스토리지·회선에서 (04번 tasks)"
   },
   "T03-b": {
-    "status": "NOT_IMPLEMENTED",
-    "reason": "72시간 오프라인은 에이전트 Go 시험(06번) 축소판만, 엣지는 15번"
+    "status": "NOT_RUN",
+    "reason": "Go TestT03ForcedKillAnd72HourOfflineResume 실행 후 판정: 실제 프로세스 강제 종료·SQLite 복구·주입 시계 72시간 모의 단절. 실제 72시간·PC 전원 차단·15번 엣지는 별도 현장 검증"
   },
   "T11-f": {
     "status": "NEEDS_INPUT",
@@ -48,8 +48,8 @@
     "reason": "16번 (조건부, 게이트 통과 후)"
   },
   "T01-h": {
-    "status": "NEEDS_INPUT",
-    "reason": "GitHub Actions security 작업(SBOM·Trivy·ZAP) 결과로 판정 — 클라우드 세션에서는 결과 미확인"
+    "status": "NOT_RUN",
+    "reason": "tools/security_acceptance.py로 Trivy 이미지·소스와 ZAP API·웹 보고서를 검증해 판정. 로컬 스캔 결과와 원격 GitHub CI 결과를 구분"
   },
   "T18": {
     "status": "NEEDS_HARDWARE",

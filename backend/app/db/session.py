@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 
 def make_engine(url: str) -> Engine:
-    return create_engine(url, pool_pre_ping=True, pool_size=10, max_overflow=20, future=True)
+    # hide_parameters: 처리되지 않은 DB 오류가 로그에 바인딩 값(개인정보일 수 있다)을 남기지 않게 한다 (security.md)
+    return create_engine(url, pool_pre_ping=True, pool_size=10, max_overflow=20, future=True, hide_parameters=True)
 
 
 @lru_cache(maxsize=4)

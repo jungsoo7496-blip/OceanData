@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
 import secrets
 import shutil
 
@@ -21,7 +22,8 @@ from tests.contract.openapi_contract import assert_matches_contract as check
 from tests.integration.test_catalog import _asset
 
 pytestmark = [pytest.mark.integration, pytest.mark.acceptance,
-              pytest.mark.skipif(not shutil.which("pg_dump") or not shutil.which("pg_restore"),
+              pytest.mark.skipif(not shutil.which(os.environ.get("PG_DUMP_BIN", "pg_dump"))
+                                 or not shutil.which(os.environ.get("PG_RESTORE_BIN", "pg_restore")),
                                  reason="pg_dump·pg_restore가 없습니다 (서버와 같은 주버전)")]
 OP, ADMIN_A = 106, 101
 
@@ -88,7 +90,7 @@ def test_t10_tiered_backup_and_restore(ictx) -> None:
 
     # T10-a: 임시 DB·임시 위치에 복원 → 행 수·감사 로그 체인·객체 해시가 원본과 같다
     rep = backup.restore_test(c)
-    assert rep["ok"], rep
+    assert rep["ok"], json.dumps(rep, ensure_ascii=False)
     assert rep["backup_run_id"] == rid2 and rep["tables_checked"] == r2.table_count
     assert rep["objects_checked"] == r2.object_count and rep["audit_chain_ok"] is True
     assert c.storage.head_object(c.settings.backup_bucket, f"restore-tests/{rid2}/RAW/{raw_prot_key}") is None

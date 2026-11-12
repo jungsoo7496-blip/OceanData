@@ -2,16 +2,21 @@ module github.com/jungsoo7496-blip/oceandata/agent
 
 go 1.26.0
 
-toolchain go1.26.10
+toolchain go1.26.11
 
 require (
+	github.com/Masterminds/semver/v3 v3.5.0
+	github.com/creativeprojects/go-selfupdate v1.7.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/fsnotify/fsnotify v1.8.0
 	github.com/kardianos/service v1.2.2
+	github.com/oapi-codegen/runtime v1.6.0
+	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.34.4
 )
 
 require (
+	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
@@ -21,7 +26,6 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
 	modernc.org/gc/v3 v3.0.0-20240107210532-573471604cb6 // indirect
 	modernc.org/libc v1.55.3 // indirect
 	modernc.org/mathutil v1.6.0 // indirect

@@ -119,6 +119,11 @@
       "type": "string",
       "pattern": "^rvw_[0-9A-HJKMNP-TV-Z]{26}$"
     },
+    "policy_draft_id": {
+      "description": "장비 정책 초안 (09번 요구사항 3.2·3.3, ADR-0037)",
+      "type": "string",
+      "pattern": "^pdr_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
     "sha256": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
@@ -567,10 +572,12 @@
         },
         "original_filename": {
           "type": "string",
+          "description": "자산 응답에서는 소유 기관 구성원과 플랫폼 운영자에게만 표시",
           "maxLength": 512
         },
         "original_relative_path": {
           "type": "string",
+          "description": "자산 응답에서는 소유 기관 구성원과 플랫폼 운영자에게만 표시",
           "maxLength": 1024
         },
         "original_timestamps": {
@@ -582,6 +589,7 @@
         },
         "parent_asset_ids": {
           "type": "array",
+          "description": "자산 응답에는 호출자의 자산 조회 범위 안에 있는 부모만 포함",
           "items": {
             "$ref": "#/$defs/asset_id"
           }
@@ -589,6 +597,16 @@
         "transform": {
           "type": "string",
           "description": "PROXY, THUMBNAIL, CLIP, DEID, LABEL 등"
+        },
+        "clip_range_s": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "구간 클립(transform=CLIP, 09번 요구사항 7.2)이면 원 영상 기준 [시작, 끝] 초"
         },
         "tool_version": {
           "type": "string"

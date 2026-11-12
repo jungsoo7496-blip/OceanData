@@ -88,6 +88,7 @@ export interface Session {
 
 export interface Asset {
   asset_id: string
+  organization_id: string
   project_id: string
   session_id?: string | null
   source_system_id: string

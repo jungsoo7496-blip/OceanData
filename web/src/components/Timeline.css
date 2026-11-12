@@ -1,0 +1,13 @@
+/* 타임라인 표시의 키보드 초점 (09번 요구사항 11.2).
+   AntD App 전역 스타일이 a:focus 윤곽선을 없애므로(:where(..) a:focus { outline: 0 }) 클래스 두 단계로 다시 그린다.
+   검은 윤곽선 + 흰 테두리로 파란 막대·옅은 회차 배경 어디서나 보이게 한다 */
+.tl-mark:focus-visible {
+  outline: 3px solid #141414;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px #fff;
+  z-index: 2;
+}
+
+.tl-mark:hover {
+  filter: brightness(0.8);
+}

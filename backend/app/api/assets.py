@@ -11,7 +11,7 @@ from sqlalchemy import Float, column, exists, func, literal, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
-from app.api.deps import client_ip, container, get_db, load_scoped, page_params, require
+from app.api.deps import DB, client_ip, container, load_scoped, page_params, require
 from app.api.pagination import paginate
 from app.container import Container
 from app.db.models import Asset, TrialSession
@@ -21,17 +21,25 @@ from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services.external import public_env
 from app.services.ingest import EXT_KEYS, receipt
-from app.services.tenant import scoped_select
+from app.services.tenant import scoped_select, visible_asset_ids
 from app.timefmt import iso
 
 router = APIRouter(tags=["assets"])
 
 
-def asset_view(a: Asset, p: Principal) -> dict[str, Any]:
+def asset_view(a: Asset, p: Principal, visible_parents: set[str]) -> dict[str, Any]:
     precision = a.location_precision
     if p.organization_id != a.organization_id and precision == "EXACT_RESTRICTED":
         precision = "GENERALIZED"  # 정확한 위치는 소유 기관만 (03번 요구사항 6.4)
     location = generalize_location(a.location, precision)
+    provenance = dict(a.provenance)
+    owns_asset = p.organization_id == a.organization_id and p.has_role("ORG_ADMIN", "ORG_MEMBER")
+    if p.kind != "USER" or not (owns_asset or p.has_role("PLATFORM_OPERATOR")):
+        provenance.pop("original_filename", None)
+        provenance.pop("original_relative_path", None)
+    if "parent_asset_ids" in provenance:
+        provenance["parent_asset_ids"] = [asset_id for asset_id in provenance["parent_asset_ids"]
+                                           if asset_id in visible_parents]
     out: dict[str, Any] = {
         "schema_version": a.schema_version, "asset_id": a.asset_id, "organization_id": a.organization_id,
         "project_id": a.project_id, "session_id": a.session_id, "source_system_id": a.source_system_id,
@@ -44,7 +52,7 @@ def asset_view(a: Asset, p: Principal) -> dict[str, Any]:
         "retention_policy_id": a.retention_policy_id, "retention_until": iso(a.retention_until),
         "quality_status": a.quality_status, "quality_reasons": list(a.quality_reasons or []),
         "ingest_status": a.ingest_status, "share_status": a.share_status, "backup_class": a.backup_class,
-        "provenance": a.provenance,
+        "provenance": provenance,
     }
     optional = {"dataset_id": a.dataset_id, "location": location,
                 "location_precision": precision if location else None, "area_code": a.area_code,
@@ -59,13 +67,19 @@ def asset_view(a: Asset, p: Principal) -> dict[str, Any]:
     return out
 
 
+def asset_views(db: Session, assets: list[Asset], p: Principal) -> list[dict[str, Any]]:
+    parents = {asset_id for asset in assets for asset_id in asset.provenance.get("parent_asset_ids", [])}
+    shown = visible_asset_ids(db, p, parents)
+    return [asset_view(asset, p, shown) for asset in assets]
+
+
 @router.get("/v1/assets")
 def list_assets(request: Request, session_id: str | None = None, source_system_id: str | None = None,
                 data_type: str | None = None, ingest_status: str | None = None, quality_status: str | None = None,
                 sharing_scope: str | None = None, variant: str | None = None, share_status: str | None = None,
                 env_metric: str | None = None, env_min: float | None = None, env_max: float | None = None,
                 captured_from: datetime | None = None,
-                captured_to: datetime | None = None, db: Session = Depends(get_db),
+                captured_to: datetime | None = None, db: Session = DB,
                 p: Principal = Depends(require("asset:read")), page: dict = Depends(page_params)) -> dict:
     stmt = scoped_select(Asset, p)
     for col, val in ((Asset.session_id, session_id), (Asset.source_system_id, source_system_id),
@@ -87,16 +101,16 @@ def list_assets(request: Request, session_id: str | None = None, source_system_i
     if captured_to is not None:
         stmt = stmt.where(Asset.capture_start_at < captured_to)
     rows, nxt = paginate(db, stmt, Asset.asset_id, page["limit"], page["cursor"])
-    return {"items": [asset_view(a, p) for a in rows], "next_cursor": nxt}
+    return {"items": asset_views(db, rows, p), "next_cursor": nxt}
 
 
 @router.get("/v1/assets/{asset_id}")
-def get_asset(asset_id: str, request: Request, db: Session = Depends(get_db), c: Container = Depends(container),
+def get_asset(asset_id: str, request: Request, db: Session = DB, c: Container = Depends(container),
               p: Principal = Depends(require("asset:read"))) -> dict:
     a = load_scoped(db, c, request, Asset, asset_id, p)
     c.audit.record("ASSET_VIEWED", principal=p, organization_id=a.organization_id, target_type="Asset",
                    target_id=a.asset_id, source_ip=client_ip(request))  # 자산 상세 조회 감사 (security.md)
-    return asset_view(a, p)
+    return asset_views(db, [a], p)[0]
 
 
 class AssetPatch(BaseModel):
@@ -108,7 +122,7 @@ class AssetPatch(BaseModel):
 
 
 @router.patch("/v1/assets/{asset_id}")
-def patch_asset(asset_id: str, body: AssetPatch, request: Request, db: Session = Depends(get_db),
+def patch_asset(asset_id: str, body: AssetPatch, request: Request, db: Session = DB,
                 c: Container = Depends(container), p: Principal = Depends(require("asset:write"))) -> dict:
     if not body.model_fields_set - {"reason"}:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "", "code": "min_properties",
@@ -156,11 +170,11 @@ def patch_asset(asset_id: str, body: AssetPatch, request: Request, db: Session =
             raise ProblemError("CONFLICT", detail="등록된 자산의 회차는 바꿀 수 없습니다")
     a.updated_at = now
     db.flush()
-    return asset_view(a, p)
+    return asset_views(db, [a], p)[0]
 
 
 @router.get("/v1/assets/{asset_id}/receipt")
-def get_receipt(asset_id: str, request: Request, db: Session = Depends(get_db), c: Container = Depends(container),
+def get_receipt(asset_id: str, request: Request, db: Session = DB, c: Container = Depends(container),
                 p: Principal = Depends(require("asset:receipt"))) -> dict:
     a = load_scoped(db, c, request, Asset, asset_id, p)
     r = receipt(db, a)
@@ -176,7 +190,7 @@ class ReprocessRequest(BaseModel):
 
 
 @router.post("/v1/assets/{asset_id}/reprocess", status_code=202)
-def reprocess_asset(asset_id: str, body: ReprocessRequest, request: Request, db: Session = Depends(get_db),
+def reprocess_asset(asset_id: str, body: ReprocessRequest, request: Request, db: Session = DB,
                     c: Container = Depends(container), p: Principal = Depends(require("asset:reprocess"))) -> dict:
     """처리 단계 재실행 (05번 요구사항 7.2). 새 파생 자산은 계보에 연결된다."""
     from app.domain.ids import new_ulid
@@ -216,21 +230,86 @@ def reprocess_asset(asset_id: str, body: ReprocessRequest, request: Request, db:
     return {"asset_id": a.asset_id, "job_ids": [job_id]}
 
 
+class ClipRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    start_s: float = Field(ge=0, allow_inf_nan=False)
+    end_s: float = Field(gt=0, allow_inf_nan=False)
+    # 감사 로그에 남는 글 — 제어 문자(NUL 등)는 계약대로 400 (security.md 입력 검증)
+    reason: str | None = Field(default=None, min_length=2, max_length=500, pattern=r"^[^\x00-\x1f\x7f]*$")
+
+
+def _own_binary(a: Asset, p: Principal) -> None:
+    if a.organization_id != p.organization_id:  # 바이너리는 자기 기관만 (domain.md 2장)
+        raise ProblemError("FORBIDDEN", detail="다른 기관 자산의 영상은 자를 수 없습니다")
+
+
+@router.get("/v1/assets/{asset_id}/clips")
+def list_asset_clips(asset_id: str, request: Request, db: Session = DB, c: Container = Depends(container),
+                     p: Principal = Depends(require("asset:clip"))) -> dict:
+    """이 영상의 구간 클립 작업과 결과 (09번 요구사항 7.2)."""
+    from app.services import clips
+
+    a = load_scoped(db, c, request, Asset, asset_id, p)
+    _own_binary(a, p)
+    return {"items": clips.list_clips(c, db, a)}
+
+
+@router.post("/v1/assets/{asset_id}/clips", status_code=202)
+def create_asset_clip(asset_id: str, body: ClipRequest, request: Request, db: Session = DB,
+                      c: Container = Depends(container), p: Principal = Depends(require("asset:clip"))) -> dict:
+    """구간 클립 작업 등록 (09번 요구사항 7.2). 결과는 작업 큐가 파생 자산(CLIP)으로 계보에 연결한다.
+
+    작업 행·감사·마지막 조회 시각은 요청 트랜잭션 하나로 확정한다.
+    get_db가 응답을 보내기 전에 커밋하므로(ADR-0053) 응답과 기록이 어긋나지 않는다."""
+    from app.services import clips
+    from app.services.tiers import touch_accessed
+
+    a = load_scoped(db, c, request, Asset, asset_id, p)
+    _own_binary(a, p)
+    out, created = clips.request_clip(c, db, a, p.principal_id, body.start_s, body.end_s)
+    touch_accessed(db, a.asset_id, c.clock.now())  # 사용자가 원 영상을 쓴다 (계층 규칙의 '마지막 조회')
+    if created:
+        c.audit.record("CLIP_EXPORT_REQUESTED", principal=p, organization_id=a.organization_id, target_type="Asset",
+                       target_id=a.asset_id, reason=body.reason, source_ip=client_ip(request),
+                       details={"job_id": out["job_id"], "start_s": out["start_s"], "end_s": out["end_s"]},
+                       connection=db.connection())
+    return out
+
+
 @router.post("/v1/assets/{asset_id}/download-url")
-def create_download_url(asset_id: str, request: Request, db: Session = Depends(get_db),
+def create_download_url(asset_id: str, request: Request, db: Session = DB,
                         c: Container = Depends(container), p: Principal = Depends(require("asset:download"))) -> dict:
     """프록시 재생·원본 다운로드용 단기 URL (09번 요구사항 7.1, 7.3). 발급 사실은 감사 로그에 남긴다 (security.md)."""
     from datetime import timedelta
 
     a = load_scoped(db, c, request, Asset, asset_id, p)
+    grant = None
     if a.organization_id != p.organization_id:  # 바이너리는 자기 기관만 (domain.md 2장)
-        raise ProblemError("FORBIDDEN", detail="다른 기관 자산의 바이너리는 받을 수 없습니다")
+        if p.has_role("PLATFORM_OPERATOR") and not p.is_machine:  # 운영자는 긴급 열람 승인으로만 (02번 요구사항 8)
+            from app.services.break_glass import active_grant_for
+
+            grant = active_grant_for(db, a, p.principal_id, c.clock.now())
+            if grant is None:
+                raise ProblemError("FORBIDDEN", detail="운영자의 원본 접근은 유효한 긴급 열람 승인이 있어야 합니다")
+        else:
+            raise ProblemError("FORBIDDEN", detail="다른 기관 자산의 바이너리는 받을 수 없습니다")
     if not a.has_binary or not a.storage_key or a.ingest_status in ("UPLOADING", "RECEIVED", "VALIDATING"):
         raise ProblemError("CONFLICT", detail="아직 내려받을 수 있는 바이너리가 없습니다")
     if a.ingest_status == "QUARANTINED":
         raise ProblemError("CONFLICT", detail="격리된 자산은 내려받을 수 없습니다")
+    from app.services import tiers
+
     ttl = c.settings.presign_download_ttl_s
-    url = c.storage.presign_get(c.settings.buckets[a.storage_zone or "RAW"], a.storage_key, ttl)
+    # 지금 기록된 계층의 위치로 서명한다. 계층 이동 중이면 원래 위치이고, 전환 뒤에도 원래 객체는 URL 유효시간 이상
+    # 남겨 두므로 이미 발급한 URL이 끊기지 않는다 (08번 요구사항 9.3)
+    storage, bucket = tiers.locate(c, a)
+    url = storage.presign_get(bucket, a.storage_key, ttl)
+    tiers.touch_accessed(db, a.asset_id, c.clock.now())  # 계층 규칙의 '마지막 조회'
     c.audit.record("DOWNLOAD_URL_ISSUED", principal=p, organization_id=a.organization_id, target_type="Asset",
                    target_id=a.asset_id, source_ip=client_ip(request), details={"variant": a.variant})
+    if grant is not None:  # 긴급 열람 중 원본 접근은 따로 남긴다 (요구사항 8.3)
+        c.audit.record("BREAK_GLASS_ACCESS", principal=p, organization_id=a.organization_id, target_type="Asset",
+                       target_id=a.asset_id, source_ip=client_ip(request),
+                       details={"grant_id": grant.grant_id, "variant": a.variant,
+                                "grant_expires_at": grant.expires_at.isoformat() if grant.expires_at else None})
     return {"asset_id": a.asset_id, "url": url, "expires_at": iso(c.clock.now() + timedelta(seconds=ttl))}

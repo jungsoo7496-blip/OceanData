@@ -18,6 +18,25 @@ METRIC_STATUS = {"OK": "확정", "NO_DATA": "데이터 없음", "NEEDS_VERIFICAT
 MIME = {"PDF": "application/pdf", "XLSX": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "HWPX": "application/hwp+zip"}
 PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z0-9_.]+)\s*\}\}")
+# XML 1.0이 글자로 허용하지 않는 코드 포인트(NUL·탭/줄바꿈/CR을 뺀 C0 제어 문자·U+FFFE·U+FFFF·낱개 서로게이트).
+# XLSX(openpyxl)는 이런 문자가 있으면 예외를 내고, HWPX(양식 XML 치환)는 파서가 못 읽는 파일이 된다 (ADR-0056).
+_XML_ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+_ATTR_ENTITIES = {'"': "&quot;", "'": "&apos;"}  # 양식의 속성 값 안에 값이 들어가도 속성을 끼워 넣지 못하게
+
+
+def xml_safe(text: str) -> str:
+    return _XML_ILLEGAL.sub("", text)
+
+
+def _clean(node: Any) -> Any:
+    """렌더링 모델의 모든 문자열에서 XML이 담을 수 없는 문자를 뺀다 (보이지 않는 제어 문자라 내용은 달라지지 않는다)."""
+    if isinstance(node, str):
+        return xml_safe(node)
+    if isinstance(node, dict):
+        return {k: _clean(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_clean(v) for v in node]
+    return node
 
 
 def metric_text(m: dict[str, Any]) -> str:
@@ -98,6 +117,7 @@ def render_xlsx(doc: dict[str, Any]) -> bytes:
     from openpyxl import Workbook
     from openpyxl.styles import Font
 
+    doc = _clean(doc)
     wb = Workbook()
     ws = wb.active
     ws.title = "보고서"
@@ -132,9 +152,26 @@ def render_xlsx(doc: dict[str, Any]) -> bytes:
         for r in s.get("records", []):
             rws.append([r["record_id"], r["version"], r["title"], r["test_item"], r["conditions"], r["result"],
                         r["evidence_count"]])
+    _neutralize_formulas(wb)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# 수식으로 해석될 수 있는 첫 글자 (OWASP CSV/수식 주입 안내). 보고서 제목·입력 항목·회차 기록은 사람·장비가 쓴 글이라
+# openpyxl이 '='로 시작하는 문자열을 수식 셀로 저장하면 스프레드시트에서 계산된다 (HYPERLINK·DDE 등).
+FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _neutralize_formulas(wb: Any) -> None:
+    """위험한 첫 글자로 시작하는 문자열은 값을 바꾸지 않고 문자열 셀로 고정하고 quotePrefix를 켠다
+    (열어도 계산하지 않고, 셀을 고쳐 써도 수식이 되지 않는다)."""
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                if isinstance(cell.value, str) and cell.value.startswith(FORMULA_LEAD):
+                    cell.data_type = "s"
+                    cell.quotePrefix = True
 
 
 # ------------------------------------------------------------------ HWPX (양식 XML 치환)
@@ -174,7 +211,7 @@ def render_hwpx(template: bytes, doc: dict[str, Any]) -> bytes:
     values = hwpx_values(doc)
 
     def sub(m: re.Match[str]) -> str:
-        return xml_escape(values.get(m.group(1), m.group(0)))
+        return xml_escape(xml_safe(values.get(m.group(1), m.group(0))), _ATTR_ENTITIES)
 
     src = zipfile.ZipFile(io.BytesIO(template))
     out = io.BytesIO()

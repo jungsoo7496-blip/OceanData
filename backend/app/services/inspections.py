@@ -128,8 +128,8 @@ def auto_fill(c: Container, db: Session, cycle: str, now: datetime) -> dict[str,
     return out
 
 
-def create(c: Container, db: Session, *, cycle: str, period_key: str, assignee: str | None, created_by: str,
-           inspection_id: str) -> Inspection:
+def create(c: Container, db: Session, *, cycle: str, period_key: str, due_at: datetime, assignee: str | None,
+           created_by: str, inspection_id: str) -> Inspection:
     now = c.clock.now()
     auto = auto_fill(c, db, cycle, now)
     items = []
@@ -138,7 +138,7 @@ def create(c: Container, db: Session, *, cycle: str, period_key: str, assignee: 
         items.append({"item_code": t.item_code, "title": t.title, "auto": t.auto, "result": result, "note": None,
                       "auto_detail": detail})
     row = Inspection(inspection_id=inspection_id, cycle=cycle, period_key=period_key, status="IN_PROGRESS",
-                     assignee=assignee, due_at=tpl.due_at(cycle, period_key, c.settings.ops_timezone), note=None,
+                     assignee=assignee, due_at=due_at, note=None,
                      items=items, evidence=[], created_by=created_by, created_at=now)
     db.add(row)
     return row

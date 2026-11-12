@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import mimetypes
 import os
 import tempfile
@@ -38,6 +39,8 @@ from app.domain.ids import new_id
 from app.ports.notifier import Notification
 from app.services import contracts
 from app.timefmt import iso
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from app.container import Container
@@ -110,23 +113,23 @@ def version_lineage(db: Session, v: DatasetVersion, organization_id: str | None)
             "manifest_sha256": v.manifest_sha256, "hidden_item_count": len(rows) - len(visible), "items": items}
 
 
-def _copy(c: Container, src_bucket: str, src_key: str, dst_bucket: str, dst_key: str) -> None:
+def _copy(c: Container, a: Asset, dst_bucket: str, dst_key: str) -> None:
+    """자산 객체(지금 계층에서 읽음, 08번 요구사항 9)를 DATASET 존(HOT)에 복사한다."""
+    from app.services import tiers
+
     fd, path = tempfile.mkstemp(prefix="dsv-")
     try:
         with os.fdopen(fd, "wb") as f:
-            for chunk in c.storage.iter_object(src_bucket, src_key):
-                f.write(chunk)
+            tiers.download(c, a, f)
         c.storage.upload_file(dst_bucket, dst_key, path)
     finally:
         os.unlink(path)
 
 
-def build_version(c: Container, db: Session, ds: Dataset, version: str, asset_ids: list[str],
-                  data_card: dict[str, Any], by: str) -> DatasetVersion:
-    """승인 자산으로 버전을 만든다 (요구사항 5). 조건을 못 맞춘 자산이 하나라도 있으면 RuleViolation."""
+def _validate(c: Container, db: Session, asset_ids: list[str], now: datetime) -> list[Asset]:
+    """데이터셋에 넣을 수 있는 자산인가 (요구사항 5). 하나라도 못 맞추면 RuleViolation."""
     from app.services.sharing import facts_for
 
-    now = c.clock.now()
     assets = list(db.execute(select(Asset).where(Asset.asset_id.in_(asset_ids))).scalars())
     found = {a.asset_id for a in assets}
     unmet: list[UnmetCondition] = [UnmetCondition("자산 존재", f"{x} 없음") for x in asset_ids if x not in found]
@@ -141,15 +144,19 @@ def build_version(c: Container, db: Session, ds: Dataset, version: str, asset_id
             unmet.append(UnmetCondition(u.condition, f"{a.asset_id} {u.actual}"))
     if unmet:
         raise RuleViolation("데이터셋에 넣을 수 없는 자산이 있습니다", unmet)
-    vid = new_id("dataset_version")
+    return assets
+
+
+def _materialize(c: Container, db: Session, ds: Dataset, vid: str, version: str, assets: list[Asset],
+                 data_card: dict[str, Any], now: datetime) -> tuple[dict[str, Any], list[DatasetVersionItem], bytes]:
+    """DATASET 존 사본과 매니페스트 (계약 검사). 저장한 매니페스트 본문을 돌려준다."""
     items: list[dict[str, Any]] = []
     rows: list[DatasetVersionItem] = []
     for a in sorted(assets, key=lambda x: x.asset_id):
         ext = mimetypes.guess_extension(a.mime_type or "") or ".bin"
         path = f"{a.variant.lower()}/{a.asset_id}{ext}"
         key = f"{ds.dataset_id}/{vid}/{path}"
-        _copy(c, c.settings.buckets[a.storage_zone or "PROCESSED"], a.storage_key or "", c.settings.bucket_datasets,
-              key)
+        _copy(c, a, c.settings.bucket_datasets, key)
         rows.append(DatasetVersionItem(dataset_version_id=vid, asset_id=a.asset_id, organization_id=a.organization_id,
                                        path=path, object_key=key, byte_size=a.byte_size,
                                        checksum_sha256=a.checksum_sha256))
@@ -167,16 +174,112 @@ def build_version(c: Container, db: Session, ds: Dataset, version: str, asset_id
         raise RuleViolation("매니페스트·데이터 카드가 계약과 맞지 않습니다",
                             [UnmetCondition(p.pointer or "/", p.message) for p in problems[:20]])
     body = json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=1).encode()
-    mkey = f"{ds.dataset_id}/{vid}/MANIFEST.json"
-    c.storage.put_object(c.settings.bucket_datasets, mkey, body, "application/json")
+    c.storage.put_object(c.settings.bucket_datasets, f"{ds.dataset_id}/{vid}/MANIFEST.json", body, "application/json")
+    return manifest, rows, body
+
+
+SAMPLE_MAX = 3
+
+
+def _make_samples(c: Container, ds: Dataset, vid: str, assets: list[Asset]) -> list[str]:
+    """카탈로그 샘플 썸네일 (요구사항 7.1): 항목(공유 조건을 통과한 파생본) 앞 3개에서 JPEG 한 장씩.
+    뽑지 못하면 건너뛴다 — 버전 만들기를 막지 않는다."""
+    from app.services.pipeline import _run, local_copy, work_dir
+
+    keys: list[str] = []
+    media = [a for a in sorted(assets, key=lambda x: x.asset_id)
+             if (a.mime_type or "").split("/")[0] in ("video", "image")]
+    for a in media[:SAMPLE_MAX]:
+        try:
+            with local_copy(c, a) as src, tempfile.TemporaryDirectory(prefix="marine-sample-", dir=work_dir(c)) as tmp:
+                out = os.path.join(tmp, "s.jpg")
+                for seek in ("1", "0"):  # 1초 지점, 짧으면 첫 프레임
+                    args = [c.settings.ffmpeg_path, "-hide_banner", "-loglevel", "error", "-y", "-ss", seek, "-i", src,
+                            "-frames:v", "1", "-vf", "scale=320:-2", out]
+                    if _run(args, 120).returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 0:
+                        break
+                else:
+                    continue
+                key = f"{ds.dataset_id}/{vid}/samples/{len(keys) + 1}.jpg"
+                with open(out, "rb") as f:
+                    c.storage.put_object(c.settings.bucket_datasets, key, f.read(), "image/jpeg")
+                keys.append(key)
+        except Exception as exc:  # noqa: BLE001 - 샘플은 부가 정보
+            log.warning("dataset_sample_failed", extra={"asset_id": a.asset_id, "error_type": type(exc).__name__})
+    return keys
+
+
+def sample_urls(c: Container, v: DatasetVersion | None) -> list[dict[str, str]]:
+    if v is None or v.status != "READY" or not v.sample_keys:
+        return []
+    ttl = c.settings.presign_download_ttl_s
+    exp = iso(c.clock.now() + timedelta(seconds=ttl)) or ""
+    return [{"url": c.storage.presign_get(c.settings.bucket_datasets, k, ttl), "expires_at": exp}
+            for k in v.sample_keys]
+
+
+def build_version(c: Container, db: Session, ds: Dataset, version: str, asset_ids: list[str],
+                  data_card: dict[str, Any], by: str) -> DatasetVersion:
+    """승인 자산으로 버전을 요청 안에서 만든다 (요구사항 5). 조건을 못 맞춘 자산이 하나라도 있으면 RuleViolation."""
+    now = c.clock.now()
+    assets = _validate(c, db, asset_ids, now)
+    vid = new_id("dataset_version")
+    manifest, rows, body = _materialize(c, db, ds, vid, version, assets, data_card, now)
     v = DatasetVersion(dataset_version_id=vid, dataset_id=ds.dataset_id, version=version,
-                       provider_organization_ids=providers, item_count=len(items),
-                       total_bytes=manifest["total_bytes"], data_card=data_card, manifest=manifest, manifest_key=mkey,
-                       manifest_sha256=hashlib.sha256(body).hexdigest(), created_by=by, created_at=now)
+                       provider_organization_ids=manifest["provider_organization_ids"], item_count=len(rows),
+                       total_bytes=manifest["total_bytes"], data_card=data_card, manifest=manifest,
+                       manifest_key=f"{ds.dataset_id}/{vid}/MANIFEST.json",
+                       manifest_sha256=hashlib.sha256(body).hexdigest(), created_by=by, created_at=now, status="READY",
+                       sample_keys=_make_samples(c, ds, vid, assets) or None)
     db.add(v)
     db.flush()
     db.add_all(rows)
     return v
+
+
+def start_build(c: Container, db: Session, ds: Dataset, version: str, asset_ids: list[str],
+                data_card: dict[str, Any], by: str) -> tuple[DatasetVersion, str]:
+    """큰 버전 (13번 작업 32): 조건은 지금 모두 검사하고, 사본·매니페스트는 작업 큐에서 만든다."""
+    now = c.clock.now()
+    assets = _validate(c, db, asset_ids, now)
+    vid = new_id("dataset_version")
+    v = DatasetVersion(dataset_version_id=vid, dataset_id=ds.dataset_id, version=version,
+                       provider_organization_ids=sorted({a.organization_id for a in assets}), item_count=len(assets),
+                       total_bytes=sum(int(a.byte_size or 0) for a in assets), data_card=data_card, manifest={},
+                       manifest_key="", manifest_sha256="", created_by=by, created_at=now, status="BUILDING",
+                       pending_asset_ids=sorted(a.asset_id for a in assets))
+    db.add(v)
+    db.flush()
+    job_id = c.queue.enqueue("dataset_build", {"dataset_version_id": vid}, dedupe_key=f"dataset_build:{vid}")
+    return v, job_id
+
+
+def finish_build(c: Container, dataset_version_id: str) -> str:
+    """작업 큐: 다시 검사 → 사본·매니페스트 → READY.
+
+    그사이 조건이 바뀌었으면 FAILED (복사한 사본은 남겨 두고 운영자가 새 버전으로 다시 만든다).
+    """
+    now = c.clock.now()
+    with c.sessionmaker.begin() as db:
+        v = db.get(DatasetVersion, dataset_version_id, with_for_update=True)
+        if v is None or v.status != "BUILDING":
+            return "SKIPPED"
+        ds = db.get(Dataset, v.dataset_id)
+        assert ds is not None  # noqa: S101 - FK
+        try:
+            assets = _validate(c, db, list(v.pending_asset_ids or []), now)
+            manifest, rows, body = _materialize(c, db, ds, v.dataset_version_id, v.version, assets, v.data_card, now)
+        except RuleViolation as exc:
+            v.status = "FAILED"
+            v.build_error = (exc.detail + ": " + "; ".join(f"{u.condition} ({u.actual})" for u in exc.unmet[:5]))[:500]
+            return "FAILED"
+        v.manifest, v.manifest_key = manifest, f"{ds.dataset_id}/{v.dataset_version_id}/MANIFEST.json"
+        v.manifest_sha256 = hashlib.sha256(body).hexdigest()
+        v.provider_organization_ids, v.item_count = manifest["provider_organization_ids"], len(rows)
+        v.total_bytes, v.status, v.pending_asset_ids = manifest["total_bytes"], "READY", None
+        v.sample_keys = _make_samples(c, ds, v.dataset_version_id, assets) or None
+        db.add_all(rows)
+    return "READY"
 
 
 def dataset_view(db: Session, ds: Dataset, versions: list[DatasetVersion]) -> dict[str, Any]:
@@ -185,15 +288,17 @@ def dataset_view(db: Session, ds: Dataset, versions: list[DatasetVersion]) -> di
             "published_at": iso(ds.published_at),
             "versions": [{"dataset_version_id": v.dataset_version_id, "version": v.version,
                           "created_at": iso(v.created_at), "scope": version_scope(db, v), "item_count": v.item_count,
-                          "total_bytes": v.total_bytes, "manifest_sha256": v.manifest_sha256} for v in versions],
+                          "total_bytes": v.total_bytes, "manifest_sha256": v.manifest_sha256 or None,  # 빌드 전 null
+                          "status": v.status, "build_error": v.build_error} for v in versions],
             **({"data_card": latest.data_card} if latest else {})}
 
 
 def visible_versions(db: Session, ds: Dataset, consumer: bool) -> list[DatasetVersion]:
     vs = list(db.execute(select(DatasetVersion).where(DatasetVersion.dataset_id == ds.dataset_id)
                          .order_by(DatasetVersion.created_at, DatasetVersion.dataset_version_id)).scalars())
-    if consumer:  # 이용기관에는 게시된 데이터셋의 L3 이상 버전만 (요구사항 7)
-        vs = [v for v in vs if ds.published and rules.LEVEL[version_scope(db, v)] >= rules.LEVEL[CATALOG_MIN]]
+    if consumer:  # 이용기관에는 게시된 데이터셋의 L3 이상·다 만든(READY) 버전만 (요구사항 7, 작업 32)
+        vs = [v for v in vs if v.status == "READY" and ds.published
+              and rules.LEVEL[version_scope(db, v)] >= rules.LEVEL[CATALOG_MIN]]
     return vs
 
 

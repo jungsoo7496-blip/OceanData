@@ -1,7 +1,7 @@
 # 작업: 06 동기화 에이전트
 
 - [x] 1. 등록·자격증명 0600 저장·서버 사유 표시·사설 CA만 — 요구사항 1.1~1.3 (실제 스택 확인)
-- [ ] 2. Windows DPAPI로 자격증명 보호 — 요구사항 1.1 (지금은 ProgramData 0600 파일, 확인 필요)
+- [x] 2. Windows CurrentUser DPAPI 자격증명 보호·구형 평문 이행·서비스 계정 SID 검증 — 요구사항 1.1 · Windows native 11개, Linux race, 양 OS vet·gosec 통과 (ADR-0024). 실제 서비스 설치·권한 설정은 현장 확인
 - [x] 3. 감시 규칙 분류·`{session}` 추출·정책 갱신·첫 실행 기존 파일 — 요구사항 2.1~2.3 · 시험 `TestMatchPath`, `TestT02*`
 - [x] 4. 정책 변경 시 정책 제외 + 하트비트 보고 (계약에 policy_excluded 추가) — 요구사항 2.4 · 시험 `TestPolicyChangeExcludesQueuedFilesAndReports`
 - [x] 5. 쓰기 완료 판정 (크기·수정시각 안정 + 읽기 가능) — 요구사항 3.1 · 시험 `scanStable`
@@ -14,8 +14,11 @@
 - [x] 12. 하트비트(대기량·원천별·정책 제외·디스크·오류), 오프라인 시 로컬 기록 — 요구사항 9.1, 9.2
 - [x] 13. 자격증명 폐기 시 중지·대기열 유지·재등록 표시 — 요구사항 10.1 · 시험 `TestRevokedCredentialStopsButKeepsQueue`
 - [x] 14. 서비스 설치(kardianos/service)·status·diag·로그 순환 — 요구사항 11.1~11.4 (install은 이 환경에서 실행 확인 못 함 — 로컬 Windows·Linux에서 확인 필요)
-- [x] 15. 서명 검증 수동 업데이트·되돌리기 — 요구사항 12.1, 12.3 · 시험 `TestVerifyApplyRollback`
-- [ ] 16. 자동 업데이트·새 버전 시작 실패 시 자동 되돌리기 — 요구사항 12.1, 12.2 (go-selfupdate PoC 후, ADR 필요)
+- [x] 15. 서명 검증 수동 업데이트·되돌리기 — 요구사항 12.1, 12.3 · Linux race 및 Windows native, 실제 Windows 제품 CLI 1.0.0 → 2.0.0 → 1.0.0·양쪽 SHA-256·DPAPI/원본 동일 통과(ADR-0024).
+- [x] 16. 자동 업데이트·새 버전 시작 실패 시 자동 되돌리기 — 요구사항 12.1, 12.2 · Linux race 및 Windows native 실제 자식 회귀 통과. 새 워커 준비와 실패 시 이전 워커 재기동 확인. 자동 갱신은 기본 꺼짐. 운영 서비스 설치·부팅과 간헐적 OS 기동 지연 원인은 확인 필요(ADR-0024).
 - [x] 17. Capture_Plugin·Sensor_Plugin 인터페이스 — 요구사항 13.1, 13.2
-- [x] 18. T02·T03 시험 — 요구사항 14.1, 14.2 (가짜 API 자동 시험 + 실제 스택 수동 확인)
-- [ ] 19. oapi-codegen으로 contracts → Go 클라이언트 생성 (지금은 손으로 쓴 타입) — tech.md 2장
+- [x] 18. T02·T03 시험 — 요구사항 14.1, 14.2 · 실제 프로세스 강제 종료·SQLite 재시작·주입 시계 72시간·73회 모의 단절·남은 파트 자동 재개·검증 영수증 저장. Linux race와 Windows native 통과. 실제 72시간·전원 차단·15번 장비 검증은 별도
+- [x] 19. oapi-codegen v2.8.2 계약 → Go SDK 생성·재생성 검사·영수증 어댑터 연결 — tech.md 2장 · ADR-0025. 투영 의미 보존/참조 경계 5개·실제 HTTP 인증/재시도·전체 Go 컴파일·재생성 일치 통과. 생성 타입은 전체 JSON Schema 검증을 대신하지 않음
+- [x] 20. 파서 퍼즈 시험 5곳(MP4 mvhd·감시 규칙 경로와 `{session}`·MQTT 매핑·업데이트 서명 검증·서버 오류 응답) + MP4 creation_time 넘침 수정 — 요구사항 4.2, 2.1, 13.2, 12.1 · `make agent-fuzz FUZZTIME=90s`(CI 밖). 찾은 실패 입력은 `testdata/fuzz/`에 남아 `agent-test`의 회귀 시험.
+- [x] 21. 정책 숫자 기술 상한·이전 정책 유지·Retry-After와 토큰 시간 변환·mvhd 크기 검사 — 요구사항 2.2, 3.1, 4.2, 5.1, 6.1, 7.3, 9.1 · 정책 저장·조회·초안 호환 시험 `test_device_policy_bounds.py`, 에이전트 회귀시험 `policy_bounds_test.go`, `client_test.go`, `mp4_test.go` · ADR-0040
+- [x] 22. Idempotency-Key를 매니페스트 본문에서 만든다 — 요구사항 4.3, 5.4 · 같은 내용을 다른 이름으로 복사하면 키는 같고 본문(파일명·경로)이 달라 409 IDEMPOTENCY_CONFLICT로 영구 실패하던 문제(지시서 12번 E2E 발견 F1). 시험 `TestSameContentUnderNewNameIsNotAnIdempotencyConflict`, `TestIdempotencyKeyFollowsTheRequestBody` (ADR-0054)

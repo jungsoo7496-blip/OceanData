@@ -5,7 +5,7 @@ description = "해양 실증데이터 플랫폼 API·워커"
 requires-python = ">=3.12"
 # 라이선스 허용 목록(tech.md 3장) 안의 패키지만 둔다. psycopg(LGPL) 대신 pg8000(BSD-3)을 쓴다.
 dependencies = [
-  "fastapi>=0.115,<1",
+  "fastapi>=0.121,<1",
   "uvicorn>=0.30,<1",
   "pydantic>=2.8,<3",
   "pydantic-settings>=2.4,<3",
@@ -30,6 +30,8 @@ dev = [
   "pytest>=8",
   "hypothesis>=6.100",
   "moto[s3,server]>=5",
+  # contracts/openapi.yaml 기준 자동 계약 시험 (04번 요구사항 10.2, OSS-CANDIDATES 채택, MIT). 정확한 버전으로 고정
+  "schemathesis==4.31.1",
   "ruff>=0.6",
   "mypy>=1.11",
   "bandit>=1.7",

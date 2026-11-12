@@ -23,7 +23,7 @@ from tests.integration.test_catalog import _asset
 
 pytestmark = [pytest.mark.integration, pytest.mark.acceptance,
               pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg가 필요합니다")]
-REVIEWER, OP, ADMIN = 108, 106, 101
+REVIEWER, OP, OP2, ADMIN = 108, 106, 107, 101
 FACE1 = {"cls": "FACE", "t0": 0.5, "t1": 1.4, "x": 40, "y": 40, "w": 64, "h": 64}
 FACE2 = {"cls": "FACE", "t0": 1.6, "t1": 2.6, "x": 44, "y": 42, "w": 64, "h": 64}  # 0.2초 끊김 → 추적으로 이음
 
@@ -116,6 +116,20 @@ def test_t09_deid_review_flow(ictx, tmp_path: Path) -> None:
                        headers=ctx.as_user(REVIEWER))
     assert r.status_code == 200 and r.content[:2] == b"\xff\xd8"
     assert "DEID_REVIEW_FRAME_VIEWED" in ctx.audit_actions()
+    # 운영자: 비식별본 프레임은 보지만, 원본 프레임은 긴급 열람 승인이 있을 때만 (domain.md 2장)
+    frame = f"/v1/deid-reviews/{rv1['review_id']}/frame"
+    r = ctx.client.get(frame, params={"t": 1.0, "which": "DEID"}, headers=ctx.as_user(OP))
+    assert r.status_code == 200 and r.content[:2] == b"\xff\xd8"
+    r = ctx.client.get(frame, params={"t": 1.0, "which": "ORIGINAL"}, headers=ctx.as_user(OP))
+    check(r, "GET", "/v1/deid-reviews/{review_id}/frame")
+    assert r.status_code == 403 and "BREAK_GLASS_ACCESS" not in ctx.audit_actions()
+    g = ctx.client.post("/v1/break-glass-grants", headers=ctx.as_user(OP, mfa=True), json={
+        "target_type": "ASSET", "target_id": o1, "reason": "검수 이의 INC-합성-002 원본 대조", "duration_s": 3600}).json()
+    assert ctx.client.post(f"/v1/break-glass-grants/{g['grant_id']}/decision", json={"decision": "APPROVE"},
+                           headers=ctx.as_user(OP2, mfa=True)).json()["status"] == "ACTIVE"
+    r = ctx.client.get(frame, params={"t": 1.0, "which": "ORIGINAL"}, headers=ctx.as_user(OP))
+    assert r.status_code == 200 and r.content[:2] == b"\xff\xd8"
+    assert "BREAK_GLASS_ACCESS" in ctx.audit_actions()
     r = ctx.client.post(f"/v1/deid-reviews/{rv1['review_id']}/decision", json={"result": "PASS"},
                         headers=ctx.as_user(REVIEWER))
     check(r, "POST", "/v1/deid-reviews/{review_id}/decision")

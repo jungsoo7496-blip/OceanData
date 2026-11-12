@@ -1,0 +1,19 @@
+# golangci-lint v2 설정 (01번 작업 17, 요구사항 9.1).
+# 실행: make agent-lint 또는 CI agent 작업. 둘 다 v2.15.0을 go run으로 실행하며 go.mod에 넣지 않는다.
+# Windows 전용 파일(*_windows.go)은 GOOS=windows로 한 번 더 검사한다.
+version: "2"
+
+linters:
+  # standard = errcheck, govet, ineffassign, staticcheck, unused
+  default: standard
+  # 제외 규칙을 두지 않는다. 오류를 버릴 때는 코드에서 `_ =`로 드러내고 이유를 적는다.
+  # 생성 코드(internal/contractapi/client.gen.go, "Code generated ... DO NOT EDIT")는 기본값(lax)으로 건너뛴다.
+
+formatters:
+  enable:
+    - gofmt
+
+issues:
+  # 같은 종류가 많아도 모두 보여 준다 (기본값은 린터당 50개, 같은 문구 3개까지).
+  max-issues-per-linter: 0
+  max-same-issues: 0

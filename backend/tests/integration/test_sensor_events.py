@@ -92,7 +92,7 @@ def test_batch_errors_limit_scope_and_idempotency(ctx) -> None:
     assert ctx.client.post("/v1/observations", json=other, headers=h).status_code == 404  # T01
     assert ctx.client.post("/v1/observations", json={**batch(other["observations"]), "session_id": SES_B},
                            headers=h).status_code == 404
-    k = {**h, "Idempotency-Key": "obs-1"}
+    k = {**h, "Idempotency-Key": "obs-batch-1"}  # 계약: 8~128자
     b = batch([{"metric": "air_pressure", "observed_at": z(T), "value": 1012.3, "unit": "hPa", "quality_flag": "GOOD"}])
     first = ctx.client.post("/v1/observations", json=b, headers=k).json()
     again = ctx.client.post("/v1/observations", json=b, headers=k)
@@ -236,3 +236,25 @@ def test_events(ctx) -> None:
     assert ctx.client.patch(f"/v1/events/{eid}", json={"note": "x"}, headers=hb).status_code == 404
     assert ctx.client.post("/v1/events", json={**manual, "session_id": SES_B}, headers=h).status_code == 404
     assert ctx.client.get("/v1/events", headers=hb).json()["items"] == []
+
+
+def test_observation_session_filter(ctx) -> None:
+    """09번 요구사항 5.2: 회차로 표시된 관측값만 거르기 (회차 없이 들어온 관측값은 빠진다)."""
+    h = ctx.as_user(102)
+    tagged = [{"metric": "air_pressure", "observed_at": z(T + timedelta(minutes=i)), "value": 1000.0 + i, "unit": "hPa",
+               "quality_flag": "GOOD"} for i in range(3)]
+    untagged = [{"metric": "air_pressure", "observed_at": z(T + timedelta(minutes=10 + i)), "value": 990.0 + i,
+                 "unit": "hPa", "quality_flag": "GOOD"} for i in range(2)]
+    assert ctx.client.post("/v1/observations", json=batch(tagged), headers=h).status_code < 300
+    no_session = {k: v for k, v in batch(untagged).items() if k != "session_id"}
+    assert ctx.client.post("/v1/observations", json=no_session, headers=h).status_code < 300
+    params = {"metric": "air_pressure", "from": z(T), "to": z(T + timedelta(hours=1))}
+    assert len(ctx.client.get("/v1/observations", headers=h, params=params).json()["items"]) == 5
+    r = ctx.client.get("/v1/observations", headers=h, params={**params, "session_id": SES_A})
+    check(r, "GET", "/v1/observations")
+    assert [x["value"] for x in r.json()["items"]] == [1000.0, 1001.0, 1002.0]
+    agg = ctx.client.get("/v1/observations", headers=h, params={**params, "session_id": SES_A, "interval": "PT1H"})
+    assert [x["count"] for x in agg.json()["items"]] == [3]
+    # 다른 기관 회차는 기관 범위 때문에 비고, 형식이 틀리면 계약 검사로 400
+    assert ctx.client.get("/v1/observations", headers=h, params={**params, "session_id": SES_B}).json()["items"] == []
+    assert ctx.client.get("/v1/observations", headers=h, params={**params, "session_id": "x"}).status_code == 400

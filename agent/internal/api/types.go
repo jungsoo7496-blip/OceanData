@@ -39,6 +39,16 @@ type UploadStatus struct {
 	QuarantineReason string `json:"quarantine_reason"`
 }
 
+// Receipt는 등록 후 발급되는 실제 수집 영수증이다. RECEIVED 응답과 구분한다.
+type Receipt struct {
+	AssetID             string `json:"asset_id"`
+	ChecksumSHA256      string `json:"checksum_sha256"`
+	ByteSize            *int64 `json:"byte_size"`
+	RegisteredAt        string `json:"registered_at"`
+	IntegrityLogEntryID string `json:"integrity_log_entry_id"`
+	IntegrityEntryHash  string `json:"integrity_entry_hash"`
+}
+
 type Source struct {
 	DeviceID         string   `json:"device_id"`
 	ProjectID        string   `json:"project_id"`

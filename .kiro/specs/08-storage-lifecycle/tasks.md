@@ -1,21 +1,26 @@
 # 작업: 08 저장·보존·백업
 
 - [x] 1. 존별 버킷·객체 키·파일명 미포함 — 요구사항 1.1, 1.2 (04번에서 구현, 계속 사용)
-- [ ] 2. 서버 측 암호화 요청·미지원 시 기동 경고와 /readyz 표시 — 요구사항 1.3, 1.4
-- [x] 3. 쿼터 정책 표·항목별 사용량·사용량 API — 요구사항 2.1, 2.2, 2.5, 2.6 · 시험 `test_quota_alerts_usage_and_reconcile`
+- [x] 2. 서버 측 암호화 요청(S3_SSE=AES256 → 버킷 기본 암호화, 사전 서명 업로드에도 적용)·미지원 시 기동 경고와 /readyz `warnings` — 요구사항 1.3, 1.4 · 시험 `tests/integration/test_storage_encryption.py`. **SeaweedFS·운영 스토리지의 지원 여부는 확인 필요**
+- [x] 3. 쿼터 정책 표·항목별 사용량·사용량 API — 요구사항 2.1, 2.2, 2.5, 2.6 · 시험 `test_quota_alerts_usage_and_reconcile` · 쿼터 행이 없는 기관까지 보는 운영자 사용량 `test_usage_org_coverage.py`
 - [x] 4. 일일 실측 대조·차이 알림 — 요구사항 2.3
 - [x] 5. 80·90·100% 알림 — 요구사항 2.4
 - [x] 6. 보존 정책 표·등록 시 계산·격리 사유별 — 요구사항 3.1, 3.2 · 시험 `test_retention_policies_applied`
 - [x] 7. 만료 예고 알림 — 요구사항 3.3 · 시험 `test_expiry_notification`
-- [x] 8. 만료 실행·삭제 기록·dry-run API·운영자 확인 후 실행 — 요구사항 3.4, 3.6, 3.7 · 시험 `test_dry_run_legal_hold_and_expiry_execution`
-- [ ] 9. DATASET 존 사본을 원 자산 만료와 별도로 — 요구사항 3.5 (13번에서 데이터셋 생기면, 정책 표에는 DATASET KEEP 있음)
+- [x] 8. 만료 실행·삭제 기록·dry-run API·운영자 확인 후 실행 — 요구사항 3.4, 3.6, 3.7 · 시험 `test_dry_run_legal_hold_and_expiry_execution` · dry-run 경고의 `reason`과 인용 상세는 `tests/integration/test_dataset_retention.py`의 API 계약 검증으로 확인
+- [x] 9. DATASET 존 사본을 원 자산 만료와 별도로 — 요구사항 3.5 · 사본은 원 자산 행과 따로 DATASET 버킷 객체(DatasetVersionItem)로 두어 원 자산 만료·삭제가 지우지 않는다(정책 dataset_keep, KEEP). 유효한 이용 권한이 있는 버전의 항목은 만료가 건너뛰고 dry-run에 경고, 철회 뒤 다음 실행에서 지운다. 사본은 기관 사용량에 넣지 않는다. 시험 `tests/integration/test_dataset_retention.py`. 항목이 지워진 버전의 새 배포는 13번 규칙(PRIVATE로 봄)을 따른다 — 보존 만료로 지운 경우에도 막을지는 확인 필요
 - [x] 10. 법적 보류 설정·해제(운영자·사유·감사)·삭제 제외 — 요구사항 4.1, 4.2
 - [x] 11. 자산·회차 삭제·파생본 포함·삭제 증명·백업 소멸일 — 요구사항 5.1, 5.2 · 시험 `test_asset_deletion_*`, `test_session_deletion_and_cross_org`
-- [ ] 12. GRANTED 데이터셋 포함 시 409·증빙 인용 영향 목록과 근거 손상 표시 — 요구사항 5.3, 5.4 (증빙·보고서 인용은 10번에서 완료: `retention.affected_by()` → 409·영향 목록, 근거 손상 표시. 데이터셋은 13번)
+- [x] 12. GRANTED 데이터셋 포함 시 재확인(`confirm_affected=true`)과 무관하게 409·철회 안내(원본 삭제로 파생본에 닿는 경로 포함, 철회 후에는 삭제 가능), 증빙·보고서 인용은 영향 목록 → 재확인 후 삭제 → 근거 손상(DELETED) 표시 — 요구사항 5.3, 5.4 · 시험 `test_t08_t15_dataset_distribution`, `test_t11_*`(삭제 재확인 단계)
 - [x] 13. 계층형 백업 작업(DB 스냅샷 pg_dump·EVIDENCE·DEID·DATASET·PROTECTED → 별도 S3 증분·해시 확인, 결과 기록·실패 알림·D_BACKUP) — 요구사항 6.1~6.3, 6.5 · ADR-0021 · 시험 `test_t10_tiered_backup_and_restore`. 운영 도구(pgBackRest·rclone·restic)는 PoC 후 교체, PITR·암호화·오래된 회차 정리 없음
 - [x] 13b. `make restore-test`: 임시 DB·임시 위치 복원 → 행 수·감사 체인·sha256 대조 — 요구사항 7.1 (T10-a)
-- [ ] 14. ROTATING 등 원천 장비 자산 백업 신청 → PROTECTED·예상 용량·사용량 반영 — 요구사항 6.4 (org_quotas.backup_bytes 항목은 있음)
-- [ ] 15. `make restore-test`·복원 Runbook — 요구사항 7.1, 7.2 (T10, 13번 작업 이후)
-- [ ] 16. 용량 예측(일별 추세·70% 도달 예상일·리드타임 알림) — 요구사항 8.1, 8.2
-- [ ] 17. Hot/Warm 계층 설정·Tier_Mover(복사→sha256 확인→원본 삭제·위치 갱신, 이동 중 조회 유지) — 요구사항 9.1~9.4
-- [ ] 18. 기관별 월간 자원 사용 리포트(P1) — 요구사항 10.1, 10.2
+- [x] 13c. 공용 이미지 PG16 도구·Compose 백업 설정·소유자 연결 전달·주버전 불일치 거부 — 요구사항 6.1, 6.3, 7.1 · ADR-0022 · 단위 `test_backup_tools.py`·T10·비루트 이미지 CLI 백업/복원 확인. API·DB 구조 변경 없음(새 마이그레이션·down 해당 없음)
+- [x] 14. ROTATING·NONE·UNKNOWN 원천 장비 자산 백업 신청 → 예상 용량(dry_run)·쿼터 확인·PROTECTED·backup_bytes 반영·삭제 시 차감 — 요구사항 6.4 · `POST /v1/backup-requests`, `assets.backup_requested_at`(0017) · 시험 `tests/integration/test_backup_request.py`
+- [x] 15. `make restore-test`·복원 Runbook — 요구사항 7.1, 7.2 · `docs/runbook/03-backup-restore.md` · PG16 이미지에서 CLI 복원 `ok: true`, T10 통과(2026-11-04). 스테이징 운영 인수 기록(T14)은 별도
+- [x] 16. 용량 예측(일별 스냅숏 `usage_snapshots`(0018)·최소제곱 추세·70% 도달 예상일·리드타임 180일 알림) — 요구사항 8.1, 8.2 · `GET /v1/capacity-forecast` · 시험 `tests/integration/test_capacity.py`. **전체 용량(STORAGE_CAPACITY_BYTES)은 하드웨어 확정 후 입력**
+- [x] 17. Hot/Warm 계층 설정(HOT=`S3_*`·`BUCKET_*`, WARM=`WARM_S3_*`·`WARM_BUCKET_*`, 비우면 같은 저장소)·단일 위치 해석기(`services/tiers.locate()`, 읽는 곳 전부)·Tier_Mover(정책 표 `tier_policies` → 복사 → 사본을 다시 읽어 sha256 확인 → 위치 전환 → 다운로드 URL 유효시간 이상 유예 뒤 원래 객체 삭제, 이동 중 조회·URL 유지, 제품 계층화 미사용)·`last_accessed_at`·계층별 사용량 — 요구사항 9.1, 9.2, 9.3, 9.4, 10.1(계층별 저장량) · ADR-0036 · 마이그레이션 0022(down: WARM 자산·열린 이동이 있으면 멈춤) · CLI `tiers`(dry-run·`--recall`) · 시험 `tests/integration/test_tiers.py`·`tests/unit/test_tier_settings.py`. **실제 WARM 장비·규칙 값(초안 꺼짐)은 확인 필요**
+- [x] 18. 기관별 월간 자원 사용 리포트 — 요구사항 10.1, 10.2 · `GET /v1/usage-reports?month=`(존별 저장·백업 대상·신청 백업·처리 시간 CPU/GPU 근사·다운로드 URL 발급 기준·배포 수, 금액 없음). 계층별 저장량은 작업 17부터 스냅숏 `by_tier`(그 전 스냅숏은 모두 HOT)
+- [x] 19. 백업이 한 번만 큐에 들어가던 문제 수정 — 요구사항 6.1, 6.3 · `POST /v1/backup-runs`와 정기 백업이 상수 dedupe_key로 넣어 첫 작업이 끝난 뒤에도 키를 쥐었다. `QueuePort.enqueue(dedupe_active_only=True)`로 대기·실행 중일 때만 막고(백업·보충 수집 API에만 적용), 기본 동작은 그대로. 시험 `test_queue_dedupe.py` (T10 시험은 backup.run을 직접 불러 못 잡았다 — 큐 경로 시험이 이제 있다)
+- [x] 20. 업로드 중인 자산·회차 삭제 — 요구사항 3.4, 3.6, 3.7, 5.1, 5.2 및 04번 1.5, 3.4 · 멀티파트 중단 확인 후 예약 해제, 미완성 객체는 삭제 증명 목록에서 제외, 수신·검증 또는 잠금 경합 중 409, 저장소 오류 503, 보존 만료 제외 · ADR-0046 · 시험 `tests/integration/test_lifecycle.py`
+- [x] 21. 반복 조회 인덱스 0024와 down — 04번 요구사항 3.3, 05번 1.2, 07번 8.1, 09번 2.1·5.2, 11번 2.1·5.1 · 합성 DB 전후 7회 중앙값과 실제 쿼리 계획을 재측정하고 검증된 7개 인덱스 유지(ADR-0042)
+- [x] 22. 삭제 순서와 확인된 객체만 증명 — 요구사항 4.1, 5.1 · DB 변경·증명 flush 뒤에 객체 삭제, 못 지우면 503으로 되돌림(재시도로 이어서), 법적 보류의 자산 행 잠금, C0 취소 뒤 유령 객체, 보존 만료 기관별 SAVEPOINT · `test_deletion_safety.py` (ADR-0055, 지시서 12번). 삭제 2단계(outbox)와 증명 의미는 사람 결정

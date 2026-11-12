@@ -44,8 +44,20 @@ type Config struct {
 	Broker         string `json:"broker"` // tcp://host:1883 또는 ssl://host:8883
 	ClientID       string `json:"client_id"`
 	Username       string `json:"username,omitempty"`
-	Password       string `json:"password,omitempty"` // 확인 필요: OS 보안 저장소로 옮긴다
-	QoS            byte   `json:"qos"`
+	// Password는 이전 설정과의 호환용이다. 시작할 때 OS 보안 저장소로 옮기고 설정에서는 지운다 (config.MigrateSensorSecrets).
+	Password string `json:"password,omitempty"`
+	// PasswordSecret은 보안 저장소의 비밀 이름이다. 값은 ResolvedPassword로 메모리에만 둔다 (설정 파일에 다시 쓰지 않는다).
+	PasswordSecret   string `json:"password_secret,omitempty"`
+	ResolvedPassword string `json:"-"`
+	QoS              byte   `json:"qos"`
+}
+
+// password는 연결에 쓸 암호다: 보안 저장소에서 읽은 값, 없으면 (아직 옮기지 않은) 설정 값.
+func (c Config) password() string {
+	if c.ResolvedPassword != "" {
+		return c.ResolvedPassword
+	}
+	return c.Password
 }
 
 type MQTTPlugin struct {
@@ -130,7 +142,7 @@ func (m *MQTTPlugin) Run(ctx context.Context, emit func(item map[string]any)) er
 		SetAutoReconnect(true).SetConnectRetry(true).SetConnectRetryInterval(5 * time.Second).
 		SetMaxReconnectInterval(time.Minute).SetCleanSession(false).SetOrderMatters(true)
 	if m.Cfg.Username != "" {
-		opts.SetUsername(m.Cfg.Username).SetPassword(m.Cfg.Password)
+		opts.SetUsername(m.Cfg.Username).SetPassword(m.Cfg.password())
 	}
 	handler := func(_ mqtt.Client, msg mqtt.Message) {
 		_, items, err := ToObservations(m.Mapping, msg.Payload())

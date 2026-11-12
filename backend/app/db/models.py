@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -34,6 +35,8 @@ class Organization(Base):
     name: Mapped[str] = mapped_column(String(200))
     org_type: Mapped[str] = mapped_column(String(20))
     status: Mapped[str] = mapped_column(String(20), server_default="ACTIVE")
+    # 기관 정책: 업로드 무결성 검증 때 악성코드 검사를 요구하는가 (04번 요구사항 4.7)
+    malware_scan_required: Mapped[bool] = mapped_column(Boolean, server_default="false")
     created_at: Mapped[datetime] = mapped_column(TS)
 
 
@@ -114,7 +117,10 @@ class SessionDevice(Base):
 class JobRow(Base):
     __tablename__ = "jobs"
     __table_args__ = (
-        Index("ix_jobs_claim", "status", "priority", "run_after"),
+        Index("ix_jobs_claim", "status", "priority", "run_after"),  # 상태별 조회 (임대 회수·실패 원인·대기 수)
+        # 꺼내기 순서 그대로, QUEUED만 (pg_queue.claim의 ORDER BY, ADR-0042)
+        Index("ix_jobs_claim_queued", text("priority DESC"), "run_after", "created_at",
+              postgresql_where=text("status = 'QUEUED'")),
         Index("uq_jobs_dedupe_key", "dedupe_key", unique=True, postgresql_where=text("dedupe_key IS NOT NULL")),
     )
     job_id: Mapped[str] = mapped_column(ID, primary_key=True)
@@ -255,8 +261,16 @@ class Asset(Base):
         Index("uq_assets_idem_live", "organization_id", "source_system_id", "checksum_sha256", unique=True,
               postgresql_where=text("deleted_at IS NULL")),
         Index("ix_assets_org_status", "organization_id", "ingest_status"),
+        # READY_PRIVATE가 아닌 상태 목록을 커서 순서(asset_id)대로 (대시보드 처리 대기·격리, ADR-0042)
+        Index("ix_assets_not_ready", "organization_id", "ingest_status", "asset_id",
+              postgresql_where=text("ingest_status <> 'READY_PRIVATE'")),
         Index("ix_assets_location", "location", postgresql_using="gist"),
         Index("ix_assets_capture", "organization_id", "capture_start_at"),
+        # 계층 이동 후보 찾기 (08번 요구사항 9.2): 계층·존별로 오래된 것부터
+        Index("ix_assets_tier_age", "storage_tier", "storage_zone", "ingested_at",
+              postgresql_where=text("deleted_at IS NULL")),
+        # 최근 들어온 자산 (11번 감시 규칙·실패 원인, ADR-0042)
+        Index("ix_assets_ingested_at", "ingested_at"),
     )
     asset_id: Mapped[str] = mapped_column(ID, primary_key=True)
     schema_version: Mapped[str] = mapped_column(String(20))
@@ -294,6 +308,8 @@ class Asset(Base):
     share_status: Mapped[str] = mapped_column(String(20))
     review_result: Mapped[str | None] = mapped_column(String(10))
     backup_class: Mapped[str] = mapped_column(String(20))
+    # 기관이 신청한 백업 (domain.md 9장 2번). 이 자산의 용량은 org_quotas.backup_bytes에 들어 있다 (08번 요구사항 6.4)
+    backup_requested_at: Mapped[datetime | None] = mapped_column(TS)
     provenance: Mapped[dict[str, Any]] = mapped_column(JSONB)
     env_context: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     tags: Mapped[list[Any] | None] = mapped_column(JSONB)
@@ -301,6 +317,9 @@ class Asset(Base):
     ingest_context: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # 내부용(감시 규칙·로컬 ID·좌표 변환 이력)
     storage_zone: Mapped[str | None] = mapped_column(String(20))
     storage_key: Mapped[str | None] = mapped_column(String(400))
+    # 08: 객체가 있는 계층 HOT / WARM (요구사항 9). 키는 계층과 무관하게 같다. 이동은 sha256 확인 뒤에만 바꾼다
+    storage_tier: Mapped[str] = mapped_column(String(10), server_default="HOT", default="HOT")
+    last_accessed_at: Mapped[datetime | None] = mapped_column(TS)  # 08: 사용자가 바이너리를 마지막으로 연 시각
     embedding: Mapped[Any | None] = mapped_column(Vector(), deferred=True)
     legal_hold: Mapped[bool] = mapped_column(Boolean, server_default="false")  # 08: 법적 보류
     legal_hold_reason: Mapped[str | None] = mapped_column(Text)
@@ -366,6 +385,36 @@ class IntegrationCard(Base):
     created_at: Mapped[datetime] = mapped_column(TS)
 
 
+class PolicyDraft(Base):
+    """장비 정책 초안 (09번 요구사항 3.2·3.3, ADR-0037). DRAFT → APPLIED | REJECTED.
+
+    운영자가 적용하기 전까지 장비 기록·장비 정책을 바꾸지 않는다. 장비마다 DRAFT는 하나뿐이다.
+    fields: 항목별 {status: FROM_CARD | ENTERED | NEEDS_CONFIRMATION, value?, card_pointer?} (domain/onboarding.py)."""
+
+    __tablename__ = "policy_drafts"
+    __table_args__ = (
+        Index("uq_policy_drafts_open_device", "device_id", unique=True, postgresql_where=text("status = 'DRAFT'")),
+    )
+    policy_draft_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), index=True)
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"), index=True)
+    collector_device_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"))
+    integration_card_id: Mapped[str | None] = mapped_column(ID)
+    integration_card_version: Mapped[int | None] = mapped_column(Integer)
+    fields: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(12), server_default="DRAFT")
+    revision: Mapped[int] = mapped_column(Integer, server_default="1")
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+    updated_by: Mapped[str] = mapped_column(String(64))
+    updated_at: Mapped[datetime] = mapped_column(TS)
+    decided_by: Mapped[str | None] = mapped_column(String(64))
+    decided_at: Mapped[datetime | None] = mapped_column(TS)
+    decision_reason: Mapped[str | None] = mapped_column(String(500))
+    applied: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # 저장한 정책 버전·바뀐 값 (APPLIED일 때)
+
+
 class OrgEventCode(Base):
     """기관별 하위 이벤트 코드 (03번 요구사항 8.3). 공통 상위분류는 contracts/codes/event-categories.json."""
 
@@ -393,6 +442,12 @@ class Upload(Base):
     """업로드 세션 (전송 작업 단위, 실증회차와 다르다)."""
 
     __tablename__ = "uploads"
+    __table_args__ = (
+        # 만료 정리는 진행 중인 업로드만 본다 / 최근 생성분 실패율 / 최근 실패 원인 (ADR-0042)
+        Index("ix_uploads_uploading_expires", "expires_at", postgresql_where=text("status = 'UPLOADING'")),
+        Index("ix_uploads_created_at", "created_at"),
+        Index("ix_uploads_failed_updated", "updated_at", postgresql_where=text("error_code IS NOT NULL")),
+    )
     upload_id: Mapped[str] = mapped_column(ID, primary_key=True)
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), index=True)
     # 받은 것 없이 취소·만료된 새 자산 기록은 지우고 업로드 기록만 남긴다
@@ -409,7 +464,7 @@ class Upload(Base):
     status: Mapped[str] = mapped_column(String(20))  # UPLOADING / RECEIVED / ABORTED / EXPIRED
     asset_was_metadata_only: Mapped[bool] = mapped_column(Boolean, server_default="false")
     error_code: Mapped[str | None] = mapped_column(String(60))
-    expires_at: Mapped[datetime] = mapped_column(TS, index=True)
+    expires_at: Mapped[datetime] = mapped_column(TS)
     created_at: Mapped[datetime] = mapped_column(TS)
     updated_at: Mapped[datetime] = mapped_column(TS)
 
@@ -604,6 +659,53 @@ class DeletionCertificate(Base):
     deleted_at: Mapped[datetime] = mapped_column(TS)
     objects: Mapped[list[Any]] = mapped_column(JSONB)
     backup_copies_expire_at: Mapped[datetime | None] = mapped_column(TS)
+
+
+class TierPolicy(Base):
+    """Hot → Warm 이동 규칙 (08번 요구사항 9.2, HW-3). 값은 정책이다 — 운영기관 확정 필요."""
+
+    __tablename__ = "tier_policies"
+    policy_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    zone: Mapped[str] = mapped_column(String(20))  # RAW / PROCESSED / EVIDENCE / DATASET (격리는 옮기지 않는다)
+    variant: Mapped[str | None] = mapped_column(String(20))  # NULL이면 그 존의 모든 변형
+    min_age_days: Mapped[int] = mapped_column(Integer)  # 들어온 뒤(ingested_at) 지난 일수
+    # 마지막 조회(없으면 ingested_at) 뒤 일수, NULL이면 보지 않는다
+    min_idle_days: Mapped[int | None] = mapped_column(Integer)
+    enabled: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    updated_at: Mapped[datetime] = mapped_column(TS)
+
+
+class TierMove(Base):
+    """계층 이동 기록 (08번 요구사항 9.2·9.3). 자산마다 열린 이동(COPYING·SWITCHED)은 하나뿐이다.
+
+    COPYING(원래 위치로 계속 읽음) → 사본 sha256 확인 → SWITCHED(자산 위치를 바꿈, 원래 객체는 유예 동안 남김)
+    → DONE(원래 객체 삭제). 실패하면 FAILED, 자산이 그사이 바뀌거나 지워지면 CANCELLED — 둘 다 원래 객체는 그대로다.
+    """
+
+    __tablename__ = "tier_moves"
+    __table_args__ = (
+        Index("uq_tier_moves_open", "asset_id", unique=True,
+              postgresql_where=text("status IN ('COPYING', 'SWITCHED')")),
+        Index("ix_tier_moves_status_due", "status", "delete_after"),
+    )
+    move_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    asset_id: Mapped[str] = mapped_column(ForeignKey("assets.asset_id"), index=True)
+    organization_id: Mapped[str] = mapped_column(ID)
+    policy_id: Mapped[str | None] = mapped_column(String(64))  # NULL이면 운영자 되돌리기(RECALL)
+    from_tier: Mapped[str] = mapped_column(String(10))
+    to_tier: Mapped[str] = mapped_column(String(10))
+    zone: Mapped[str] = mapped_column(String(20))
+    object_key: Mapped[str] = mapped_column(String(400))
+    byte_size: Mapped[int] = mapped_column(BigInteger)
+    checksum_sha256: Mapped[str] = mapped_column(String(64))  # 자산 기록의 값 — 사본을 다시 읽어 이것과 비교한다
+    status: Mapped[str] = mapped_column(String(12))  # COPYING / SWITCHED / DONE / FAILED / CANCELLED
+    error_code: Mapped[str | None] = mapped_column(String(60))
+    legal_hold: Mapped[bool | None] = mapped_column(Boolean)  # 위치를 바꿀 때 법적 보류였는지 (보관 경위 기록)
+    created_at: Mapped[datetime] = mapped_column(TS)
+    updated_at: Mapped[datetime] = mapped_column(TS)
+    switched_at: Mapped[datetime | None] = mapped_column(TS)
+    delete_after: Mapped[datetime | None] = mapped_column(TS)  # 원래 객체를 지워도 되는 시각 (≥ 다운로드 URL 유효시간)
+    finished_at: Mapped[datetime | None] = mapped_column(TS)
 
 
 class DailyTask(Base):
@@ -910,6 +1012,12 @@ class DatasetVersion(Base):
     manifest_sha256: Mapped[str] = mapped_column(String(64))
     created_by: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(TS)
+    # 큰 버전은 작업 큐에서 만든다 (13번 작업 32): BUILDING → READY | FAILED. 이용기관·이용 신청은 READY만
+    status: Mapped[str] = mapped_column(String(12), server_default="READY")
+    build_error: Mapped[str | None] = mapped_column(String(500))
+    pending_asset_ids: Mapped[list[str] | None] = mapped_column(ARRAY(String(30)))
+    # 카탈로그 샘플 썸네일 객체 키 (DATASET 버킷, 13번 요구사항 7.1). 항목의 공유용 파생본에서 뽑는다
+    sample_keys: Mapped[list[str] | None] = mapped_column(ARRAY(String(400)))
 
 
 class DatasetVersionItem(Base):
@@ -1109,3 +1217,60 @@ class BackupRun(Base):
     failed_objects: Mapped[list[Any]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     error: Mapped[str | None] = mapped_column(String(1000))
     restore_test: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+class WebhookSubscription(Base):
+    """웹훅 구독 (04번 요구사항 8). 서명 비밀은 저장하지 않고 salt로 서버 키에서 다시 만든다 (ADR-0030)."""
+
+    __tablename__ = "webhook_subscriptions"
+    webhook_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), index=True)
+    url: Mapped[str] = mapped_column(String(500))
+    event_types: Mapped[list[str]] = mapped_column(ARRAY(String(40)))
+    secret_salt: Mapped[str] = mapped_column(String(64))
+    active: Mapped[bool] = mapped_column(Boolean, server_default="true")
+    consecutive_failures: Mapped[int] = mapped_column(Integer, server_default="0")
+    disabled_at: Mapped[datetime | None] = mapped_column(TS)
+    disabled_reason: Mapped[str | None] = mapped_column(String(300))
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(TS)
+    deleted_at: Mapped[datetime | None] = mapped_column(TS)
+
+
+class WebhookDelivery(Base):
+    """보낼 웹훅 (outbox). 상태를 바꾸는 같은 트랜잭션에서 만들고 워커가 보낸다 (04번 요구사항 8.2·8.3)."""
+
+    __tablename__ = "webhook_deliveries"
+    __table_args__ = (Index("ix_webhook_deliveries_due", "status", "next_attempt_at"),)
+    delivery_id: Mapped[str] = mapped_column(String(26), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(26), index=True)
+    webhook_id: Mapped[str] = mapped_column(ForeignKey("webhook_subscriptions.webhook_id"), index=True)
+    organization_id: Mapped[str] = mapped_column(ID)
+    event_type: Mapped[str] = mapped_column(String(40))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    # PENDING / SENDING / DELIVERED / FAILED / CANCELLED.
+    # SENDING은 워커가 가져가 보내는 중(임대) — 내부 상태라 API로 내보내지 않는다
+    status: Mapped[str] = mapped_column(String(12))
+    attempts: Mapped[int] = mapped_column(Integer, server_default="0")
+    # PENDING: 다음 시도 시각. SENDING: 임대 만료 시각 (지나면 워커가 죽은 것으로 보고 다시 보낸다, ADR-0041)
+    next_attempt_at: Mapped[datetime] = mapped_column(TS)
+    last_status_code: Mapped[int | None] = mapped_column(Integer)
+    last_error: Mapped[str | None] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(TS)
+    delivered_at: Mapped[datetime | None] = mapped_column(TS)
+
+
+class UsageSnapshot(Base):
+    """기관별 일별 사용량 스냅숏 (08번 요구사항 8 용량 예측, 10 월간 리포트). 워커가 하루 한 번 쓴다."""
+
+    __tablename__ = "usage_snapshots"
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ID, primary_key=True)
+    stored_bytes: Mapped[int] = mapped_column(BigInteger)
+    quarantine_bytes: Mapped[int] = mapped_column(BigInteger)
+    reserved_bytes: Mapped[int] = mapped_column(BigInteger)
+    backup_bytes: Mapped[int] = mapped_column(BigInteger)  # 기관이 신청한 백업 (사용량에 포함)
+    by_zone: Mapped[dict[str, Any]] = mapped_column(JSONB)  # 존별 활성 자산 크기 합
+    by_tier: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # 계층별 (0022부터. 그 전 스냅숏은 모두 HOT)
+    backup_target_bytes: Mapped[int] = mapped_column(BigInteger)  # 독립 백업 대상 (ADR-0021 술어)
+    created_at: Mapped[datetime] = mapped_column(TS)

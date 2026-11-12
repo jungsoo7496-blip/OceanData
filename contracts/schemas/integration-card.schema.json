@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "데이터 연계 카드 내용",
+  "description": "기준 문서 부록 A의 분야별 질문을 담는 기록 (03번 요구사항 1.5, ONB-01). 실제 카드 양식은 확인 필요 — 지금은 분야별 자유 기록으로 받고, 정책에 쓰이는 값(collection_mode_requested, current_storage.local_copy_policy)만 domain.md 코드로 검사한다. 담당자는 이름·연락처 대신 플랫폼 사용자 ID와 역할만 적는다(개인정보 최소화).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["basic"],
+  "properties": {
+    "basic": {
+      "type": "object",
+      "description": "기본: 기업·실증명·담당자(실증·기술·공유 승인)·개시 월",
+      "additionalProperties": true,
+      "required": ["project_name"],
+      "properties": {
+        "project_name": {"type": "string", "minLength": 1, "maxLength": 200},
+        "start_month": {"type": "string", "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$"},
+        "contacts": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["role"],
+            "properties": {
+              "role": {"type": "string", "maxLength": 60, "description": "예: 실증, 기술, 공유 승인"},
+              "user_id": {"$ref": "common.schema.json#/$defs/user_id"}
+            }
+          }
+        }
+      }
+    },
+    "equipment": {
+      "type": "array",
+      "description": "장비: 카메라·NVR·서버·NAS·센서 제조사·모델·펌웨어",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "kind": {"type": "string", "maxLength": 60},
+          "manufacturer": {"type": "string", "maxLength": 120},
+          "model": {"type": "string", "maxLength": 120},
+          "firmware": {"type": "string", "maxLength": 120},
+          "count": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "data": {"$ref": "#/$defs/section", "description": "데이터: 영상·사진·센서·이벤트·평가 로그, 포맷·코덱"},
+    "volume": {
+      "type": "object",
+      "description": "발생량: 장비 수·비트레이트·일 가동·일수 (7일 실측)",
+      "additionalProperties": true,
+      "properties": {
+        "device_count": {"type": "integer", "minimum": 0},
+        "bitrate_mbps": {"type": "number", "minimum": 0},
+        "hours_per_day": {"type": "number", "minimum": 0, "maximum": 24},
+        "days": {"type": "integer", "minimum": 0},
+        "measured_7_days": {"type": "boolean"},
+        "note": {"$ref": "#/$defs/note"}
+      }
+    },
+    "time_sync": {"$ref": "#/$defs/section", "description": "시각: 동기화 방식(GPS/NTP)·오차"},
+    "network": {"$ref": "#/$defs/section", "description": "통신: 인터넷·망분리·접안 주기·방화벽"},
+    "current_storage": {
+      "type": "object",
+      "description": "현행 저장: 위치·기간·백업. local_copy_policy는 장비 기록으로 반영된다 (domain.md 9장)",
+      "additionalProperties": true,
+      "properties": {
+        "local_copy_policy": {"$ref": "common.schema.json#/$defs/local_copy_policy"},
+        "local_retention_days": {"type": "integer", "minimum": 0},
+        "note": {"$ref": "#/$defs/note"}
+      }
+    },
+    "collection_mode_requested": {
+      "$ref": "common.schema.json#/$defs/collection_mode",
+      "description": "수집 수준: 희망 collection_mode. 장비 정책에 바로 반영하지 않는다 (운영기관 결정)"
+    },
+    "core_byproduct": {"$ref": "#/$defs/section", "description": "핵심/부산물: 공유 불가 데이터, 공유 가능 환경 데이터"},
+    "rights_privacy": {"$ref": "#/$defs/section", "description": "권리·개인정보: 촬영 권한·제3자 권리·개인정보·기밀"},
+    "integration_methods": {
+      "type": "array",
+      "description": "연계 방식: 에이전트·S3/API·NVR·엣지 (코드표 미확정 — 자유 기록)",
+      "maxItems": 10,
+      "items": {"type": "string", "maxLength": 60}
+    },
+    "desired_services": {
+      "type": "array",
+      "description": "원하는 서비스 TOP 3",
+      "maxItems": 3,
+      "items": {"type": "string", "maxLength": 120}
+    },
+    "report_forms": {
+      "type": "object",
+      "description": "보고 양식: 실제 제출 양식(HWP/Excel) 제공 가능 여부",
+      "additionalProperties": true,
+      "properties": {
+        "available": {"type": ["boolean", "null"]},
+        "formats": {"type": "array", "maxItems": 10, "items": {"type": "string", "maxLength": 20}},
+        "note": {"$ref": "#/$defs/note"}
+      }
+    },
+    "samples": {"$ref": "#/$defs/section", "description": "샘플: 연동 시험용 샘플"},
+    "termination": {"$ref": "#/$defs/section", "description": "종료 시: 접근·삭제·반출 방식"}
+  },
+  "$defs": {
+    "note": {"type": "string", "maxLength": 2000},
+    "section": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {"note": {"$ref": "#/$defs/note"}}
+    }
+  }
+}

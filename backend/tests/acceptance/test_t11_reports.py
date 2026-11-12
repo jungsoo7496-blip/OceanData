@@ -16,9 +16,10 @@ from openpyxl import load_workbook
 from sqlalchemy import select, update
 
 from app.adapters.system_clock import FixedClock
-from app.db.models import Asset, AssetLineage, ReportVersion
-from app.seed import DEV_A_CAMERA, DEV_B_CAMERA, ORG_A, ORG_B, PRJ_A, PRJ_B, SES_A
+from app.db.models import Asset, AssetLineage, EventAsset, ReportVersion, User
+from app.seed import DEV_A_CAMERA, DEV_B_CAMERA, ORG_A, ORG_B, PRJ_A, PRJ_B, SES_A, fid
 from app.services import evidence
+from tests.conftest import Ctx
 from tests.contract.openapi_contract import assert_matches_contract as check
 from tests.integration.test_catalog import _asset
 
@@ -31,13 +32,13 @@ def z(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def synthetic_session(ctx) -> dict[str, str]:
+def synthetic_session(ctx, *, proxy_scope: str = "PRIVATE") -> dict[str, str]:
     """선박 원본 영상(30분) + 프록시, 다른 기관 자산, 모델 이벤트(선박, 미확인)·수동 이벤트(안전사고)."""
     with ctx.c.sessionmaker.begin() as db:
         orig = _asset(ORG_A, PRJ_A, DEV_A_CAMERA)
         orig.ext = {"video_ext": {"duration_s": 1800, "fps": 25, "resolution": "1920x1080"}}
         orig.capture_start_at = T
-        proxy = _asset(ORG_A, PRJ_A, DEV_A_CAMERA, variant="PROXY")
+        proxy = _asset(ORG_A, PRJ_A, DEV_A_CAMERA, variant="PROXY", scope=proxy_scope)
         other = _asset(ORG_B, PRJ_B, DEV_B_CAMERA, session=None)
         db.add_all([orig, proxy, other])
         db.flush()
@@ -56,6 +57,122 @@ def synthetic_session(ctx) -> dict[str, str]:
                                                        "note": "합성 근접 항해"})
     ids["manual_event"] = r.json()["event_id"]
     return ids
+
+
+@pytest.fixture
+def submitted_report_with_scoped_sources(ictx: Ctx) -> tuple[str, dict[str, str]]:
+    ids = synthetic_session(ictx, proxy_scope="PROGRAM_REVIEW")
+    with ictx.c.sessionmaker.begin() as db:
+        visible_root = _asset(ORG_A, PRJ_A, DEV_A_CAMERA, scope="PROGRAM_REVIEW")
+        hidden_link = _asset(ORG_A, PRJ_A, DEV_A_CAMERA, variant="CLIP")
+        db.add_all([visible_root, hidden_link])
+        db.flush()
+        db.add_all([
+            AssetLineage(child_asset_id=ids["proxy"], parent_asset_id=visible_root.asset_id, relation="PROXY",
+                         created_at=T),
+            EventAsset(event_id=ids["model_event"], asset_id=hidden_link.asset_id),
+        ])
+        ids.update(visible_root=visible_root.asset_id, hidden_link=hidden_link.asset_id)
+    member, admin = ictx.as_user(MEMBER), ictx.as_user(ADMIN)
+    record = ictx.client.post(f"/v1/sessions/{SES_A}/records", headers=member,
+                              json={"kind": "TEST", "title": "합성 출처 범위 시험",
+                                    "evidence_refs": [{"kind": "EVENT", "event_id": ids["model_event"]}]})
+    assert record.status_code == 201, record.text
+    ids["record"] = record.json()["record_id"]
+    approved_record = ictx.client.post(f"/v1/records/{ids['record']}/approve", headers=admin)
+    assert approved_record.status_code == 200, approved_record.text
+    created = ictx.client.post("/v1/reports", json={"template_code": "EXAMPLE_SESSION_LOG", "session_id": SES_A},
+                               headers=member)
+    assert created.status_code == 201, created.text
+    path = f"/v1/reports/{created.json()['report_id']}"
+    assert ictx.client.get(path, headers=ictx.as_user(VIEWER)).status_code == 404
+    approved = ictx.client.post(f"{path}/approve", headers=admin)
+    assert approved.status_code == 200, approved.text
+    submitted = ictx.client.post(f"{path}/submit", headers=admin)
+    assert submitted.status_code == 200 and submitted.json()["status"] == "SUBMITTED", submitted.text
+    return path, ids
+
+
+@pytest.mark.parametrize(("route", "same_org"), [("detail", False), ("list", False), ("detail", True)],
+                         ids=["detail", "list", "same-org-viewer"])
+def test_submitted_report_filters_metric_source_ids(
+    ictx: Ctx, submitted_report_with_scoped_sources: tuple[str, dict[str, str]], route: str, same_org: bool,
+) -> None:
+    path, ids = submitted_report_with_scoped_sources
+    if same_org:
+        with ictx.c.sessionmaker.begin() as db:
+            db.get(User, fid("usr", VIEWER)).organization_id = ORG_A
+    viewer = ictx.as_user(VIEWER)
+    assert ictx.client.get(f"/v1/assets/{ids['proxy']}", headers=viewer).status_code == 200
+    assert ictx.client.get(f"/v1/assets/{ids['hidden_link']}", headers=viewer).status_code == 404
+    for user in (VIEWER, MEMBER, OP):
+        if route == "detail":
+            response = ictx.client.get(path, headers=ictx.as_user(user))
+            check(response, "GET", "/v1/reports/{report_id}")
+            report = response.json()
+        else:
+            response = ictx.client.get("/v1/reports", headers=ictx.as_user(user))
+            check(response, "GET", "/v1/reports")
+            report, = response.json()["items"]
+        assert response.status_code == 200 and report["status"] == "SUBMITTED"
+        assert report["record_ids"] == [ids["record"]]
+        by_code = {m["metric_code"]: m for m in report["metrics"]}
+        event = by_code["EXAMPLE_VESSEL_EVENTS"]
+        assert (event["value"], event["sources"]["event_ids"]) == (1, [ids["model_event"]])
+        expected = {ids["proxy"]} if user == VIEWER else {ids["proxy"], ids["hidden_link"]}
+        assert set(event["sources"]["asset_ids"]) == expected
+        assert by_code["EXAMPLE_VIDEO_HOURS"]["sources"]["asset_ids"] == ([] if user == VIEWER else [ids["orig"]])
+
+
+def test_submitted_report_trace_filters_event_assets_and_roots(
+    ictx: Ctx, submitted_report_with_scoped_sources: tuple[str, dict[str, str]],
+) -> None:
+    path, ids = submitted_report_with_scoped_sources
+    for user in (VIEWER, MEMBER, OP):
+        response = ictx.client.get(f"{path}/metrics/EXAMPLE_VESSEL_EVENTS/trace", headers=ictx.as_user(user))
+        assert response.status_code == 200, response.text
+        check(response, "GET", "/v1/reports/{report_id}/metrics/{metric_code}/trace")
+        trace = response.json()
+        assert [r["record_id"] for r in trace["records"]] == [ids["record"]]
+        assert [e["event_id"] for e in trace["events"]] == [ids["model_event"]]
+        wanted_assets = {ids["proxy"]} if user == VIEWER else {ids["proxy"], ids["hidden_link"]}
+        wanted_roots = {ids["visible_root"]} if user == VIEWER else {ids["visible_root"], ids["orig"]}
+        assets = {a["asset_id"]: set(a["originals"]) for a in trace["assets"]}
+        assert (set(trace["metric"]["sources"]["asset_ids"]), set(trace["events"][0]["asset_ids"]), set(assets),
+                assets[ids["proxy"]], trace["hidden_count"]) == (
+            wanted_assets, wanted_assets, wanted_assets, wanted_roots, 2 if user == VIEWER else 0,
+        )
+
+
+@pytest.mark.parametrize("route", ["detail", "xlsx"])
+def test_submitted_report_does_not_expose_hidden_damaged_asset_ids(
+    ictx: Ctx, submitted_report_with_scoped_sources: tuple[str, dict[str, str]], route: str,
+) -> None:
+    path, ids = submitted_report_with_scoped_sources
+    with ictx.c.sessionmaker.begin() as db:
+        for asset_id in (ids["hidden_link"], ids["proxy"]):
+            damaged = db.get(Asset, asset_id)
+            damaged.ingest_status, damaged.quarantine_reason = "QUARANTINED", "CORRUPT_FILE"
+        assert any(item["kind"] == "REPORT" for item in evidence.check_damage(ictx.c, db))
+    for user in (VIEWER, MEMBER, OP):
+        expected = {ids["proxy"]} if user == VIEWER else {ids["proxy"], ids["hidden_link"]}
+        headers = ictx.as_user(user)
+        if route == "detail":
+            response = ictx.client.get(path, headers=headers)
+            assert response.status_code == 200, response.text
+            check(response, "GET", "/v1/reports/{report_id}")
+            report = response.json()
+            assert report["evidence_damaged"] is True
+            assert {item["asset_id"] for item in report["damage"]} == expected
+        else:
+            response = ictx.client.get(f"{path}/export", params={"format": "XLSX"}, headers=headers)
+            assert response.status_code == 200, response.text
+            book = load_workbook(io.BytesIO(response.content))
+            strings = [value for sheet in book for row in sheet.values for value in row if isinstance(value, str)]
+            notes = [value for value in strings if value.startswith("근거 손상")]
+            assert len(notes) == 1
+            assert {asset_id for asset_id in (ids["proxy"], ids["hidden_link"]) if asset_id in notes[0]} == expected
+            assert (ids["hidden_link"] in "\n".join(strings)) is (user != VIEWER)
 
 
 @pytest.mark.covers("T11-a", "T11-b", "T11-c", "T11-d", "T11-e", "T06-a")
@@ -224,6 +341,14 @@ def test_t11_report_flow_and_t06a_trace(ictx) -> None:
     assert r.status_code == 409
     assert {(x["cited_by"], x["id"]) for x in r.json()["affected"]} >= {("RECORD", rec["record_id"]),
                                                                          ("REPORT", rep["report_id"])}
+    # 영향 목록을 본 ORG_ADMIN이 재확인하면 삭제되고, 인용한 승인본에 근거 손상(DELETED)이 남는다 (08번 요구사항 5.4)
+    r = ctx.client.post(f"/v1/assets/{ids['orig']}/deletion", json={"reason": "시험", "confirm_affected": True},
+                        headers=ctx.as_user(ADMIN, mfa=True))
+    assert r.status_code == 200 and r.json()["certificate_id"].startswith("dlc_"), r.text
+    with ctx.c.sessionmaker.begin() as db:
+        flagged = evidence.check_damage(ctx.c, db)
+    deleted = {(f["kind"], f["id"]) for f in flagged if any(d["reason"] == "DELETED" for d in f["damage"])}
+    assert {("RECORD", rec["record_id"]), ("REPORT", rep["report_id"])} <= deleted, flagged
 
 
 def test_t11_reprocess_marks_damage(ictx) -> None:

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 
 import boto3
 from botocore.client import Config
@@ -13,6 +14,28 @@ from app.config import Settings
 from app.ports.storage import CompletedPart, ObjectInfo
 
 log = logging.getLogger(__name__)
+
+
+class ChunkReader(io.RawIOBase):
+    """청크 이터레이터를 읽기 전용 파일처럼 (탐색 불가). upload_fileobj가 PUT 또는 멀티파트로 나눠 올린다."""
+
+    def __init__(self, chunks: Iterable[bytes]) -> None:
+        self._it = iter(chunks)
+        self._buf = memoryview(b"")
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, b: bytearray | memoryview) -> int:  # type: ignore[override]
+        while not len(self._buf):
+            try:
+                self._buf = memoryview(next(self._it))
+            except StopIteration:
+                return 0
+        n = min(len(b), len(self._buf))
+        b[:n] = self._buf[:n]
+        self._buf = self._buf[n:]
+        return n
 
 
 class S3Storage:
@@ -44,8 +67,12 @@ class S3Storage:
 
     # --- 상태
     def check(self) -> bool:
+        return self.buckets_ok(self.settings.buckets.values())
+
+    def buckets_ok(self, buckets: Iterable[str]) -> bool:
+        """버킷마다 HEAD (준비 상태·WARM 계층 확인)."""
         try:
-            for bucket in self.settings.buckets.values():
+            for bucket in buckets:
                 self.client.head_bucket(Bucket=bucket)  # type: ignore[attr-defined]
             return True
         except (BotoCoreError, ClientError) as exc:
@@ -58,10 +85,39 @@ class S3Storage:
         except ClientError:
             self.client.create_bucket(Bucket=bucket)  # type: ignore[attr-defined]
 
+    # --- 서버 측 암호화 (08번 요구사항 1.3·1.4). 버킷 기본 암호화로 요청해 사전 서명 업로드에도 적용되게 한다
+    def ensure_encryption(self, bucket: str) -> str:
+        """SSE-S3(AES256) 기본 암호화를 요청한다. 'enabled' 또는 'unsupported'."""
+        try:
+            self.client.put_bucket_encryption(  # type: ignore[attr-defined]
+                Bucket=bucket, ServerSideEncryptionConfiguration={
+                    "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]})
+        except (ClientError, BotoCoreError):
+            return "unsupported"
+        return "enabled" if self.encryption_status(bucket) == "enabled" else "unsupported"
+
+    def encryption_status(self, bucket: str) -> str:
+        """'enabled'(기본 암호화 있음) · 'disabled'(지원하지만 꺼짐) · 'unsupported'(미지원·확인 불가)."""
+        try:
+            r = self.client.get_bucket_encryption(Bucket=bucket)  # type: ignore[attr-defined]
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            return "disabled" if code == "ServerSideEncryptionConfigurationNotFoundError" else "unsupported"
+        except BotoCoreError:
+            return "unsupported"
+        rules = r.get("ServerSideEncryptionConfiguration", {}).get("Rules", [])
+        algs = {x.get("ApplyServerSideEncryptionByDefault", {}).get("SSEAlgorithm") for x in rules}
+        return "enabled" if algs & {"AES256", "aws:kms"} else "disabled"
+
     # --- 객체
     def put_object(self, bucket: str, key: str, data: bytes, content_type: str | None = None) -> None:
         extra = {"ContentType": content_type} if content_type else {}
         self.client.put_object(Bucket=bucket, Key=key, Body=data, **extra)  # type: ignore[attr-defined]
+
+    def put_stream(self, bucket: str, key: str, chunks: Iterable[bytes], content_type: str | None = None) -> None:
+        """청크 스트림을 PUT 또는 멀티파트로 올린다. 임시 디스크를 거치지 않는다 (계층 이동·저장소 사이 이동)."""
+        extra = {"ContentType": content_type} if content_type else None
+        self.client.upload_fileobj(ChunkReader(chunks), bucket, key, ExtraArgs=extra)  # type: ignore[attr-defined]
 
     def get_object(self, bucket: str, key: str) -> bytes:
         return self.client.get_object(Bucket=bucket, Key=key)["Body"].read()  # type: ignore[attr-defined]
@@ -118,11 +174,17 @@ class S3Storage:
         return str(r["UploadId"])
 
     def presign_upload_part(self, bucket: str, key: str, upload_id: str, part_number: int,
-                            expires_s: int) -> str:
+                            expires_s: int, content_length: int | None = None) -> str:
+        """content_length를 주면 Content-Length를 서명에 넣는다 (X-Amz-SignedHeaders=content-length;host).
+
+        서버가 계획한 파트 크기와 다른 본문은 저장소가 서명 불일치로 거부한다 — 신고 크기로 쿼터를 예약한 뒤
+        더 큰 파트를 올리는 우회를 막는다. 완료 시점의 ListParts 크기 검사가 이중 방어다.
+        """
+        params: dict = {"Bucket": bucket, "Key": key, "UploadId": upload_id, "PartNumber": part_number}
+        if content_length is not None:
+            params["ContentLength"] = content_length
         return str(self.presigner.generate_presigned_url(  # type: ignore[attr-defined]
-            "upload_part",
-            Params={"Bucket": bucket, "Key": key, "UploadId": upload_id, "PartNumber": part_number},
-            ExpiresIn=expires_s,
+            "upload_part", Params=params, ExpiresIn=expires_s,
         ))
 
     def list_parts(self, bucket: str, key: str, upload_id: str) -> list[CompletedPart]:
@@ -132,7 +194,8 @@ class S3Storage:
             r = self.client.list_parts(  # type: ignore[attr-defined]
                 Bucket=bucket, Key=key, UploadId=upload_id, PartNumberMarker=marker
             )
-            parts += [CompletedPart(int(p["PartNumber"]), p["ETag"]) for p in r.get("Parts", [])]
+            parts += [CompletedPart(int(p["PartNumber"]), p["ETag"], int(p["Size"]) if "Size" in p else None)
+                      for p in r.get("Parts", [])]
             if not r.get("IsTruncated"):
                 return parts
             marker = int(r["NextPartNumberMarker"])
@@ -146,7 +209,11 @@ class S3Storage:
         )
 
     def abort_multipart_upload(self, bucket: str, key: str, upload_id: str) -> None:
-        self.client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)  # type: ignore[attr-defined]
+        try:
+            self.client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)  # type: ignore[attr-defined]
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") != "NoSuchUpload":
+                raise
 
     # --- 사전 서명 (URL은 로그에 남기지 않는다)
     def presign_put(self, bucket: str, key: str, expires_s: int, content_type: str | None = None) -> str:

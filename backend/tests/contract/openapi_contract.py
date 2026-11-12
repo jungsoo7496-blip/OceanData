@@ -49,7 +49,12 @@ def response_schema_ref(method: str, path_template: str, status: int, content_ty
 
 
 def assert_matches_contract(response: Any, method: str, path_template: str) -> None:
-    _, registry = _load()
+    spec, registry = _load()
+    resp = spec["paths"][path_template][method.lower()]["responses"].get(str(response.status_code))
+    if resp is not None and "$ref" not in resp and not resp.get("content"):  # 본문 없는 응답(204 등)
+        assert not response.content, f"{method} {path_template} {response.status_code}: 계약에 본문이 없다"
+        assert "x-request-id" in response.headers
+        return
     ref = response_schema_ref(method, path_template, response.status_code, response.headers["content-type"])
     validator = Draft202012Validator({"$ref": ref}, registry=registry, format_checker=FormatChecker())
     errors = sorted(validator.iter_errors(response.json()), key=lambda e: list(e.path))

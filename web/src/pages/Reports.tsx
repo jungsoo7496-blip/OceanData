@@ -18,7 +18,7 @@ interface Field { key: string; label: string; auto_value: string | null; value: 
 interface Report {
   report_id: string; title: string; version: number; latest_version: number; status: string; session_id: string | null
   generated_at: string; data_as_of: string; fields: Field[]; metrics: Metric[]; record_ids: string[]
-  evidence_damaged: boolean; damage: { asset_id: string; reason: string }[]; snapshot_sha256: string | null
+  evidence_damaged: boolean; damage?: { asset_id: string; reason: string }[]; snapshot_sha256: string | null
 }
 interface RecordV { record_id: string; title: string; kind: string; version: number; status: string; result: string | null; evidence_refs: unknown[]; evidence_damaged: boolean }
 interface Trace {
@@ -110,6 +110,8 @@ export function ReportDetail({ me }: { me: Me }) {
   })
   const r = report.data
   if (!r) return <Card loading={report.isLoading}>{report.error ? '보고서를 찾을 수 없습니다' : null}</Card>
+  const damageList = r.damage?.map((d) => `${d.asset_id} (${d.reason})`).join(', ')
+  const damageDescription = damageList ? `인용한 자산이 바뀌었습니다: ${damageList}.` : '인용한 근거가 변경되었습니다.'
   const openTrace = async (m: Metric) => {
     setTrace({ metric: m })
     try {
@@ -128,8 +130,8 @@ export function ReportDetail({ me }: { me: Me }) {
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       {r.evidence_damaged && (
-        <Alert type="error" showIcon message="근거 손상 — 제출할 수 없습니다"
-          description={`인용한 자산이 바뀌었습니다: ${r.damage.map((d) => `${d.asset_id} (${d.reason})`).join(', ')}. 근거를 고친 뒤 새 버전을 만드세요.`} />
+        <Alert type="error" showIcon message={isOrg ? '근거 손상 — 제출할 수 없습니다' : '근거 손상'}
+          description={isOrg ? `${damageDescription} 근거를 고친 뒤 새 버전을 만드세요.` : damageDescription} />
       )}
       <Card title={r.title} extra={
         <Space wrap>
@@ -150,7 +152,13 @@ export function ReportDetail({ me }: { me: Me }) {
         <Table rowKey="metric_code" size="small" pagination={false} dataSource={r.metrics}
           onRow={(m) => ({ onClick: () => void openTrace(m), style: { cursor: 'pointer' } })}
           columns={[
-            { title: '지표', key: 'n', render: (_, m) => `${m.name} (v${m.metric_version})` },
+            // 행 누르기는 마우스용. 키보드로도 열 수 있게 지표 이름을 버튼으로 (요구사항 11.2)
+            { title: '지표', key: 'n', render: (_, m) => (
+              <Button type="link" size="small" style={{ padding: 0, height: 'auto', whiteSpace: 'normal', textAlign: 'left' }}
+                aria-label={`${m.name} (v${m.metric_version}) 근거 보기`} onClick={(e) => { e.stopPropagation(); void openTrace(m) }}>
+                {m.name} (v{m.metric_version})
+              </Button>
+            ) },
             { title: '값', key: 'v', render: (_, m) => (m.status === 'OK' ? metricValue(m) : <Typography.Text type="secondary">{metricValue(m)}</Typography.Text>) },
             { title: '상태', dataIndex: 'status', render: (s: string) => <Tag color={METRIC[s].color}>{METRIC[s].label}</Tag> },
             { title: '계산식', dataIndex: 'formula' },
@@ -197,7 +205,7 @@ export function ReportDetail({ me }: { me: Me }) {
             ))}
             <Typography.Text strong>자산 → 원본</Typography.Text>
             {trace.data.assets.map((a) => (
-              <div key={a.asset_id}>{isOrg ? <Link to={`/assets/${a.asset_id}`}>{a.asset_id}</Link> : a.asset_id} ({a.variant}) → {a.originals.join(', ')}</div>
+              <div key={a.asset_id}>{isOrg ? <Link className="inline-link" to={`/assets/${a.asset_id}`}>{a.asset_id}</Link> : a.asset_id} ({a.variant}) → {a.originals.join(', ')}</div>
             ))}
             {trace.data.hidden_count > 0 && <Typography.Text type="secondary">권한 범위 밖 근거 {trace.data.hidden_count}건은 숨겼습니다</Typography.Text>}
           </Space>

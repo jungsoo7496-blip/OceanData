@@ -16,11 +16,21 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("init-buckets", help="존별 버킷 생성 (01번 요구사항 1.5)")
     sub.add_parser("seed", help="시험 데이터 생성 (01번 요구사항 6)")
     sub.add_parser("verify-audit", help="감사 로그 해시 체인 검증 (02번 요구사항 7.4)")
+    qe = sub.add_parser("reevaluate-quality", help="한 기관의 등록 자산 품질을 활성 규칙으로 재평가 (03번 10.2)")
+    qe.add_argument("organization_id")
+    qe.add_argument("--asset-id", help="자산 한 건으로 범위 제한")
     sp = sub.add_parser("set-policy", help="수집기 정책 등록 (device-policy.schema.json 검증, 새 버전으로 저장)")
     sp.add_argument("device_id")
     sp.add_argument("policy_file")
+    sp.add_argument("--integration-card", default=None, help="이 정책을 만든 연계 카드 ID (03번 요구사항 1.5)")
     rr = sub.add_parser("retention", help="보존 만료 dry-run (--execute면 실제 삭제, 운영자 확인 후)")
     rr.add_argument("--execute", action="store_true")
+    tr = sub.add_parser("tiers", help="Hot/Warm 계층 이동 dry-run: 규칙별 대상 수·용량, 계층별 저장량, "
+                                      "이동 상태 (08번 요구사항 9)")
+    tr.add_argument("--recall", action="store_true",
+                    help="WARM 자산을 HOT으로 되돌리는 이동을 등록 (워커가 복사·확인·전환, "
+                         "마이그레이션 0022 되돌리기 전)")
+    tr.add_argument("--limit", type=int, default=None, help="--recall 대상 수 제한")
     sm = sub.add_parser("set-mapping", help="관측값 매핑 프로필 새 버전 저장 (감사, 화면은 09번)")
     sm.add_argument("device_id")
     sm.add_argument("mapping_file")
@@ -44,6 +54,9 @@ def main(argv: list[str] | None = None) -> int:
     hw.add_argument("--status", default="WARNING", choices=["OK", "WARNING", "CRITICAL"])
     hw.add_argument("--value", type=float, default=None)
     hw.add_argument("--unit", default=None)
+    op_ = sub.add_parser("org-policy", help="기관 정책 변경 (운영자, 감사). 지금은 악성코드 검사 요구 여부 (04번 4.7)")
+    op_.add_argument("organization_id")
+    op_.add_argument("--malware-scan", choices=["on", "off"], required=True)
     sub.add_parser("backup", help="계층형 백업 한 회차 (08번 요구사항 6, ADR-0021)")
     rt = sub.add_parser("restore-test", help="최근 백업을 임시 DB·위치에 복원해 행 수·해시 대조 (T10-a)")
     rt.add_argument("--run", default=None, help="백업 회차 ID (기본: 최근 성공)")
@@ -55,9 +68,28 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(settings.log_level)
     c = build_container(settings)
     if args.cmd == "init-buckets":
-        for zone, bucket in settings.buckets.items():
-            c.storage.ensure_bucket(bucket)
-            print(f"{zone}: {bucket} 준비됨")
+        from app.services import tiers
+
+        # WARM 계층 버킷은 계층 이동을 켰을 때만 만든다 (WARM 저장소가 아직 없을 수 있다, 08번 요구사항 9)
+        for place in tiers.all_places(c, only=("HOT", "WARM") if settings.tiering_enabled else ("HOT",)):
+            place.storage.ensure_bucket(place.bucket)
+            enc = ""
+            if settings.s3_sse == "AES256" and hasattr(place.storage, "ensure_encryption"):
+                enc = f" · 서버 측 암호화 {place.storage.ensure_encryption(place.bucket)}"
+            label = place.zone if place.tier == "HOT" else f"{place.tier}:{place.zone}"
+            print(f"{label}: {place.bucket} 준비됨{enc}")
+        return 0
+    if args.cmd == "tiers":
+        import json as _json
+
+        from app.services import tier_mover
+
+        if args.recall:
+            moves = tier_mover.recall(c, args.limit)
+            print(f"HOT으로 되돌리는 이동 {len(moves)}건 등록 (워커가 처리, 원래 객체는 유예 뒤 삭제)")
+            return 0
+        with c.sessionmaker() as db:
+            print(_json.dumps(tier_mover.plan(c, db, c.clock.now()), ensure_ascii=False, indent=1))
         return 0
     if args.cmd == "seed":
         from app.seed import seed
@@ -67,7 +99,19 @@ def main(argv: list[str] | None = None) -> int:
         print("시험 데이터 준비됨 (기관 5, 사용자 9, 사업 2, 장비 5, 회차 2)")
         return 0
     if args.cmd == "set-policy":
-        return _set_policy(c, args.device_id, args.policy_file)
+        return _set_policy(c, args.device_id, args.policy_file, args.integration_card)
+    if args.cmd == "reevaluate-quality":
+        import json
+
+        from app.services.quality import QualityRuleError, reevaluate
+
+        try:
+            result = reevaluate(c, args.organization_id, args.asset_id)
+        except QualityRuleError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
     if args.cmd == "enrollment-code":
         return _enrollment_code(c, args.device_id)
     if args.cmd == "retention":
@@ -84,6 +128,21 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "set-mapping":
         return _set_mapping(c, args.device_id, args.mapping_file)
+    if args.cmd == "org-policy":
+        from app.db.models import Organization
+
+        with c.sessionmaker.begin() as db:
+            org = db.get(Organization, args.organization_id)
+            if org is None:
+                print(f"기관이 없습니다: {args.organization_id}", file=sys.stderr)
+                return 1
+            before, org.malware_scan_required = org.malware_scan_required, args.malware_scan == "on"
+        c.audit.record("ORG_POLICY_CHANGED", actor_kind="SYSTEM", actor_id="cli", organization_id=args.organization_id,
+                       target_type="Organization", target_id=args.organization_id,
+                       details={"malware_scan_required": {"from": before, "to": args.malware_scan == "on"}})
+        print(f"{args.organization_id}: 악성코드 검사 {'요구' if args.malware_scan == 'on' else '안 함'}"
+              f" (검사기 MALWARE_SCANNER={settings.malware_scanner})")
+        return 0
     if args.cmd == "backup":
         import json
 
@@ -155,6 +214,11 @@ def main(argv: list[str] | None = None) -> int:
 
         with c.sessionmaker.begin() as db:
             res = monitoring.evaluate(c, db)
+        if url := c.settings.alert_webhook_url:
+            configured_secret = c.settings.alert_webhook_secret
+            secret = configured_secret.get_secret_value() if configured_secret else None
+            for payload, now in res.operator_alerts:
+                monitoring.post_webhook(url, secret, payload, now)
         print(f"새 경보 {len(res.opened)}건, 재알림 {len(res.reminded)}건, 해제 {len(res.resolved)}건")
         for code, n in sorted(res.active_by_rule.items()):
             print(f"  {code}: {n}")
@@ -180,38 +244,26 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
-def _set_policy(c, device_id: str, policy_file: str) -> int:  # type: ignore[no-untyped-def]
+def _set_policy(c, device_id: str, policy_file: str,  # type: ignore[no-untyped-def]
+                card_id: str | None = None) -> int:
+    """정책 파일을 새 버전으로 저장. 검사·저장은 09번 정책 초안 적용과 같은 services/device_policy.store_policy."""
     import json
     from pathlib import Path
 
-    from sqlalchemy import func, select
-
-    from app.db.models import Device, DevicePolicy
-    from app.services.contracts import schema_problems
+    from app.domain.errors import RuleViolation
+    from app.services.device_policy import store_policy
 
     doc = json.loads(Path(policy_file).read_text(encoding="utf-8"))
-    problems = schema_problems("device-policy", doc)
-    if problems:
-        for p in problems:
-            print(f"{p.pointer}: {p.message}", file=sys.stderr)
+    try:
+        with c.sessionmaker.begin() as db:
+            row = store_policy(db, device_id, doc, integration_card_id=card_id, by="cli", now=c.clock.now())
+            org, ver = row.organization_id, row.version
+    except RuleViolation as exc:  # 계약 스키마·수집기·매핑·같은 기관 카드 (아무것도 저장하지 않음)
+        for u in exc.unmet:
+            print(f"{u.condition}: {u.actual}", file=sys.stderr)
         return 1
-    with c.sessionmaker.begin() as db:
-        dev = db.get(Device, device_id)
-        if dev is None or dev.kind != "COLLECTOR" or doc["collector_device_id"] != device_id:
-            print("수집기 장비가 아니거나 collector_device_id가 다릅니다", file=sys.stderr)
-            return 1
-        for src in doc["sources"]:  # 정책의 원천 장비는 그 수집기에 매핑된 같은 기관 장비여야 한다
-            s_dev = db.get(Device, src["device_id"])
-            if s_dev is None or s_dev.organization_id != dev.organization_id or \
-                    (s_dev.collector_device_id != device_id and s_dev.device_id != device_id):
-                print(f"매핑되지 않은 원천 장비: {src['device_id']}", file=sys.stderr)
-                return 1
-        ver = (db.execute(select(func.max(DevicePolicy.version)).where(DevicePolicy.device_id == device_id))
-               .scalar() or 0) + 1
-        db.add(DevicePolicy(device_id=device_id, version=ver, organization_id=dev.organization_id, policy=doc,
-                            created_by="cli", created_at=c.clock.now()))
-    c.audit.record("POLICY_CHANGED", actor_kind="SYSTEM", actor_id="cli", organization_id=dev.organization_id,
-                   target_type="Device", target_id=device_id, details={"version": ver,
+    c.audit.record("POLICY_CHANGED", actor_kind="SYSTEM", actor_id="cli", organization_id=org,
+                   target_type="Device", target_id=device_id, details={"version": ver, "integration_card_id": card_id,
                                                                        "policy_version": doc["policy_version"]})
     print(f"정책 저장: {device_id} v{ver} ({doc['policy_version']})")
     return 0
@@ -258,12 +310,12 @@ def _enrollment_code(c, device_id: str) -> int:  # type: ignore[no-untyped-def]
     from app.services.tokens import hash_secret
 
     code = secrets.token_urlsafe(18)
-    now = c.clock.now()
     with c.sessionmaker.begin() as db:
-        dev = db.get(Device, device_id)
+        dev = db.get(Device, device_id, with_for_update={"key_share": True})
         if dev is None or dev.kind != "COLLECTOR":
             print("수집기 장비가 아닙니다", file=sys.stderr)
             return 1
+        now = c.clock.now()
         db.add(EnrollmentCode(code_hash=hash_secret(code), device_id=device_id, organization_id=dev.organization_id,
                               expires_at=now + timedelta(seconds=c.settings.enrollment_code_ttl_s),
                               created_by="cli", created_at=now))

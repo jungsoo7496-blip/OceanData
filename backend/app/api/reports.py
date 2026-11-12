@@ -7,16 +7,15 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, Header, Query, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.adapters import report_renderers as rr
-from app.api.deps import client_ip, container, get_db, load_scoped, page_params, require
+from app.api.deps import DB, client_ip, container, load_scoped, page_params, require
 from app.api.pagination import paginate
 from app.container import Container
 from app.db.models import (
-    Asset,
     MetricDefinition,
     Project,
     Report,
@@ -32,7 +31,7 @@ from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services import evidence, metrics, reports
 from app.services.idempotency import run_idempotent
-from app.services.tenant import scope_filter
+from app.services.tenant import scope_filter, visible_asset_ids
 from app.timefmt import iso
 
 router = APIRouter()
@@ -122,7 +121,7 @@ def _version(db: Session, rec: SessionRecord, version: int | None) -> SessionRec
 
 
 @router.get("/v1/sessions/{session_id}/records", tags=["records"])
-def list_records(session_id: str, request: Request, db: Session = Depends(get_db), c: Container = Depends(container),
+def list_records(session_id: str, request: Request, db: Session = DB, c: Container = Depends(container),
                  p: Principal = Depends(require("record:read"))) -> dict:
     s = load_scoped(db, c, request, TrialSession, session_id, p)
     rows = db.execute(select(SessionRecord).where(SessionRecord.session_id == s.session_id,
@@ -132,7 +131,7 @@ def list_records(session_id: str, request: Request, db: Session = Depends(get_db
 
 
 @router.post("/v1/sessions/{session_id}/records", tags=["records"], status_code=201)
-def create_record(session_id: str, body: RecordCreate, request: Request, db: Session = Depends(get_db),
+def create_record(session_id: str, body: RecordCreate, request: Request, db: Session = DB,
                   c: Container = Depends(container), p: Principal = Depends(require("record:write")),
                   idempotency_key: str | None = Header(default=None)) -> JSONResponse:
     def create() -> tuple[int, dict]:
@@ -155,14 +154,14 @@ def create_record(session_id: str, body: RecordCreate, request: Request, db: Ses
 
 @router.get("/v1/records/{record_id}", tags=["records"])
 def get_record(record_id: str, request: Request, version: int | None = Query(None, ge=1),
-               db: Session = Depends(get_db), c: Container = Depends(container),
+               db: Session = DB, c: Container = Depends(container),
                p: Principal = Depends(require("record:read"))) -> dict:
     rec = _record(db, c, request, record_id, p)
     return evidence.record_view(rec, _version(db, rec, version))
 
 
 @router.patch("/v1/records/{record_id}", tags=["records"])
-def update_record(record_id: str, body: RecordUpdate, request: Request, db: Session = Depends(get_db),
+def update_record(record_id: str, body: RecordUpdate, request: Request, db: Session = DB,
                   c: Container = Depends(container), p: Principal = Depends(require("record:write"))) -> dict:
     """수정은 항상 새 버전 (요구사항 1.3, 2.1). 승인된 버전은 그대로 남는다."""
     fields = body.model_dump(exclude_unset=True)
@@ -182,7 +181,7 @@ def update_record(record_id: str, body: RecordUpdate, request: Request, db: Sess
 
 
 @router.get("/v1/records/{record_id}/versions", tags=["records"])
-def record_versions(record_id: str, request: Request, db: Session = Depends(get_db),
+def record_versions(record_id: str, request: Request, db: Session = DB,
                     c: Container = Depends(container), p: Principal = Depends(require("record:read"))) -> dict:
     rec = _record(db, c, request, record_id, p)
     rows = db.execute(select(SessionRecordVersion).where(SessionRecordVersion.record_id == rec.record_id)
@@ -191,7 +190,7 @@ def record_versions(record_id: str, request: Request, db: Session = Depends(get_
 
 
 @router.post("/v1/records/{record_id}/approve", tags=["records"])
-def approve_record(record_id: str, request: Request, db: Session = Depends(get_db),
+def approve_record(record_id: str, request: Request, db: Session = DB,
                    c: Container = Depends(container), p: Principal = Depends(require("record:approve"))) -> dict:
     """증빙 승인 (요구사항 2): 최신 버전을 고정, 인용 자산 PROTECTED."""
     rec = _record(db, c, request, record_id, p, lock=True)
@@ -227,13 +226,13 @@ def metric_view(d: MetricDefinition) -> dict[str, Any]:
 
 
 @router.get("/v1/metric-definitions", tags=["reports"])
-def list_metrics(db: Session = Depends(get_db), _: Principal = Depends(require("report:read"))) -> dict:
+def list_metrics(db: Session = DB, _: Principal = Depends(require("report:read"))) -> dict:
     rows = db.execute(select(MetricDefinition).order_by(MetricDefinition.code, MetricDefinition.version)).scalars()
     return {"items": [metric_view(d) for d in rows]}
 
 
 @router.post("/v1/metric-definitions", tags=["reports"], status_code=201)
-def create_metric(body: MetricCreate, request: Request, db: Session = Depends(get_db),
+def create_metric(body: MetricCreate, request: Request, db: Session = DB,
                   c: Container = Depends(container),
                   p: Principal = Depends(require("metric_definition:write"))) -> dict:
     errors = metrics.validate(body.kind, body.params)
@@ -265,6 +264,14 @@ class TemplateSection(BaseModel):
     fields: list[TemplateField] | None = None
     metrics: list[Annotated[str, Field(pattern=CODE)]] | None = None
 
+    @field_validator("text", "fields", "metrics", mode="before")
+    @classmethod
+    def _no_explicit_null(cls, v: Any) -> Any:
+        # 계약은 이 항목들을 null 없이 정의한다 — 쓰지 않을 때는 빼고 보낸다 (전체 작업 탐색, ADR-0035)
+        if v is None:
+            raise ValueError("null 대신 항목을 빼고 보내세요")
+        return v
+
 
 class TemplateCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -280,13 +287,13 @@ def template_view(t: ReportTemplate) -> dict[str, Any]:
 
 
 @router.get("/v1/report-templates", tags=["reports"])
-def list_templates(db: Session = Depends(get_db), _: Principal = Depends(require("report:read"))) -> dict:
+def list_templates(db: Session = DB, _: Principal = Depends(require("report:read"))) -> dict:
     rows = db.execute(select(ReportTemplate).order_by(ReportTemplate.code, ReportTemplate.version)).scalars()
     return {"items": [template_view(t) for t in rows]}
 
 
 @router.post("/v1/report-templates", tags=["reports"], status_code=201)
-def create_template(body: TemplateCreate, request: Request, db: Session = Depends(get_db),
+def create_template(body: TemplateCreate, request: Request, db: Session = DB,
                     c: Container = Depends(container),
                     p: Principal = Depends(require("report_template:write"))) -> dict:
     errors = []
@@ -316,7 +323,7 @@ def create_template(body: TemplateCreate, request: Request, db: Session = Depend
 @router.put("/v1/report-templates/{template_code}/versions/{version}/hwpx", tags=["reports"])
 def put_template_hwpx(template_code: str, version: int, request: Request,
                       data: bytes = Body(..., media_type="application/octet-stream"),
-                      db: Session = Depends(get_db), c: Container = Depends(container),
+                      db: Session = DB, c: Container = Depends(container),
                       p: Principal = Depends(require("report_template:write"))) -> dict:
     import hashlib
 
@@ -374,8 +381,24 @@ def _report_version(db: Session, rep: Report, p: Principal, version: int | None)
     return v
 
 
+def _damage_view(db: Session, rep: Report, v: ReportVersion, p: Principal) -> list[dict[str, Any]]:
+    if p.organization_id == rep.organization_id and not _viewer(p):
+        return v.damage  # 소유 기관의 복구에 필요한 삭제 이력도 포함한다.
+    shown = visible_asset_ids(db, p, {d["asset_id"] for d in v.damage})
+    return [d for d in v.damage if d["asset_id"] in shown]
+
+
+def _view(db: Session, rep: Report, v: ReportVersion, p: Principal) -> dict:
+    """조회 권한에 맞춰 근거를 표시한다. 승인 스냅숏은 원천을 모두 보존한다."""
+    out = reports.report_view(rep, v)
+    shown = visible_asset_ids(db, p, {a for m in v.metrics for a in m["sources"].get("asset_ids", [])})
+    out["metrics"] = [reports.metric_view(m, shown) for m in v.metrics]
+    out["damage"] = _damage_view(db, rep, v, p)
+    return out
+
+
 @router.get("/v1/reports", tags=["reports"])
-def list_reports(session_id: str | None = None, page: dict = Depends(page_params), db: Session = Depends(get_db),
+def list_reports(session_id: str | None = None, page: dict = Depends(page_params), db: Session = DB,
                  p: Principal = Depends(require("report:read"))) -> dict:
     stmt = select(Report).where(scope_filter(Report, p))
     if session_id:
@@ -383,11 +406,11 @@ def list_reports(session_id: str | None = None, page: dict = Depends(page_params
     if _viewer(p):
         stmt = stmt.where(Report.report_id.in_(select(ReportVersion.report_id).where(reports.submitted_filter())))
     rows, nxt = paginate(db, stmt, Report.report_id, page["limit"], page["cursor"])
-    return {"items": [reports.report_view(r, _report_version(db, r, p, None)) for r in rows], "next_cursor": nxt}
+    return {"items": [_view(db, r, _report_version(db, r, p, None), p) for r in rows], "next_cursor": nxt}
 
 
 @router.post("/v1/reports", tags=["reports"], status_code=201)
-def create_report(body: ReportCreate, request: Request, db: Session = Depends(get_db),
+def create_report(body: ReportCreate, request: Request, db: Session = DB,
                   c: Container = Depends(container), p: Principal = Depends(require("report:write"))) -> dict:
     tpl = reports.latest_template(db, body.template_code, body.template_version)
     if tpl is None:
@@ -419,15 +442,15 @@ def create_report(body: ReportCreate, request: Request, db: Session = Depends(ge
     c.audit.record("REPORT_CREATED", principal=p, organization_id=rep.organization_id, target_type="Report",
                    target_id=rep.report_id, source_ip=client_ip(request),
                    details={"template": f"{tpl.code}:v{tpl.version}"})
-    return reports.report_view(rep, v)
+    return _view(db, rep, v, p)
 
 
 @router.get("/v1/reports/{report_id}", tags=["reports"])
 def get_report(report_id: str, request: Request, version: int | None = Query(None, ge=1),
-               db: Session = Depends(get_db), c: Container = Depends(container),
+               db: Session = DB, c: Container = Depends(container),
                p: Principal = Depends(require("report:read"))) -> dict:
     rep = _load_report(db, c, request, report_id, p)
-    return reports.report_view(rep, _report_version(db, rep, p, version))
+    return _view(db, rep, _report_version(db, rep, p, version), p)
 
 
 def _owned(db: Session, c: Container, request: Request, report_id: str, p: Principal) -> Report:
@@ -439,7 +462,7 @@ def _owned(db: Session, c: Container, request: Request, report_id: str, p: Princ
 
 
 @router.post("/v1/reports/{report_id}/versions", tags=["reports"], status_code=201)
-def new_report_version(report_id: str, request: Request, db: Session = Depends(get_db),
+def new_report_version(report_id: str, request: Request, db: Session = DB,
                        c: Container = Depends(container), p: Principal = Depends(require("report:write"))) -> dict:
     rep = _owned(db, c, request, report_id, p)
     tpl = reports.latest_template(db, rep.template_code, rep.template_version)
@@ -449,7 +472,7 @@ def new_report_version(report_id: str, request: Request, db: Session = Depends(g
         s = db.get(TrialSession, rep.session_id)
         rep.period_to = (s.ends_at if s and s.ends_at else c.clock.now())
     v = reports.generate(c, db, rep, tpl, p.principal_id)
-    return reports.report_view(rep, v)
+    return _view(db, rep, v, p)
 
 
 class FieldEdit(BaseModel):
@@ -464,7 +487,7 @@ class FieldsPatch(BaseModel):
 
 
 @router.patch("/v1/reports/{report_id}/fields", tags=["reports"])
-def edit_report_fields(report_id: str, body: FieldsPatch, request: Request, db: Session = Depends(get_db),
+def edit_report_fields(report_id: str, body: FieldsPatch, request: Request, db: Session = DB,
                        c: Container = Depends(container), p: Principal = Depends(require("report:write"))) -> dict:
     rep = _owned(db, c, request, report_id, p)
     v = _report_version(db, rep, p, None)
@@ -473,11 +496,11 @@ def edit_report_fields(report_id: str, body: FieldsPatch, request: Request, db: 
     unknown = reports.edit_fields(v, [f.model_dump() for f in body.fields], p.principal_id, c.clock.now())
     if unknown:
         raise _bad("/fields", f"양식에 없는 항목입니다: {', '.join(unknown)}")
-    return reports.report_view(rep, v)
+    return _view(db, rep, v, p)
 
 
 @router.post("/v1/reports/{report_id}/approve", tags=["reports"])
-def approve_report(report_id: str, request: Request, db: Session = Depends(get_db),
+def approve_report(report_id: str, request: Request, db: Session = DB,
                    c: Container = Depends(container), p: Principal = Depends(require("report:approve"))) -> dict:
     rep = _owned(db, c, request, report_id, p)
     v = _report_version(db, rep, p, None)
@@ -485,23 +508,23 @@ def approve_report(report_id: str, request: Request, db: Session = Depends(get_d
     c.audit.record("REPORT_APPROVED", principal=p, organization_id=rep.organization_id, target_type="Report",
                    target_id=rep.report_id, source_ip=client_ip(request),
                    details={"version": v.version, "sha256": v.snapshot_sha256})
-    return reports.report_view(rep, v)
+    return _view(db, rep, v, p)
 
 
 @router.post("/v1/reports/{report_id}/submit", tags=["reports"])
-def submit_report(report_id: str, request: Request, db: Session = Depends(get_db),
+def submit_report(report_id: str, request: Request, db: Session = DB,
                   c: Container = Depends(container), p: Principal = Depends(require("report:submit"))) -> dict:
     rep = _owned(db, c, request, report_id, p)
     v = _report_version(db, rep, p, None)
     reports.submit(c, v, p.principal_id, set(p.roles))
     c.audit.record("REPORT_SUBMITTED", principal=p, organization_id=rep.organization_id, target_type="Report",
                    target_id=rep.report_id, source_ip=client_ip(request), details={"version": v.version})
-    return reports.report_view(rep, v)
+    return _view(db, rep, v, p)
 
 
 @router.get("/v1/reports/{report_id}/export", tags=["reports"])
 def export_report(report_id: str, request: Request, format: Literal["PDF", "XLSX", "HWPX"],  # noqa: A002
-                  version: int | None = Query(None, ge=1), db: Session = Depends(get_db),
+                  version: int | None = Query(None, ge=1), db: Session = DB,
                   c: Container = Depends(container), p: Principal = Depends(require("report:read"))) -> Response:
     if format not in rr.enabled_formats(c.settings.report_formats):
         raise ProblemError("CONFLICT", detail=f"{format} 내보내기가 켜져 있지 않습니다 (REPORT_FORMATS)")
@@ -510,7 +533,7 @@ def export_report(report_id: str, request: Request, format: Literal["PDF", "XLSX
     tpl = reports.latest_template(db, rep.template_code, rep.template_version)
     if tpl is None:
         raise ProblemError("CONFLICT", detail="보고서 양식을 찾을 수 없습니다")
-    doc = reports.render_model(db, rep, v, tpl)
+    doc = reports.render_model(db, rep, v, tpl, damage=_damage_view(db, rep, v, p))
     if format == "XLSX":
         data = rr.render_xlsx(doc)
     elif format == "PDF":
@@ -528,16 +551,12 @@ def export_report(report_id: str, request: Request, format: Literal["PDF", "XLSX
 
 @router.get("/v1/reports/{report_id}/metrics/{metric_code}/trace", tags=["reports"])
 def trace_metric(report_id: str, metric_code: str, request: Request, version: int | None = Query(None, ge=1),
-                 db: Session = Depends(get_db), c: Container = Depends(container),
+                 db: Session = DB, c: Container = Depends(container),
                  p: Principal = Depends(require("report:read"))) -> dict:
     rep = _load_report(db, c, request, report_id, p)
     v = _report_version(db, rep, p, version)
 
-    def visible(ids: list[str]) -> set[str]:  # 권한 범위 안의 자산만 (관리기관 열람자는 L1 이상)
-        return set(db.execute(select(Asset.asset_id).where(Asset.asset_id.in_(ids), scope_filter(Asset, p)))
-                   .scalars()) if ids else set()
-
-    out = reports.trace(db, rep, v, metric_code, visible)
+    out = reports.trace(db, rep, v, metric_code, lambda ids: visible_asset_ids(db, p, ids))
     if out is None:
         raise ProblemError("NOT_FOUND")
     return out

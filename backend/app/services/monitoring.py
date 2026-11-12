@@ -9,13 +9,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
 import logging
+import socket
+import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from queue import Empty, Full, Queue
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -43,6 +47,7 @@ from app.db.models import (
 )
 from app.domain.ids import new_id
 from app.ports.notifier import Notification
+from app.services.contracts import schema_files
 from app.services.observations import OBS
 from app.timefmt import iso
 
@@ -50,6 +55,9 @@ if TYPE_CHECKING:
     from app.container import Container
 
 log = logging.getLogger("monitoring")
+_ALERT_WEBHOOK_TIMEOUT_S = 5.0
+_ALERT_DNS_SLOTS = threading.BoundedSemaphore(4)
+OperatorAlert = tuple[dict[str, Any], datetime]
 
 SEVERITY_RANK = {"OK": 0, "INFO": 1, "WARNING": 2, "CRITICAL": 3}
 
@@ -168,6 +176,16 @@ def latest_policies(db: Session, device_ids: list[str]) -> dict[str, dict[str, A
     return {r.device_id: r.policy for r in rows}
 
 
+def policy_heartbeat_interval_s(policy: dict[str, Any]) -> int:
+    """범위 밖인 이전 주기는 기본 정책의 60초를 사용한다 (ADR-0040)."""
+    bounds = schema_files()["device-policy"]["properties"]["heartbeat_interval_s"]
+    interval = policy.get("heartbeat_interval_s", 60)
+    if isinstance(interval, (int, float)) and bounds["minimum"] <= interval <= bounds["maximum"]:
+        if interval == int(interval):
+            return int(interval)
+    return 60
+
+
 def rule_params(db: Session, code: str) -> dict[str, Any]:
     r = db.get(WatchRule, code)
     return dict(r.params) if r else {}
@@ -215,7 +233,7 @@ def device_health(db: Session, devices: list[Device], now: datetime) -> list[dic
             st = statuses.get(d.device_id)
             pol = policies.get(d.device_id, {})
             current = str(pol.get("policy_version", "pv-0"))
-            interval = int(pol.get("heartbeat_interval_s", 60))
+            interval = policy_heartbeat_interval_s(pol)
             last_reg = max([t for t in (by_collector.get(d.device_id), act.last_registered_at if act else None)
                             if t is not None], default=None)
             hb = st.heartbeat if st else {}
@@ -336,7 +354,7 @@ def _heartbeat_missing(ctx: EvalCtx, p: dict[str, Any]) -> Iterable[Violation]:
     for d in ctx.devices():
         if d.kind != "COLLECTOR" or d.status != "ACTIVE":
             continue  # 등록 전 수집기는 아직 보고할 수 없다
-        interval = int(policies.get(d.device_id, {}).get("heartbeat_interval_s", 60))
+        interval = policy_heartbeat_interval_s(policies.get(d.device_id, {}))
         limit = heartbeat_threshold_s(p, interval)
         st = ctx.db.get(AgentStatus, d.device_id)
         last: datetime | None
@@ -585,6 +603,22 @@ def recipients(db: Session, rule: WatchRule, organization_id: str | None) -> tup
     return tuple(sorted({r for r in rows if r}))
 
 
+class _AlertWebhookLoop(asyncio.SelectorEventLoop):
+    async def getaddrinfo(self, host: str | bytes | None, port: str | bytes | int | None, **kwargs: Any) -> Any:
+        from app.services.webhooks import _in_thread
+
+        def resolve() -> Any:
+            # 취소된 DNS 호출은 실제 반환할 때까지 슬롯을 보유한다.
+            if not _ALERT_DNS_SLOTS.acquire(blocking=False):
+                raise OSError("alert webhook DNS capacity exhausted")
+            try:
+                return socket.getaddrinfo(host, port, **kwargs)
+            finally:
+                _ALERT_DNS_SLOTS.release()
+
+        return await _in_thread(resolve)
+
+
 def post_webhook(url: str, secret: str | None, payload: dict[str, Any], now: datetime) -> None:
     """운영자 알림 웹훅. 본문은 코드·식별자·요약만 (토큰·URL·개인정보 없음)."""
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
@@ -592,14 +626,67 @@ def post_webhook(url: str, secret: str | None, payload: dict[str, Any], now: dat
     if secret:
         mac = hmac.new(secret.encode(), headers["X-Signature-Timestamp"].encode() + b"." + body, hashlib.sha256)
         headers["X-Signature"] = "sha256=" + mac.hexdigest()
+    async def send() -> None:
+        async with asyncio.timeout(_ALERT_WEBHOOK_TIMEOUT_S):
+            async with httpx.AsyncClient(
+                timeout=_ALERT_WEBHOOK_TIMEOUT_S, trust_env=True, follow_redirects=False,
+            ) as client:
+                async with client.stream("POST", url, content=body, headers=headers) as response:
+                    response.raise_for_status()
+
     try:
-        httpx.post(url, content=body, headers=headers, timeout=5.0).raise_for_status()
-    except httpx.HTTPError as exc:
+        asyncio.run(send(), loop_factory=_AlertWebhookLoop)
+    except (httpx.HTTPError, httpx.InvalidURL, TimeoutError) as exc:
         log.warning("alert_webhook_failed", extra={"error_type": type(exc).__name__})
 
 
-def dispatch(c: Container, db: Session, rule: WatchRule, incident: Incident, kind: str, now: datetime) -> None:
+class OperatorWebhookDispatcher:
+    def __init__(self, url: str, secret: str | None, stop: threading.Event) -> None:
+        self._pending: Queue[OperatorAlert] = Queue(maxsize=100)
+        self._stop = stop
+        self._thread = threading.Thread(
+            target=self._run, args=(url, secret), name="operator-alert-webhook", daemon=True,
+        )
+        self._thread.start()
+
+    def submit(self, alerts: list[OperatorAlert]) -> None:
+        dropped = 0
+        for alert in alerts:
+            try:
+                self._pending.put_nowait(alert)
+            except Full:
+                dropped += 1
+        if dropped:
+            log.warning("alert_webhook_queue_full", extra={"count": dropped})
+
+    def _run(self, url: str, secret: str | None) -> None:
+        while not self._stop.is_set():
+            try:
+                payload, now = self._pending.get(timeout=0.1)
+            except Empty:
+                continue
+            try:
+                post_webhook(url, secret, payload, now)
+            except Exception as exc:  # noqa: BLE001 - 한 알림의 오류가 다음 전송을 막지 않게 한다
+                log.warning("alert_webhook_failed", extra={"error_type": type(exc).__name__})
+
+    def join(self) -> None:
+        self._thread.join(timeout=_ALERT_WEBHOOK_TIMEOUT_S + 1)
+        if pending := self._pending.qsize():
+            log.warning("alert_webhook_shutdown_pending", extra={"count": pending})
+
+
+def dispatch(
+    c: Container, db: Session, rule: WatchRule, incident: Incident, kind: str, now: datetime,
+) -> OperatorAlert | None:
     """kind: OPENED / REMINDER / RESOLVED."""
+    if kind in ("OPENED", "RESOLVED") and rule.notify_org and incident.organization_id:
+        # 기관 웹훅 구독 (11번 요구사항 3.1, 04번 웹훅): 열림·해제만 (재알림은 보내지 않는다)
+        from app.services import webhooks
+
+        webhooks.emit(db, incident.organization_id, f"incident.{kind.lower()}", {
+            "incident_id": incident.incident_id, "rule_code": rule.rule_code, "severity": incident.severity,
+            "device_id": incident.device_id, "session_id": incident.session_id})
     label = {"OPENED": "경보", "REMINDER": "경보 계속", "RESOLVED": "해제"}[kind]
     title = RULES[rule.rule_code][0]
     subject = f"[{label}] {title} ({incident.severity})"
@@ -617,14 +704,13 @@ def dispatch(c: Container, db: Session, rule: WatchRule, incident: Incident, kin
                                      data={"incident_id": incident.incident_id, "rule_code": rule.rule_code,
                                            "severity": incident.severity, "device_id": incident.device_id,
                                            "session_id": incident.session_id}))
-    url = c.settings.alert_webhook_url
-    if "WEBHOOK" in rule.channels and rule.notify_operator and url:
-        secret = c.settings.alert_webhook_secret.get_secret_value() if c.settings.alert_webhook_secret else None
-        post_webhook(url, secret, {
+    if "WEBHOOK" in rule.channels and rule.notify_operator and c.settings.alert_webhook_url:
+        return ({
             "type": f"watch.{kind.lower()}", "incident_id": incident.incident_id, "rule_code": rule.rule_code,
             "severity": incident.severity, "organization_id": incident.organization_id,
             "device_id": incident.device_id, "session_id": incident.session_id, "summary": incident.summary,
             "occurred_at": iso(now)}, now)
+    return None
 
 
 # ------------------------------------------------------------------ 평가·장애 기록 (요구사항 3, 4)
@@ -638,6 +724,7 @@ class EvalResult:
     resolved: list[str] = field(default_factory=list)
     active_by_rule: dict[str, int] = field(default_factory=dict)
     health: list[dict[str, Any]] = field(default_factory=list)
+    operator_alerts: list[OperatorAlert] = field(default_factory=list)
 
 
 def evaluate(c: Container, db: Session, now: datetime | None = None) -> EvalResult:
@@ -653,6 +740,11 @@ def evaluate(c: Container, db: Session, now: datetime | None = None) -> EvalResu
         for v in fn(ctx, dict(rule.params)):
             found[v.alert_key] = (rule, v)
     res = EvalResult()
+
+    def notify(rule: WatchRule, incident: Incident, kind: str) -> None:
+        if alert := dispatch(c, db, rule, incident, kind, now):
+            res.operator_alerts.append(alert)
+
     active = {a.alert_key: a for a in db.execute(select(WatchAlert).where(WatchAlert.active)
                                                  .with_for_update()).scalars()}
     for key, (rule, v) in found.items():
@@ -674,7 +766,7 @@ def evaluate(c: Container, db: Session, now: datetime | None = None) -> EvalResu
                 for k, val in values.items():
                     setattr(alert, k, val)
             db.flush()
-            dispatch(c, db, rule, inc, "OPENED", now)
+            notify(rule, inc, "OPENED")
             res.opened.append(inc.incident_id)
             res.opened_rules.append(rule.rule_code)
             continue
@@ -684,7 +776,7 @@ def evaluate(c: Container, db: Session, now: datetime | None = None) -> EvalResu
             (now - alert.last_notified_at).total_seconds() >= rule.realert_interval_s
         if inc_row is not None and inc_row.status == "OPEN" and due:
             inc_row.summary = v.summary  # 최신 상황으로
-            dispatch(c, db, rule, inc_row, "REMINDER", now)
+            notify(rule, inc_row, "REMINDER")
             alert.last_notified_at = now
             res.reminded.append(inc_row.incident_id)
     for key, alert in active.items():
@@ -699,7 +791,7 @@ def evaluate(c: Container, db: Session, now: datetime | None = None) -> EvalResu
             inc_row.status, inc_row.resolved_at, inc_row.resolved_by = "RESOLVED", now, "system"
             inc_row.memo = f"{inc_row.memo}\n{note}" if inc_row.memo else note
         if inc_row is not None and rule_row is not None and not disabled:
-            dispatch(c, db, rule_row, inc_row, "RESOLVED", now)
+            notify(rule_row, inc_row, "RESOLVED")
             res.resolved.append(inc_row.incident_id)
     for _, (rule, _v) in found.items():
         res.active_by_rule[rule.rule_code] = res.active_by_rule.get(rule.rule_code, 0) + 1

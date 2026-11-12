@@ -1,0 +1,19 @@
+# oapi-codegen v2.8.2. 원본 API·JSON Schema는 바꾸지 않고 생성용 참조만 투영한다.
+package: contractapi
+generate:
+  models: true
+  client: true
+output-options:
+  include-operation-ids:
+    - issueToken
+    - enrollAgent
+    - getDevicePolicy
+    - createUpload
+    - getUpload
+    - abortUpload
+    - listUploadParts
+    - completeUpload
+    - getAssetReceipt
+    - postHeartbeat
+    - postObservations
+    - getObservationMapping

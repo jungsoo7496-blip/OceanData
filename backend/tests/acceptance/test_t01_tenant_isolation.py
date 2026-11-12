@@ -31,6 +31,7 @@ CROSS_ORG_CASES = [
                               "device_ids": [DEV_B_CAMERA]}),
     ("POST", "/v1/devices", {"name": "x", "kind": "SOURCE", "device_type": "CAMERA", "local_copy_policy": "UNKNOWN",
                              "collector_device_id": DEV_B_COLLECTOR}),
+    ("POST", "/v1/policy-drafts", {"device_id": DEV_B_CAMERA}),  # 09번 장비 정책 초안
 ]
 
 
@@ -135,3 +136,22 @@ def test_T01_a_cross_org_incident_update_and_list(ctx) -> None:
     r = ctx.client.patch(f"/v1/incidents/{b_items[0]['incident_id']}", json={"memo": "x"}, headers=ctx.as_user(101))
     assert r.status_code == 404
     assert "CROSS_ORG_ACCESS_ATTEMPT" in ctx.audit_actions()
+
+
+@pytest.mark.covers("T01-a", "T01-b")
+def test_T01_a_cross_org_policy_drafts(ctx) -> None:
+    """09번 장비 정책 초안: 다른 기관 초안·카드는 없는 것(404 + 감사), 목록에도 없다."""
+    b = ctx.as_user(103)
+    card = ctx.client.post("/v1/integration-cards", headers=b, json={"content": {"basic": {"project_name": "B (합성)"}}})
+    draft = ctx.client.post("/v1/policy-drafts", headers=b, json={"device_id": DEV_B_CAMERA}).json()
+    path = f"/v1/policy-drafts/{draft['policy_draft_id']}"
+    a = ctx.as_user(101, mfa=True)
+    assert ctx.client.get(path, headers=a).status_code == 404
+    r = ctx.client.patch(path, headers=a, json={"revision": 1, "values": {"expected_interval_s": 60}})
+    assert r.status_code == 404
+    r = ctx.client.post("/v1/policy-drafts", headers=a,
+                        json={"device_id": DEV_A_CAMERA, "integration_card_id": card.json()["integration_card_id"]})
+    assert r.status_code == 404
+    assert ctx.client.get("/v1/policy-drafts", headers=a).json()["items"] == []
+    assert ctx.client.get(f"/v1/policy-drafts?device_id={DEV_B_CAMERA}", headers=a).json()["items"] == []
+    assert ctx.audit_actions().count("CROSS_ORG_ACCESS_ATTEMPT") == 3

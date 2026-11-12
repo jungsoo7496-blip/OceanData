@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import cast, column, literal, select, table
 from sqlalchemy.orm import Session
 
-from app.api.deps import client_ip, container, get_db, load_scoped, require
+from app.api.deps import DB, client_ip, container, load_scoped, require
 from app.container import Container
 from app.db.models import Asset, AssetTag, AssetTagEdit, DeidReview
 from app.db.types import Vector
@@ -38,7 +38,7 @@ def _review(db: Session, p: Principal, review_id: str, lock: bool = False) -> De
 
 @router.get("/v1/deid-reviews", tags=["deid"])
 def list_reviews(status: Literal["ASSIGNED", "PASSED", "MISSED", "REJECTED"] | None = None,
-                 db: Session = Depends(get_db), p: Principal = Depends(require("deid_review:read"))) -> dict:
+                 db: Session = DB, p: Principal = Depends(require("deid_review:read"))) -> dict:
     stmt = select(DeidReview).order_by(DeidReview.created_at, DeidReview.review_id)
     if not _operator(p):
         stmt = stmt.where(DeidReview.reviewer_id == p.user_id)
@@ -48,7 +48,7 @@ def list_reviews(status: Literal["ASSIGNED", "PASSED", "MISSED", "REJECTED"] | N
 
 
 @router.get("/v1/deid-reviews/{review_id}", tags=["deid"])
-def get_review(review_id: str, db: Session = Depends(get_db),
+def get_review(review_id: str, db: Session = DB,
                p: Principal = Depends(require("deid_review:read"))) -> dict:
     rv = _review(db, p, review_id)
     return deid.review_view(rv, db.get(Asset, rv.deid_asset_id))
@@ -56,25 +56,42 @@ def get_review(review_id: str, db: Session = Depends(get_db),
 
 @router.get("/v1/deid-reviews/{review_id}/frame", tags=["deid"])
 def review_frame(review_id: str, request: Request, t: float = Query(ge=0), which: Literal["ORIGINAL", "DEID"] = "DEID",
-                 db: Session = Depends(get_db), c: Container = Depends(container),
+                 db: Session = DB, c: Container = Depends(container),
                  p: Principal = Depends(require("deid_review:read"))) -> Response:
     """표본 프레임 (원본 대비, 요구사항 4.2). 원본 열람은 감사 로그에 남는다."""
-    from app.services.pipeline import _run, local_copy
+    from app.services.pipeline import _run, local_copy, work_dir
 
     rv = _review(db, p, review_id)
     a = db.get(Asset, rv.original_asset_id if which == "ORIGINAL" else rv.deid_asset_id)
     if a is None or not a.storage_key:
         raise ProblemError("NOT_FOUND")
+    grant = None
+    if which == "ORIGINAL" and rv.reviewer_id != p.user_id and a.organization_id != p.organization_id:
+        # 배정 검수자가 아닌 운영자: 원본은 긴급 열람 승인으로만 (domain.md 2장, 다운로드 URL과 같은 규칙)
+        from app.services.break_glass import active_grant_for
+
+        grant = active_grant_for(db, a, p.principal_id, c.clock.now())
+        if grant is None:
+            raise ProblemError("FORBIDDEN", detail="운영자의 원본 프레임 열람은 유효한 긴급 열람 승인이 있어야 합니다")
+        grant_id, grant_expires = grant.grant_id, grant.expires_at
     db.expunge(a)
-    with local_copy(c, a) as src, tempfile.TemporaryDirectory(prefix="marine-frame-") as tmp:
+    with local_copy(c, a) as src, tempfile.TemporaryDirectory(prefix="marine-frame-", dir=work_dir(c)) as tmp:
         out = os.path.join(tmp, "f.jpg")
         r = _run([c.settings.ffmpeg_path, "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{t:.3f}", "-i", src,
                   "-frames:v", "1", "-q:v", "4", out], 120)
         if r.returncode != 0 or not os.path.exists(out):
             raise ProblemError("NOT_FOUND", detail="그 시각의 프레임을 만들 수 없습니다")
         data = open(out, "rb").read()  # noqa: SIM115 - 임시 디렉터리 안 작은 파일
+    from app.services.tiers import touch_accessed
+
+    touch_accessed(db, a.asset_id, c.clock.now())  # 검수자가 바이너리를 열었다 (계층 규칙의 '마지막 조회')
     c.audit.record("DEID_REVIEW_FRAME_VIEWED", principal=p, organization_id=rv.organization_id, target_type="Asset",
                    target_id=a.asset_id, source_ip=client_ip(request), details={"which": which, "t": t})
+    if grant is not None:  # 긴급 열람 중 원본 접근은 따로 남긴다 (02번 요구사항 8.3)
+        c.audit.record("BREAK_GLASS_ACCESS", principal=p, organization_id=rv.organization_id, target_type="Asset",
+                       target_id=a.asset_id, source_ip=client_ip(request),
+                       details={"grant_id": grant_id, "variant": "ORIGINAL", "via": "deid_review_frame",
+                                "grant_expires_at": grant_expires.isoformat() if grant_expires else None})
     return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
@@ -103,7 +120,7 @@ class Decision(BaseModel):
 
 
 @router.post("/v1/deid-reviews/{review_id}/decision", tags=["deid"])
-def decide_review(review_id: str, body: Decision, request: Request, db: Session = Depends(get_db),
+def decide_review(review_id: str, body: Decision, request: Request, db: Session = DB,
                   c: Container = Depends(container), p: Principal = Depends(require("deid_review:decide"))) -> dict:
     rv = _review(db, p, review_id, lock=True)
     if body.result == "MISSED" and not body.missed:
@@ -120,7 +137,7 @@ def decide_review(review_id: str, body: Decision, request: Request, db: Session 
 
 
 @router.get("/v1/deid-quality", tags=["deid"])
-def quality(db: Session = Depends(get_db), p: Principal = Depends(require("deid_quality:read"))) -> dict:
+def quality(db: Session = DB, p: Principal = Depends(require("deid_quality:read"))) -> dict:
     """클래스별 미탐률·재처리 비율 (요구사항 9.1). 제공기관 관리자는 자기 기관만."""
     return deid.quality_report(db, None if _operator(p) else p.organization_id)
 
@@ -129,7 +146,7 @@ def quality(db: Session = Depends(get_db), p: Principal = Depends(require("deid_
 
 
 @router.get("/v1/assets/{asset_id}/tags", tags=["deid"])
-def get_tags(asset_id: str, request: Request, db: Session = Depends(get_db), c: Container = Depends(container),
+def get_tags(asset_id: str, request: Request, db: Session = DB, c: Container = Depends(container),
              p: Principal = Depends(require("asset:read"))) -> dict:
     a = load_scoped(db, c, request, Asset, asset_id, p)
     tags = db.execute(select(AssetTag).where(AssetTag.asset_id == a.asset_id)
@@ -150,7 +167,7 @@ class TagEdit(BaseModel):
 
 
 @router.patch("/v1/assets/{asset_id}/tags", tags=["deid"])
-def patch_tags(asset_id: str, body: TagEdit, request: Request, db: Session = Depends(get_db),
+def patch_tags(asset_id: str, body: TagEdit, request: Request, db: Session = DB,
                c: Container = Depends(container), p: Principal = Depends(require("asset:write"))) -> dict:
     bad = [t for t in [*body.add, *body.remove] if t not in tagging.VOCAB]
     if bad or not (body.add or body.remove):
@@ -164,7 +181,7 @@ def patch_tags(asset_id: str, body: TagEdit, request: Request, db: Session = Dep
 
 @router.get("/v1/scenes/search", tags=["deid"])
 def search_scenes(q: str = Query(min_length=1, max_length=200), limit: int = Query(20, ge=1, le=100),
-                  db: Session = Depends(get_db), p: Principal = Depends(require("asset:read"))) -> dict:
+                  db: Session = DB, p: Principal = Depends(require("asset:read"))) -> dict:
     """문장으로 장면 찾기 (요구사항 7.2). 권한 범위 안의 자산만."""
     tags = tagging.text_tags(q)
     if not tags:

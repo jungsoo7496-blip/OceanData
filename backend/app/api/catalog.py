@@ -1,23 +1,29 @@
-"""스키마·코드표·사전 검증·장비 정책·계보 (03번 요구사항 1.3, 2, 8, 11, 13)."""
+"""스키마·코드표·사전 검증·장비 정책·계보·품질 집계 (03번 요구사항 1.3, 2, 8, 10, 11, 13)."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select, text
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import func, select, text, true
 from sqlalchemy.orm import Session
 
-from app.api.deps import container, get_db, load_scoped, require
+from app.api.deps import DB, client_ip, container, load_scoped, require
 from app.container import Container
-from app.db.models import Asset, Device, DevicePolicy, OrgEventCode
+from app.db.models import Asset, Device, OrgEventCode, TrialSession
+from app.domain.normalize import parse_rfc3339
 from app.domain.principal import Principal
 from app.errors import ProblemError
-from app.services import contracts
+from app.services import contracts, device_policy
+from app.services.idempotency import run_idempotent
+from app.services.org_event_codes import register_subcode
 from app.services.tenant import scope_filter
 from app.timefmt import iso
 
 router = APIRouter()
+_ORG_EVENT_SUBCODES = "/v1/codes/event-categories/subcodes"
 
 
 @router.get("/v1/schemas", tags=["contracts"])
@@ -34,7 +40,7 @@ def get_schema(name: str, version: str, _: Principal = Depends(require("schema:r
 
 
 @router.get("/v1/codes/{table}", tags=["contracts"])
-def get_code_table(table: str, db: Session = Depends(get_db),
+def get_code_table(table: str, db: Session = DB,
                    p: Principal = Depends(require("code:read"))) -> dict:
     if table not in contracts.CODE_TABLES:
         raise ProblemError("NOT_FOUND")
@@ -45,6 +51,34 @@ def get_code_table(table: str, db: Session = Depends(get_db),
         out["items"] = [*out["items"], *({"code": s.code, "label": s.label, "organization_specific": True}
                                          for s in subs)]
     return out
+
+
+class OrgEventSubcodeCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    code: str = Field(max_length=80, pattern=r"^[A-Z][A-Z0-9_]{1,39}\.[a-z0-9_]{1,40}$")
+    label: str = Field(min_length=1, max_length=120, pattern=r"^[^\x00-\x1f\x7f]*[^\s\x00-\x1f\x7f][^\x00-\x1f\x7f]*$")
+
+
+@router.post(_ORG_EVENT_SUBCODES, status_code=201, tags=["contracts"])
+def create_org_event_subcode(
+    body: OrgEventSubcodeCreate, request: Request, db: Session = DB,
+    c: Container = Depends(container), p: Principal = Depends(require("org_event_code:create")),
+    idempotency_key: str | None = Header(default=None, min_length=8, max_length=128),
+) -> JSONResponse:
+    method_path = f"POST {_ORG_EVENT_SUBCODES}"
+
+    def create() -> tuple[int, dict]:
+        register_subcode(db, p, body.code, body.label, c.clock.now())
+        return 201, {**body.model_dump(), "organization_specific": True}
+
+    status, response, replayed = run_idempotent(
+        db, c.clock, c.settings.idempotency_retention_s, p, method_path, idempotency_key, body.model_dump(), create,
+    )
+    if not replayed:
+        c.audit.record("ORG_EVENT_CODE_CREATED", principal=p, organization_id=p.organization_id,
+                       target_type="OrgEventCode", source_ip=client_ip(request), details={"code": body.code},
+                       connection=db.connection())
+    return JSONResponse(response, status_code=status, headers={"Idempotent-Replayed": "true"} if replayed else None)
 
 
 class ValidateRequest(BaseModel):
@@ -64,49 +98,24 @@ def validate_contract(body: ValidateRequest, _: Principal = Depends(require("con
             "problems": [p.as_dict() for p in problems]}
 
 
-# ---- 장비 정책 (에이전트가 주기적으로 받는다)
-def _mapping_version(db: Session, device_id: str) -> str | None:
-    from app.services.observations import current_mapping
-
-    m = current_mapping(db, device_id)
-    return f"m{m.version}" if m else None
-
-
-def default_policy(db: Session, collector: Device) -> dict:
-    sources = db.execute(select(Device).where(Device.collector_device_id == collector.device_id,
-                                              Device.organization_id == collector.organization_id,
-                                              Device.status != "REVOKED").order_by(Device.device_id)).scalars()
-    return {
-        "policy_version": "pv-0",
-        "collector_device_id": collector.device_id,
-        "sources": [{"device_id": d.device_id, "project_id": d.project_id, "collection_mode": d.collection_mode,
-                     "local_copy_policy": d.local_copy_policy, "local_retention_days": d.local_retention_days,
-                     "allowed_data_roles": ["CORE"], "expected_interval_s": d.expected_interval_s,
-                     "source_timezone": d.source_timezone,
-                     "observation_mapping_version": _mapping_version(db, d.device_id)}
-                    for d in sources if d.project_id],
-        "watch_rules": [],
-        "timezone": "UTC",
-        "heartbeat_interval_s": 60,
-        "size_stable_s": 30,
-    }
-
-
+# ---- 장비 정책 (에이전트가 주기적으로 받는다). 기본 정책·새 버전 저장은 services/device_policy (09번 초안 적용도)
 @router.get("/v1/devices/{device_id}/policy", tags=["agents"])
-def get_device_policy(device_id: str, request: Request, db: Session = Depends(get_db),
+def get_device_policy(device_id: str, request: Request, db: Session = DB,
                       c: Container = Depends(container), p: Principal = Depends(require("device_policy:read"))) -> dict:
+    device = load_scoped(db, c, request, Device, device_id, p)
     if p.kind == "DEVICE" and device_id != p.device_id:  # 수집기는 자기 정책만
         raise ProblemError("NOT_FOUND")
-    device = load_scoped(db, c, request, Device, device_id, p)
     if device.kind != "COLLECTOR":
         raise ProblemError("NOT_FOUND", detail="정책은 수집기 단위로 배포합니다")
-    stored = db.execute(select(DevicePolicy).where(DevicePolicy.device_id == device.device_id)
-                        .order_by(DevicePolicy.version.desc()).limit(1)).scalar_one_or_none()
-    if stored is None:
-        return default_policy(db, device)
-    policy = dict(stored.policy)  # 저장된 정책에도 현재 매핑 버전을 채운다
-    policy["sources"] = [{**src, "observation_mapping_version": _mapping_version(db, src["device_id"])
-                          or src.get("observation_mapping_version")} for src in policy.get("sources", [])]
+    policy, stored_version = device_policy.current_policy(db, device)
+    problems = device_policy.policy_schema_problems(policy, stored=stored_version is not None)
+    if problems:
+        raise ProblemError("RULE_VIOLATION", detail="현재 계약을 충족하는 장비 정책을 배포해야 합니다",
+                           unmet_conditions=[{"condition": f"장비 정책 계약 {p.pointer or '/'}", "actual": p.code}
+                                             for p in problems[:20]])
+    if stored_version is not None:  # 저장된 정책에도 현재 매핑 버전을 채운다
+        policy["sources"] = [{**src, "observation_mapping_version": device_policy.mapping_version(db, src["device_id"])
+                              or src.get("observation_mapping_version")} for src in policy["sources"]]
     return policy
 
 
@@ -131,8 +140,57 @@ _LINEAGE_SQL = {
 }
 
 
+_QUALITY_STATUSES = ("PENDING", "PASSED", "WARNING", "FAILED")  # domain.md 8장 quality_status
+_TOP_REASONS = 10
+
+
+def _report_time(value: str | None, pointer: str) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        return parse_rfc3339(value)
+    except ValueError:
+        raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": pointer, "code": "invalid",
+                                                        "message": "RFC 3339 UTC 시각이어야 합니다"}]) from None
+
+
+@router.get("/v1/quality-reports", tags=["status"])
+def get_quality_report(request: Request, session_id: str | None = None, from_: str | None = Query(None, alias="from"),
+                       to: str | None = None, db: Session = DB, c: Container = Depends(container),
+                       p: Principal = Depends(require("quality_report:read"))) -> dict:
+    """원본·삭제되지 않은 자산의 품질 상태 수와 상위 사유 (03번 요구사항 10.1, STD-03).
+
+    기관 범위는 인증 정보로만 정한다(scope_filter). 기간은 ingested_at 기준 [from, to)."""
+    start, end = _report_time(from_, "/query/from"), _report_time(to, "/query/to")
+    if start is not None and end is not None and start >= end:
+        raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/query/to", "code": "range",
+                                                        "message": "from < to 이어야 합니다"}])
+    conds = [scope_filter(Asset, p), Asset.variant == "ORIGINAL"]
+    if session_id is not None:
+        load_scoped(db, c, request, TrialSession, session_id, p)  # 보이지 않는 회차는 404
+        conds.append(Asset.session_id == session_id)
+    if start is not None:
+        conds.append(Asset.ingested_at >= start)
+    if end is not None:
+        conds.append(Asset.ingested_at < end)
+    counts = dict.fromkeys(_QUALITY_STATUSES, 0)
+    for status, n in db.execute(select(Asset.quality_status, func.count()).where(*conds)
+                                .group_by(Asset.quality_status)).all():
+        counts[status] = int(n)
+    reason = func.jsonb_array_elements_text(Asset.quality_reasons).table_valued("value").render_derived(name="r")
+    n_assets = func.count()
+    rows = db.execute(select(reason.c.value, n_assets).select_from(Asset).join(reason, true()).where(*conds)
+                      .group_by(reason.c.value).order_by(n_assets.desc(), reason.c.value).limit(_TOP_REASONS)).all()
+    out: dict = {"counts_by_quality_status": counts,
+                 "top_reasons": [{"reason": r, "count": int(n)} for r, n in rows]}
+    for key, value in (("session_id", session_id), ("from", start), ("to", end)):
+        if value is not None:
+            out[key] = value if isinstance(value, str) else iso(value)
+    return out
+
+
 @router.get("/v1/assets/{asset_id}/lineage", tags=["assets"])
-def get_lineage(asset_id: str, request: Request, db: Session = Depends(get_db), c: Container = Depends(container),
+def get_lineage(asset_id: str, request: Request, db: Session = DB, c: Container = Depends(container),
                 p: Principal = Depends(require("asset:read"))) -> dict:
     load_scoped(db, c, request, Asset, asset_id, p)
     out: dict = {"asset_id": asset_id}

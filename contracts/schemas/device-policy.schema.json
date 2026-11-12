@@ -5,12 +5,26 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["policy_version", "collector_device_id", "sources", "watch_rules", "heartbeat_interval_s", "size_stable_s", "timezone"],
+  "if": {
+    "properties": {
+      "policy_version": { "const": "pv-0" },
+      "watch_rules": { "maxItems": 0 }
+    }
+  },
+  "else": { "properties": { "sources": { "minItems": 1 } } },
+  "$defs": {
+    "storedPolicy": {
+      "description": "저장할 정책과 저장본에서 배포할 정책에는 원천 장비가 한 대 이상 있어야 한다.",
+      "$ref": "#",
+      "properties": { "sources": { "minItems": 1 } }
+    }
+  },
   "properties": {
     "policy_version": { "type": "string", "maxLength": 64 },
     "collector_device_id": { "$ref": "common.schema.json#/$defs/device_id" },
     "sources": {
-      "description": "이 수집기가 데이터를 보낼 수 있는 원천 장비와 장비별 정책",
-      "type": "array", "minItems": 1,
+      "description": "이 수집기가 데이터를 보낼 수 있는 원천 장비와 장비별 정책. 서버가 만드는 기본 정책 pv-0은 감시 규칙과 함께 빈 배열일 수 있다.",
+      "type": "array",
       "items": {
         "type": "object", "additionalProperties": false,
         "required": ["device_id", "collection_mode", "local_copy_policy", "allowed_data_roles"],
@@ -19,9 +33,9 @@
           "project_id": { "$ref": "common.schema.json#/$defs/project_id" },
           "collection_mode": { "$ref": "common.schema.json#/$defs/collection_mode" },
           "local_copy_policy": { "$ref": "common.schema.json#/$defs/local_copy_policy" },
-          "local_retention_days": { "type": ["integer", "null"], "minimum": 0 },
+          "local_retention_days": { "type": ["integer", "null"], "minimum": 0, "maximum": 24855, "description": "현장 보존 기간(일). 상한 24855일은 제품 한도가 아니라 기술 한도다 — 초로 바꿔도(×86400) 다른 시간 항목과 같은 2147483647초(32비트 정수, 약 68년) 안에 들어 에이전트·서버가 기간으로 계산할 때 넘치지 않는다 (ADR-0040)" },
           "allowed_data_roles": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "common.schema.json#/$defs/data_role" } },
-          "expected_interval_s": { "type": ["integer", "null"], "minimum": 1, "description": "기대 수집 주기. 수집 정상성 판정에 쓴다 (11번)" },
+          "expected_interval_s": { "type": ["integer", "null"], "minimum": 1, "maximum": 2147483647, "description": "기대 수집 주기. 수집 정상성 판정에 쓴다 (11번). 상한 2147483647초(32비트 정수, 약 68년)는 기술 한도다 — 장비 표 열(PostgreSQL integer)에 들어가고 수집 정상성 판정이 지금 시각에 더해도 넘치지 않는다 (ADR-0040)" },
           "source_timezone": { "oneOf": [{ "$ref": "common.schema.json#/$defs/iana_timezone" }, { "type": "null" }] },
           "observation_mapping_version": { "type": ["string", "null"] }
         }
@@ -41,7 +55,7 @@
           "data_type": { "$ref": "common.schema.json#/$defs/data_type" },
           "variant": { "$ref": "common.schema.json#/$defs/variant" },
           "data_role_default": { "$ref": "common.schema.json#/$defs/data_role" },
-          "priority": { "type": "integer", "minimum": 0 }
+          "priority": { "type": "integer", "minimum": 0, "maximum": 2147483647, "description": "한 파일에 여러 규칙이 맞으면 값이 작은 규칙을 쓴다. 상한 2147483647(32비트 정수)은 기술 한도다 — 에이전트(Go int)·웹(JS 숫자)이 정확히 읽는다. 더 큰 정수는 에이전트가 정책 전체를 읽지 못하게 한다 (ADR-0040)" }
         }
       }
     },
@@ -53,14 +67,14 @@
           "days": { "type": "array", "items": { "enum": ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"] }, "uniqueItems": true, "minItems": 1 },
           "start_local": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" },
           "end_local": { "type": "string", "pattern": "^([01][0-9]|2[0-4]):[0-5][0-9]$", "description": "start보다 이르면 다음 날까지 이어진다" },
-          "max_kbps": { "type": ["integer", "null"], "minimum": 1 }
+          "max_kbps": { "type": ["integer", "null"], "minimum": 1, "maximum": 2147483647, "description": "이 시간대의 최대 전송 속도(kbps), null이면 제한 없음. 상한 2147483647(32비트 정수)은 기술 한도다 — 에이전트가 바이트/초로 바꿔도 넘치지 않는다 (ADR-0040)" }
         }
       }
     },
     "timezone": { "$ref": "common.schema.json#/$defs/iana_timezone" },
-    "heartbeat_interval_s": { "type": "integer", "minimum": 30 },
-    "size_stable_s": { "type": "integer", "minimum": 1 },
-    "max_parallel_parts": { "type": "integer", "minimum": 1 },
+    "heartbeat_interval_s": { "type": "integer", "minimum": 30, "maximum": 2147483647, "description": "하트비트 주기(초). 상한 2147483647초(32비트 정수, 약 68년)는 제품 한도가 아니라 기술 한도다 — 에이전트가 time.Duration(int64 나노초, 약 292년까지)으로 바꾸거나 서버가 지금 시각에 더해도 넘치지 않는다. 범위 밖 정책은 에이전트가 적용하지 않고 이전 정책을 유지한다 (ADR-0040)" },
+    "size_stable_s": { "type": "integer", "minimum": 1, "maximum": 2147483647, "description": "쓰기 완료 판정: 파일 크기·수정 시각이 이 시간(초) 동안 그대로여야 전송 대상에 넣는다 (06번 요구사항 3.1). 상한은 heartbeat_interval_s와 같은 기술 한도다 (ADR-0040)" },
+    "max_parallel_parts": { "type": "integer", "minimum": 1, "maximum": 10000, "description": "파트 동시 전송 수 (06번 요구사항 5.1). 상한 10000은 업로드 파트 번호 상한(openapi.yaml PartUrl.part_number)과 같은 기술 한도다 — 한 업로드에서 동시에 보낼 파트가 그보다 많을 수 없다 (ADR-0040)" },
     "auto_update": {
       "type": "object", "additionalProperties": false, "required": ["enabled"],
       "properties": { "enabled": { "type": "boolean" }, "channel": { "enum": ["stable", "pilot"] } }
