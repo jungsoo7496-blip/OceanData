@@ -88,7 +88,7 @@ def decide_share_request(share_request_id: str, body: Decision, request: Request
 
 class Candidates(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    asset_ids: list[str] | None = Field(None, max_length=1000)
+    asset_ids: list[str] | None = Field(None, min_length=1, max_length=1000)
     session_id: str | None = None
 
 
@@ -98,7 +98,10 @@ def mark_candidates(body: Candidates, request: Request, db: Session = DB,
     if not body.asset_ids and not body.session_id:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "", "code": "minProperties",
                                                         "message": "asset_ids나 session_id가 필요합니다"}])
-    assets = [load_scoped(db, c, request, Asset, x, p) for x in sorted(set(body.asset_ids or []))]
+    if body.asset_ids and len(set(body.asset_ids)) != len(body.asset_ids):  # 계약 uniqueItems
+        raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/asset_ids", "code": "unique",
+                                                        "message": "자산 ID가 중복되었습니다"}])
+    assets = [load_scoped(db, c, request, Asset, x, p) for x in sorted(body.asset_ids or [])]
     if body.session_id:
         s = load_scoped(db, c, request, TrialSession, body.session_id, p)
         assets += list(db.execute(select(Asset).where(Asset.session_id == s.session_id,
