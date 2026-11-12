@@ -537,11 +537,21 @@ def export_report(report_id: str, request: Request, format: Literal["PDF", "XLSX
     if format == "XLSX":
         data = rr.render_xlsx(doc)
     elif format == "PDF":
-        data = rr.render_pdf(doc)
+        # 동시 렌더 상한 (ADR-0066): 기다리지 않는다 — 기다리는 요청도 스레드와 DB 차례(ADR-0062)를 쥔다
+        with c.pdf_slots.try_hold() as got:
+            if not got:
+                raise ProblemError("RATE_LIMITED", headers={"Retry-After": str(rr.PDF_RETRY_AFTER_S)},
+                                   detail=f"PDF를 만드는 요청이 많습니다(동시 {c.pdf_slots.total}건). "
+                                          "잠시 뒤 다시 시도하세요")
+            data = rr.render_pdf(doc)
     else:
         if not tpl.hwpx_key:
             raise ProblemError("CONFLICT", detail="이 양식에는 HWPX 원본이 없습니다")
-        data = rr.render_hwpx(c.storage.get_object(c.settings.bucket_evidence, tpl.hwpx_key), doc)
+        try:
+            data = rr.render_hwpx(c.storage.get_object(c.settings.bucket_evidence, tpl.hwpx_key), doc)
+        except rr.HwpxTemplateError as exc:  # 양식 검사(ADR-0066) 전에 저장된 양식
+            raise ProblemError("CONFLICT",
+                               detail=f"저장된 HWPX 양식을 쓸 수 없습니다({exc}). 양식을 다시 올리세요") from None
     c.audit.record("REPORT_EXPORTED", principal=p, organization_id=rep.organization_id, target_type="Report",
                    target_id=rep.report_id, source_ip=client_ip(request),
                    details={"version": v.version, "format": format})

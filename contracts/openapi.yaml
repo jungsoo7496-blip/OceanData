@@ -666,6 +666,13 @@ paths:
       tags: [reports]
       operationId: putReportTemplateHwpx
       summary: 양식 버전에 HWPX 원본 파일 첨부 (운영자). 본문의 {{변수}} 자리를 내보낼 때 치환한다
+      description: |
+        내보낼 때 쓸 수 없는 양식은 올릴 때 400 VALIDATION_ERROR로 거부한다 (ADR-0066):
+        - zip 항목 이름은 '/'로 나눈 상대 경로여야 한다. '/'로 시작하는 이름, '..' 단계, 역슬래시, ':'(드라이브 문자·스트림),
+          제어 문자가 든 이름은 거부한다.
+        - 모든 항목을 읽을 수 있어야 한다 (손상·암호화·지원하지 않는 압축 방식은 거부).
+        - XML 항목(.xml)은 UTF-8이어야 하고, XML 선언에 인코딩이 있으면 UTF-8이어야 한다 (내보내기는 UTF-8로 쓴다).
+        - XML 항목이 하나 이상 있어야 하고, 압축을 푼 크기는 100MiB 이하다.
       x-freeze: G1
       x-status: draft
       requestBody:
@@ -884,7 +891,11 @@ paths:
       tags: [reports]
       operationId: exportReport
       summary: 보고서 내보내기 (켜진 형식만, /v1/capabilities의 report_formats). 초안은 "초안" 표시
-      description: PDF·XLSX의 근거 손상 안내는 보고서 조회와 같은 범위의 손상 자산 ID를 표시한다.
+      description: |
+        PDF·XLSX의 근거 손상 안내는 보고서 조회와 같은 범위의 손상 자산 ID를 표시한다.
+        HWPX: 저장된 양식을 쓸 수 없으면(양식 검사가 생기기 전에 올린 양식 등) 409 CONFLICT다. 양식을 다시 올린 뒤 내보낸다.
+        PDF: 외부 주소(이미지·글꼴·스타일, http·file 모두)를 가져오지 않는다. 서버 프로세스마다 동시에 만드는 PDF 수에
+        설정 한도(REPORT_PDF_MAX_CONCURRENT)가 있어, 차면 기다리지 않고 429 RATE_LIMITED와 Retry-After를 준다 (ADR-0066).
       x-freeze: G1
       x-status: draft
       parameters:

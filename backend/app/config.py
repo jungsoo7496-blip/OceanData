@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     gpu_enabled: bool = False
     processing_steps: CsvList = Field(default_factory=lambda: ["META"])
     report_formats: CsvList = Field(default_factory=list)
+    # 프로세스마다 동시에 만드는 보고서 PDF 수 (ADR-0066). 차면 기다리지 않고 429 RATE_LIMITED + Retry-After.
+    # PDF 렌더는 요청 안에서 CPU를 오래 쓰고(계약 한계 길이의 기록 한 건이 10초대) 그동안 DB 차례(ADR-0062)를 쥔다
+    report_pdf_max_concurrent: int = Field(2, ge=1)
     external_sources: CsvList = Field(default_factory=list)
 
     # 사전 서명 URL 유효시간 (security.md). URL 호스트는 클라이언트가 접근하는 주소여야 한다
