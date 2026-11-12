@@ -49,10 +49,10 @@
 | S36 | low | `GET /v1/reports/{report_id}/export` | wrong-status | 구현 | 미처리 |
 | S37 | low | `GET /v1/reports/{report_id}/export` | wrong-status | 구현 | 미처리 |
 | S38 | low | `GET /v1/reports/{report_id}` | scope-or-permission | 구현 | 미처리 |
-| S39 | medium | `PATCH /v1/records/{record_id}` | wrong-status | 구현 | 미처리 |
-| S40 | medium | `POST /v1/sessions/{session_id}/records (same code path: PATCH /v1/records/{record_id})` | wrong-status | 구현 | 미처리 |
-| S41 | medium | `POST /v1/sessions/{session_id}/records (same code path: PATCH /v1/records/{record_id})` | missing-audit | 구현 | 미처리 |
-| S42 | low | `PATCH /v1/records/{record_id}` | data-semantics | 구현 | 미처리 |
+| S39 | medium | `PATCH /v1/records/{record_id}` | wrong-status | 구현 | 고침 |
+| S40 | medium | `POST /v1/sessions/{session_id}/records (same code path: PATCH /v1/records/{record_id})` | wrong-status | 구현 | 고침 |
+| S41 | medium | `POST /v1/sessions/{session_id}/records (same code path: PATCH /v1/records/{record_id})` | missing-audit | 구현 | 고침 (ADR-0078) |
+| S42 | low | `PATCH /v1/records/{record_id}` | data-semantics | 구현 | 고침 |
 | S43 | medium | `POST /v1/contracts/validate` | missing-behavior | 구현 | 미처리 |
 | S44 | medium | `POST /v1/contracts/validate` | missing-behavior | 구현 | 미처리 |
 | S45 | low | `GET /v1/uploads/{upload_id}/parts` | wrong-status | 계약 문구 | 미처리 |
@@ -88,6 +88,10 @@
 - **S27 삭제 증명 조회** — 다른 기관 ORG_ADMIN이 삭제 증명을 조회하면 404를 주고 `CROSS_ORG_ACCESS_ATTEMPT` 감사(대상 `DeletionCertificate`, 소유 기관, 경로)를 남긴다. 소유 기관 ORG_ADMIN과 운영자는 그대로 200이고, 없는 증명은 감사 없이 404다. 증명의 `deleted_at`(삭제한 시각)을 Tenant_Guard가 삭제 표시로 보므로 `load_scoped` 대신 처리기에서 감사한다.
 - **S28 운영자 다운로드 URL** — 유효한 긴급 열람 승인이 없는 운영자 요청(승인 없음·승인 전·만료·승인자가 남의 승인 사용)은 403을 주고 `PERMISSION_DENIED` 감사(`action=asset:download`, `reason=no_active_break_glass`, 대상 자산·소유 기관)를 남긴다. 감사의 요청 ID로 거절 응답을 대조할 수 있다. 같은 빈틈이 있던 비식별 검수 원본 프레임(`deid.py`)은 S17에서 고쳤다.
 - **S29 클립 작업 목록** — `limit`(기본 100, 최대 500)·`cursor`와 응답 `next_cursor`로 100건 이후의 클립 작업도 이어서 본다. 순서는 요청 시각 역순이고, 같으면 작업 ID 역순이다. 형식이 틀린 `limit`·`cursor`는 400이다. 시간대가 없거나 UTC로 바꾸면 1~9999년 밖인 커서 시각도 질의 전에 400이며, 500이나 연결 오염이 나지 않는다(ADR-0077). 포털의 더 보기 버튼은 남았다.
+- **S39 회차 기록 수정의 `evidence_refs: null`** — 500 대신 400 `VALIDATION_ERROR`(`/evidence_refs`, `not_nullable`)를 반환하고 새 버전을 만들지 않는다. 항목을 빼고 보내면 지금 근거를 그대로 잇는다.
+- **S40 관측 구간 근거의 없는 시각** — 형식은 맞지만 없는 날짜·시각(2월 30일, 25시, 13월, 윤초)을 `from`·`to`에 넣으면 등록·수정 모두 DB 작업 전에 400 `VALIDATION_ERROR`를 반환한다. 없는 장비와 함께 와도 같다. 오류 위치는 같은 항목의 형식 오류와 같다(`/evidence_refs/{i}/OBSERVATION_RANGE/from`).
+- **S41 근거의 다른 기관 ID** — 응답은 없는 ID와 같은 400 `not_found`로 그대로 둔다. 행이 있고 소유 기관이 다른 자산·이벤트·장비이면 대상마다 `CROSS_ORG_ACCESS_ATTEMPT` 한 행(소유 기관·대상 종류·ID·경로)을 요청 트랜잭션과 따로 커밋해 남긴다. 없는 ID와 같은 기관의 삭제된 자산은 감사하지 않는다(ADR-0078).
+- **S42 회차 기록 수정의 `kind: null` 오류 위치** — `/title`이 아니라 `/kind`를 가리킨다. `title`·`kind`·`evidence_refs`의 null은 모두 그 항목 위치와 `not_nullable`로 답한다(회차 수정 `PATCH /v1/sessions/{id}`와 같은 모양).
 
 ## datasets (버전·배포·카탈로그) — 발견 5건
 
