@@ -3512,8 +3512,13 @@ paths:
       description: |
         09번 요구사항 7.2. DONE이면 clip_asset_id가 결과 파생 자산이다(계보 relation=CLIP, provenance.clip_range_s).
         결과 자산이 그 뒤 삭제됐으면 clip_asset_id가 없다. FAILED면 error_code에 원인 코드가 있다.
+        요청 시각(requested_at)이 최근인 것부터, 같으면 작업 ID 역순으로 정렬한다. 한 페이지는 limit건(기본 100, 최대 500)이고,
+        다음 페이지는 next_cursor를 cursor로 전달한다(마지막 페이지는 null). 형식이 틀린 cursor·limit은 400 (ADR-0077).
       x-freeze: G1
       x-status: draft
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
+        - {name: cursor, in: query, schema: {type: string, minLength: 1, maxLength: 256, pattern: '^[A-Za-z0-9_-]+$'}}
       responses:
         '200':
           description: 클립 작업 목록
@@ -3521,9 +3526,11 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items]
+                required: [items, next_cursor]
                 properties:
                   items: {type: array, items: {$ref: '#/components/schemas/ClipJob'}}
+                  next_cursor: {type: [string, 'null'], description: 다음 페이지 커서. 마지막 페이지는 null}
+        '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}

@@ -25,7 +25,7 @@ import subprocess  # nosec B404 - 실행하지 않는다. 시간 초과 예외 �
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -108,8 +108,18 @@ def request_clip(c: Container, db: Session, a: Asset, requested_by: str, start_s
             "requested_at": iso(now)}, True
 
 
-def list_clips(c: Container, db: Session, a: Asset) -> list[dict[str, Any]]:
-    """이 영상의 클립 작업 (최근 요청부터). DONE이면 결과 자산을 붙인다 (지워졌으면 없음)."""
+def list_clips(c: Container, db: Session, a: Asset, *, limit: int,
+               before: tuple[datetime, str] | None = None) -> tuple[list[dict[str, Any]], tuple[datetime, str] | None]:
+    """이 영상의 클립 작업 한 페이지 (최근 요청부터, 같은 시각이면 작업 ID 역순).
+
+    DONE이면 결과 자산을 붙인다 (지워졌으면 없음). before는 앞 페이지 마지막 작업의 (요청 시각, 작업 ID)다.
+    다음 페이지가 있으면 이 페이지 마지막 작업의 그 값을 함께 돌려준다 (ADR-0077).
+    전에는 최근 100건에서 말없이 잘렸다."""
+    jobs = c.queue.jobs_for_asset(JOB_TYPE, a.asset_id, limit + 1, before=before)
+    nxt: tuple[datetime, str] | None = None
+    if len(jobs) > limit:
+        jobs = jobs[:limit]
+        nxt = (jobs[-1].created_at, jobs[-1].job_id)
     rows = db.execute(select(Asset.asset_id, Asset.provenance)
                       .join(AssetLineage, AssetLineage.child_asset_id == Asset.asset_id)
                       .where(AssetLineage.parent_asset_id == a.asset_id, AssetLineage.relation == "CLIP",
@@ -124,7 +134,7 @@ def list_clips(c: Container, db: Session, a: Asset) -> list[dict[str, Any]]:
         if rng and len(rng) == 2:
             by_range.setdefault((_sec(rng[0]), _sec(rng[1])), aid)
     out: list[dict[str, Any]] = []
-    for j in c.queue.jobs_for_asset(JOB_TYPE, a.asset_id):
+    for j in jobs:
         start, end = _sec(j.payload["start_s"]), _sec(j.payload["end_s"])
         item: dict[str, Any] = {"job_id": j.job_id, "asset_id": a.asset_id, "start_s": start, "end_s": end,
                                 "status": j.status, "requested_at": iso(j.created_at)}
@@ -136,7 +146,7 @@ def list_clips(c: Container, db: Session, a: Asset) -> list[dict[str, Any]]:
         elif j.status == "FAILED" and j.last_error_code:
             item["error_code"] = j.last_error_code
         out.append(item)
-    return out
+    return out, nxt
 
 
 def clip_args(s: Any, src: str, out: str, start_s: float, end_s: float) -> list[str]:

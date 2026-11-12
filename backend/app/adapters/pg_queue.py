@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from contextlib import nullcontext
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -167,14 +167,21 @@ class PgQueue:
             ).all()
         return {r[0]: int(r[1]) for r in rows}
 
-    def jobs_for_asset(self, job_type: str, asset_id: str, limit: int = 100) -> list[JobInfo]:
-        """한 자산에 걸린 작업을 최근 것부터 (예: 구간 클립 진행 상황, 09번 요구사항 7.2)."""
+    def jobs_for_asset(self, job_type: str, asset_id: str, limit: int = 100, *,
+                       before: tuple[datetime, str] | None = None) -> list[JobInfo]:
+        """한 자산에 걸린 작업을 최근 것부터 (예: 구간 클립 진행 상황, 09번 요구사항 7.2).
+
+        before=(created_at, job_id)를 주면 정렬에서 그 뒤(더 오래된 것)만 준다.
+        같은 시각은 작업 ID로 가른다 (목록 다음 페이지, ADR-0077)."""
+        before_at, before_id = before if before is not None else (None, None)
         with self.engine.connect() as conn:
             rows = conn.execute(
                 text("""SELECT job_id, job_type, status, payload, attempts, last_error_code, created_at, updated_at
                         FROM jobs WHERE job_type = :t AND asset_id = :a
+                          AND (CAST(:ba AS TIMESTAMPTZ) IS NULL
+                               OR (created_at, job_id) < (CAST(:ba AS TIMESTAMPTZ), :bj))
                         ORDER BY created_at DESC, job_id DESC LIMIT :n"""),
-                {"t": job_type, "a": asset_id, "n": limit},
+                {"t": job_type, "a": asset_id, "n": limit, "ba": before_at, "bj": before_id},
             ).mappings().all()
         return [JobInfo(**{**dict(r), "attempts": int(r["attempts"]),
                            "payload": r["payload"] if isinstance(r["payload"], dict) else json.loads(r["payload"])})

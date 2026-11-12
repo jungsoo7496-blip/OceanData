@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Float, column, exists, func, literal, select
@@ -13,10 +14,11 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from app.api.deps import DB, client_ip, container, load_scoped, page_params, require
-from app.api.pagination import paginate
+from app.api.pagination import decode_cursor, encode_cursor, paginate
 from app.container import Container
 from app.db.models import Asset, Grant, TrialSession
 from app.domain import states
+from app.domain.ids import has_prefix
 from app.domain.normalize import generalize_location
 from app.domain.principal import Principal
 from app.errors import ProblemError
@@ -291,15 +293,37 @@ def _own_binary(a: Asset, p: Principal) -> None:
         raise ProblemError("FORBIDDEN", detail="다른 기관 자산의 영상은 자를 수 없습니다")
 
 
+def _clip_cursor(cursor: str) -> tuple[datetime, str]:
+    """클립 목록 커서 = 앞 페이지 마지막 작업의 [요청 시각(시간대 포함 ISO 8601), 작업 ID] (ADR-0077)."""
+    try:
+        value = json.loads(decode_cursor(cursor))
+        if not isinstance(value, list) or len(value) != 2 or not all(isinstance(v, str) for v in value):
+            raise ValueError
+        requested_at, job_id = datetime.fromisoformat(value[0]), value[1]
+        if requested_at.tzinfo is None or not has_prefix(job_id, "job"):
+            raise ValueError
+        return requested_at, job_id
+    except (ValueError, OverflowError):
+        raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/query/cursor", "code": "invalid",
+                                                        "message": "커서 형식이 올바르지 않습니다"}]) from None
+
+
 @router.get("/v1/assets/{asset_id}/clips")
-def list_asset_clips(asset_id: str, request: Request, db: Session = DB, c: Container = Depends(container),
+def list_asset_clips(asset_id: str, request: Request, limit: int = Query(100, ge=1, le=500),
+                     cursor: str | None = Query(None, min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"),
+                     db: Session = DB, c: Container = Depends(container),
                      p: Principal = Depends(require("asset:clip"))) -> dict:
-    """이 영상의 구간 클립 작업과 결과 (09번 요구사항 7.2)."""
+    """이 영상의 구간 클립 작업과 결과 (09번 요구사항 7.2). 최근 요청부터 limit건씩, next_cursor로 이어 본다.
+
+    기본 페이지 크기 100건은 전에 말없이 자르던 건수와 같다.
+    조건 없이 부르던 화면은 같은 첫 페이지를 받는다 (ADR-0077)."""
     from app.services import clips
 
     a = load_scoped(db, c, request, Asset, asset_id, p)
     _own_binary(a, p)
-    return {"items": clips.list_clips(c, db, a)}
+    items, nxt = clips.list_clips(c, db, a, limit=limit, before=_clip_cursor(cursor) if cursor is not None else None)
+    next_cursor = encode_cursor(json.dumps([nxt[0].isoformat(), nxt[1]])) if nxt is not None else None
+    return {"items": items, "next_cursor": next_cursor}
 
 
 @router.post("/v1/assets/{asset_id}/clips", status_code=202)
