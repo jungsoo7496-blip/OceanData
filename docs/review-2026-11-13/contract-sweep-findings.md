@@ -32,11 +32,11 @@
 | S19 | medium | `GET /v1/deid-reviews/{review_id}/frame` | scope-or-permission | 구현 | 고침 (ADR-0075) |
 | S20 | low | `POST /v1/deid-reviews/{review_id}/decision` | data-semantics | 구현 | 고침 (ADR-0075) |
 | S21 | low | `PATCH /v1/assets/{asset_id}/tags` | data-semantics | 구현 | 고침 (ADR-0075) |
-| S22 | medium | `POST /v1/assets/{asset_id}/reprocess` | missing-behavior | 구현 | 미처리 |
-| S23 | medium | `PATCH /v1/assets/{asset_id}` | missing-audit | 구현 | 미처리 |
-| S24 | medium | `PATCH /v1/assets/{asset_id}` | missing-audit | 구현 | 미처리 |
-| S25 | medium | `PATCH /v1/assets/{asset_id}` | missing-audit | 구현 | 미처리 |
-| S26 | low | `PATCH /v1/assets/{asset_id}` | wrong-status | 계약 문구 | 미처리 |
+| S22 | medium | `POST /v1/assets/{asset_id}/reprocess` | missing-behavior | 구현 | 고침 (ADR-0076) |
+| S23 | medium | `PATCH /v1/assets/{asset_id}` | missing-audit | 구현 | 고침 (ADR-0076) |
+| S24 | medium | `PATCH /v1/assets/{asset_id}` | missing-audit | 구현 | 고침 (ADR-0076) |
+| S25 | medium | `PATCH /v1/assets/{asset_id}` | missing-audit | 구현 | 고침 (ADR-0076) |
+| S26 | low | `PATCH /v1/assets/{asset_id}` | wrong-status | 계약 문구 | 계약 문구 고침 (ADR-0076) |
 | S27 | medium | `GET /v1/deletion-certificates/{certificate_id}` | missing-audit | 구현 | 미처리 |
 | S28 | medium | `POST /v1/assets/{asset_id}/download-url` | missing-audit | 구현 | 미처리 |
 | S29 | low | `GET /v1/assets/{asset_id}/clips` | data-semantics | 계약 문구 | 미처리 |
@@ -80,6 +80,11 @@
 - **S19 운영자 비식별본 프레임 범위** — 배정 검수자가 아닌 운영자는 원본 `share_status`가 PROCESSING·QUALITY_REVIEW·REPROCESS일 때만 비식별본 프레임을 받는다. 공유 철회·반려·승인 뒤에는 403과 `PERMISSION_DENIED`(`reason: not_under_review`)를 남긴다. 배정 검수자는 그대로 본다. 승인(APPROVED) 뒤에도 허용할지는 주인 결정 대기다(ADR-0075).
 - **S20 같은 회차 재검수 중복** — 열린 검수가 있는 비식별본에는 재검수를 새로 만들지 않고, 그 검수 ID를 `recheck_review_ids`로 돌려준다. 결정한 비식별본 자신과 불합격(FAILED) 비식별본은 옛 PASSED 검수가 있어도 다시 열지 않는다. 같은 회차의 미탐 결정이 겹치면 비식별본 행을 잠근 뒤 다시 확인해 하나만 연다. 두 세션 동시 결정 시험으로 고정했다(ADR-0075).
 - **S21 사람 태그 추가** — 모델이 단 자산 전체 태그를 사람이 추가하면 `source=HUMAN`(model_ref·confidence 없음)으로 바뀌어 날씨 보정이 지우지 않는다. 지운 것이 없는 REMOVE의 이력 기록은 계약이 정하지 않아 그대로 둔다.
+- **S22 검증에서 실패한 자산의 재처리** — 무결성 검증이 재시도를 다 써 FAILED(failed_from=VALIDATING)가 된 자산을 재처리하면 검증 작업부터 다시 넣는다(이번 실행의 중복 키, 요청 트랜잭션). 검증이 이어서 끝나 등록·예약 정산·무결성 로그를 한 번 하고, 등록 뒤 보통 처리 순서가 돈다. 재처리는 상태를 보기 전에 자산 행을 잠그고 다시 읽는다. 그래서 겹친 늦은 요청이 그사이 등록된 자산을 VALIDATING으로 덮어쓰지 않는다(등록됐으면 보통 재처리, 검증 중이면 409). 응답 job_ids는 검증 작업이며 계약 reprocessAsset 설명에 적었다(ADR-0076).
+- **S23 실패한 수정의 data_role 감사** — `DATA_ROLE_CHANGED`는 모든 검사와 마지막 flush를 통과한 뒤 요청 트랜잭션에 쓴다. 같은 요청의 회차 지정이 404·409·422로 실패하면 data_role 변경도 감사도 남지 않는다.
+- **S24 data_role 변경 권한 거부** — ORG_ADMIN이 아닌 사용자의 data_role 변경 403은 `PERMISSION_DENIED`(action `asset:data_role`, from·to, 대상 자산)를 남긴다. 요청이 되돌아가도 남는다. 지금 값과 같은 data_role은 거부도 감사도 없다.
+- **S25 CORE 변경의 하향·철회 감사** — 공유 등급을 내린 자산마다 `SHARE_SCOPE_DOWNGRADED`(from·to·`REVOKE_NOW`·원 자산·끊긴 권한 ID)를, 끊긴 이용 권한마다 `GRANT_REVOKED`(대상 기관은 이용 기관)를 같은 트랜잭션에 남긴다(ADR-0076). 공유 심사 WITHDRAW와 공유 등급 신청의 하향에는 권한별 `GRANT_REVOKED`가 아직 없다.
+- **S26 다른 실증사업 회차 지정** — 422 RULE_VIOLATION(condition `session.project_id=asset.project_id`)을 계약 patchAsset의 응답과 설명에 적었다. 구현은 그대로다.
 
 ## datasets (버전·배포·카탈로그) — 발견 5건
 
