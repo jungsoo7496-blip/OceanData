@@ -550,10 +550,11 @@ def submit_report(report_id: str, request: Request, db: Session = DB,
 def export_report(report_id: str, request: Request, format: Literal["PDF", "XLSX", "HWPX"],  # noqa: A002
                   version: int | None = Query(None, ge=1), db: Session = DB,
                   c: Container = Depends(container), p: Principal = Depends(require("report:read"))) -> Response:
-    if format not in rr.enabled_formats(c.settings.report_formats):
-        raise ProblemError("CONFLICT", detail=f"{format} 내보내기가 켜져 있지 않습니다 (REPORT_FORMATS)")
+    # 범위 확인이 먼저다: 다른 기관·없는 보고서는 형식이 꺼져 있어도 404(+감사) (security.md, 계약 점검 S36)
     rep = _load_report(db, c, request, report_id, p)
     v = _report_version(db, rep, p, version)
+    if format not in rr.enabled_formats(c.settings.report_formats):
+        raise ProblemError("CONFLICT", detail=f"{format} 내보내기가 켜져 있지 않습니다 (REPORT_FORMATS)")
     tpl = reports.latest_template(db, rep.template_code, rep.template_version)
     if tpl is None:
         raise ProblemError("CONFLICT", detail="보고서 양식을 찾을 수 없습니다")

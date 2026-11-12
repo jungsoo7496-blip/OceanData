@@ -895,6 +895,7 @@ paths:
       operationId: exportReport
       summary: 보고서 내보내기 (켜진 형식만, /v1/capabilities의 report_formats). 초안은 "초안" 표시
       description: |
+        보고서·버전을 먼저 확인한다: 없거나 다른 기관 보고서면 형식과 관계없이 404다. 볼 수 있는 보고서의 형식이 꺼져 있으면 409 CONFLICT다.
         PDF·XLSX의 근거 손상 안내는 보고서 조회와 같은 범위의 손상 자산 ID를 표시한다.
         HWPX: 저장된 양식을 쓸 수 없으면(양식 검사가 생기기 전에 올린 양식 등) 409 CONFLICT다. 양식을 다시 올린 뒤 내보낸다.
         PDF: 외부 주소(이미지·글꼴·스타일, http·file 모두)를 가져오지 않는다. 서버 프로세스마다 동시에 만드는 PDF 수에
