@@ -10,7 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import DB, client_ip, container, require
+from app.api.deps import DB, client_ip, container, page_params, require
+from app.api.pagination import decode_cursor, encode_cursor
 from app.container import Container
 from app.db.models import (
     AccessDecision,
@@ -88,21 +89,39 @@ def create_dataset(body: DatasetCreate, request: Request, db: Session = DB,
     return datasets.dataset_view(db, ds, [])
 
 
+def _dataset_page(db: Session, stmt: Any, consumer: bool, limit: int,
+                  cursor: str | None) -> tuple[list[tuple[Dataset, list[DatasetVersion]]], str | None]:
+    """dataset_id 순으로 한 쪽 (api-conventions.md 커서). 커서는 마지막으로 돌려준 데이터셋 ID다.
+
+    이용기관에게 보이는 버전(게시·L3 이상·READY)은 visible_versions가 파이썬에서 고르므로, 보이는 버전이 없는
+    데이터셋은 건너뛰며 쪽이 찰 때까지 limit+1개씩 더 읽는다 — 쪽이 짧거나 다음 쪽이 비지 않게."""
+    after = decode_cursor(cursor) if cursor else None
+    out: list[tuple[Dataset, list[DatasetVersion]]] = []
+    while True:
+        q = stmt if after is None else stmt.where(Dataset.dataset_id > after)
+        rows = list(db.execute(q.order_by(Dataset.dataset_id).limit(limit + 1)).scalars())
+        for ds in rows:
+            vs = datasets.visible_versions(db, ds, consumer=consumer)
+            if consumer and not vs:
+                continue
+            if len(out) == limit:  # 다음 쪽에 보일 것이 있다
+                return out, encode_cursor(out[-1][0].dataset_id)
+            out.append((ds, vs))
+        if len(rows) <= limit:
+            return out, None
+        after = rows[-1].dataset_id
+
+
 @router.get("/v1/datasets")
 def list_datasets(db: Session = DB, c: Container = Depends(container),
-                  p: Principal = Depends(require("dataset:read"))) -> dict:
-    stmt = select(Dataset).order_by(Dataset.dataset_id)
+                  p: Principal = Depends(require("dataset:read")), page: dict = Depends(page_params)) -> dict:
+    stmt = select(Dataset)
     if _consumer(p):
         stmt = stmt.where(Dataset.published.is_(True))
     elif not _operator(p):
         stmt = stmt.where(Dataset.dataset_id.in_(_versions_with_org(p.organization_id)))
-    out = []
-    for ds in db.execute(stmt).scalars():
-        vs = datasets.visible_versions(db, ds, consumer=_consumer(p))
-        if _consumer(p) and not vs:
-            continue
-        out.append(_with_samples(c, datasets.dataset_view(db, ds, vs), vs))
-    return {"items": out, "next_cursor": None}
+    rows, nxt = _dataset_page(db, stmt, _consumer(p), page["limit"], page["cursor"])
+    return {"items": [_with_samples(c, datasets.dataset_view(db, ds, vs), vs) for ds, vs in rows], "next_cursor": nxt}
 
 
 @router.get("/v1/datasets/{dataset_id}")

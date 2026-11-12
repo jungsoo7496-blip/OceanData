@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from app.db.models import DatasetVersion
 from app.seed import DEV_A_CAMERA, DEV_B_CAMERA, ORG_A, ORG_B, PRJ_A, PRJ_B, fid
 from app.services import datasets
-from tests.acceptance.test_t08_t15_sharing import CARD, approved_pair, share
+from tests.acceptance.test_t08_t15_sharing import CARD, approved_pair, share, to_l3
 from tests.contract.openapi_contract import assert_matches_contract as check
 
 pytestmark = pytest.mark.integration
@@ -39,6 +39,22 @@ def _post_queued(ctx, path: str, body: dict):  # type: ignore[no-untyped-def]
         return ctx.client.post(path, headers=ctx.as_user(OP), json=body)
     finally:
         ctx.c.settings.__dict__["dataset_sync_max_items"] = 200
+
+
+def _pages(ctx, user: int, limit: int) -> list[list[str]]:  # type: ignore[no-untyped-def]
+    """next_cursor를 따라 끝까지 읽은 쪽별 dataset_id."""
+    pages: list[list[str]] = []
+    cursor = None
+    while True:
+        params: dict[str, str | int] = {"limit": limit, **({"cursor": cursor} if cursor else {})}
+        r = ctx.client.get("/v1/datasets", params=params, headers=ctx.as_user(user))
+        check(r, "GET", "/v1/datasets")
+        assert r.status_code == 200, r.text
+        pages.append([x["dataset_id"] for x in r.json()["items"]])
+        cursor = r.json()["next_cursor"]
+        if cursor is None:
+            return pages
+        assert len(pages) < 100
 
 
 # ---- S04: 다 만들지 못한 버전의 계보는 계약에 적힌 409
@@ -151,3 +167,40 @@ def test_version_item_ids_follow_contract_format(ictx) -> None:
     r = ctx.client.post(path, headers=key, json={"version": "1.0.0", "data_card": CARD,
                                                  "item_asset_ids": [a["deid"], b["deid"]]})
     assert r.status_code == 201 and r.json()["manifest"]["item_count"] == 2, r.text
+
+
+# ---- S03: 목록은 limit·cursor로 나눈다
+
+
+def test_dataset_list_pages_by_limit_and_cursor(ctx) -> None:
+    ids = sorted(_dataset(ctx, f"쪽 {i}") for i in range(51))
+    r = ctx.client.get("/v1/datasets", headers=ctx.as_user(OP))  # 기본 50
+    check(r, "GET", "/v1/datasets")
+    assert len(r.json()["items"]) == 50 and r.json()["next_cursor"], r.text
+
+    pages = _pages(ctx, OP, 20)
+    assert [len(p) for p in pages] == [20, 20, 11]
+    assert [x for p in pages for x in p] == ids  # 겹치지도 빠지지도 않는다
+    assert ctx.client.get("/v1/datasets?limit=0", headers=ctx.as_user(OP)).status_code == 400
+    assert ctx.client.get("/v1/datasets?limit=501", headers=ctx.as_user(OP)).status_code == 400
+
+
+def test_consumer_dataset_pages_skip_hidden_datasets(ictx) -> None:
+    """이용기관에게는 게시·L3 이상·READY 버전이 있는 데이터셋만 센다. 앞에 안 보이는 데이터셋이 있어도 쪽이 짧지 않고,
+    뒤에 보이는 것이 없으면 next_cursor는 null."""
+    ctx = ictx
+    a, b = _shared_pair(ctx)
+    ids = sorted(_dataset(ctx, f"카탈로그 {i}") for i in range(6))
+    visible = [ids[2], ids[4]]
+    for ds in ids:  # 보일 것에는 a(뒤에 L3로 올림), 안 보일 것에는 b(L2에 둠)만 담는다
+        item = a["deid"] if ds in visible else b["deid"]
+        r = ctx.client.post(f"/v1/datasets/{ds}/versions", headers=ctx.as_user(OP),
+                            json={"version": "1.0.0", "data_card": CARD, "item_asset_ids": [item]})
+        assert r.status_code == 201, r.text
+    to_l3(ctx, ADMIN_A, a["deid"])
+    for ds in ids:
+        assert ctx.client.post(f"/v1/datasets/{ds}/publish", headers=ctx.as_user(OP)).status_code == 200
+
+    assert _pages(ctx, CONSUMER, 1) == [[ids[2]], [ids[4]]]
+    assert _pages(ctx, CONSUMER, 2) == [visible]
+    assert [x for p in _pages(ctx, OP, 4) for x in p] == ids  # 운영자는 모두
