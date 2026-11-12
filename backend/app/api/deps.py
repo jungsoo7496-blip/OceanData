@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any, TypeVar
 
+import anyio
+import anyio.to_thread
 from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
@@ -29,16 +31,23 @@ def client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
-def get_db(c: Container = Depends(container)) -> Iterator[Session]:
-    db = c.sessionmaker()
-    try:
-        yield db
-        db.commit()
-    except BaseException:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+async def get_db(c: Container = Depends(container)) -> AsyncIterator[Session]:
+    """요청의 DB 세션. DB 작업 차례(ADR-0062)를 받은 뒤 만들고, 경로 함수가 끝나면 커밋한다.
+
+    차례는 이벤트 루프에서 기다리므로 기다리는 동안 스레드도 연결도 쥐지 않는다. 커밋·되돌리기·닫기는 스레드 풀에서
+    돌린다(이벤트 루프를 막지 않는다). 요청이 취소돼도 되돌리기·닫기는 끝까지 한다."""
+    async with c.db_slots.hold():
+        db = c.sessionmaker()
+        try:
+            yield db
+            await anyio.to_thread.run_sync(db.commit)
+        except BaseException:
+            with anyio.CancelScope(shield=True):
+                await anyio.to_thread.run_sync(db.rollback)
+            raise
+        finally:
+            with anyio.CancelScope(shield=True):
+                await anyio.to_thread.run_sync(db.close)
 
 
 # 모든 경로가 DB 세션을 이 표시로 받는다. scope="function"이면 경로 함수가 끝난 직후, 응답을 보내기 전에

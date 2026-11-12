@@ -9,6 +9,8 @@ HTTP_ERRORS = Counter("http_errors_total", "HTTP 오류 응답 수 (4xx·5xx)", 
                       registry=REGISTRY)
 HTTP_LATENCY = Histogram("http_request_duration_seconds", "HTTP 처리 시간", ["method", "route"],
                          registry=REGISTRY)
+DB_SLOT_TIMEOUTS = Counter("db_request_slot_timeouts_total",
+                           "DB 작업 차례를 기다리다 503으로 돌려준 요청 수 (ADR-0062)", registry=REGISTRY)
 DB_CONFLICTS = Counter("db_conflict_responses_total", "DB 동시성 오류를 409로 바꿔 돌려준 수", ["sqlstate"],
                        registry=REGISTRY)
 

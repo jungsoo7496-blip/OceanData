@@ -17,6 +17,14 @@ class Settings(BaseSettings):
 
     # DB
     database_url: SecretStr
+    # 연결 풀과, 동시에 DB 작업을 하는 요청 수 (ADR-0062). 요청이 DB 작업에 들어가기 전에 비동기로 차례를 기다려
+    # 연결 풀과 스레드 풀이 서로를 기다리지 않게 한다. 슬롯을 비우면 (풀 + 초과) // 2 — 요청 하나가 자기 세션과
+    # 감사 기록 등 별도 연결을 함께 쥘 수 있다. 차례를 slot_wait_s 안에 못 받으면 503 SERVICE_UNAVAILABLE
+    db_pool_size: int = Field(10, ge=1)
+    db_max_overflow: int = Field(20, ge=0)
+    db_pool_timeout_s: float = Field(30.0, gt=0)
+    db_request_slots: int | None = Field(None, ge=1)
+    db_request_slot_wait_s: float = Field(10.0, gt=0)
 
     # 오브젝트 스토리지 (S3 공통 기능만 쓴다)
     s3_endpoint_url: str
@@ -201,6 +209,12 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [s.strip() for s in v.split(",") if s.strip()]
         return v
+
+    @field_validator("db_request_slots", "storage_capacity_bytes", mode="before")
+    @classmethod
+    def _empty_is_none(cls, v: object) -> object:
+        # .env.example·Compose는 선택 숫자를 빈 값(`KEY=`)으로 둔다 — 빈 값은 '설정 안 함'이다
+        return None if isinstance(v, str) and not v.strip() else v
 
     @model_validator(mode="after")
     def _warm_not_hot(self) -> Settings:

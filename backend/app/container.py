@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy.engine import Engine
@@ -15,6 +15,7 @@ from app.adapters.s3_storage import S3Storage
 from app.adapters.system_clock import SystemClock
 from app.config import Settings
 from app.db.session import make_engine, make_sessionmaker
+from app.db.slots import RequestSlots
 from app.ports import ClockPort, IdentityPort, NotifierPort, QueuePort, StoragePort
 from app.services import sharing as _sharing_guard  # noqa: F401 - 공유 등급 우회 방지 가드 등록 (13번)
 from app.services import webhooks as _webhook_outbox  # noqa: F401 - 웹훅 outbox 발행 등록 (04번)
@@ -39,10 +40,15 @@ class Container:
     # WARM 계층 저장소 (08번 요구사항 9). None이면 HOT 저장소(storage)를 함께 쓰고 버킷만 다르다.
     # 자산 객체를 읽을 때는 app.services.tiers.locate()로 계층·존·키를 정한다
     warm_storage: StoragePort | None = None
+    # 요청의 DB 작업 동시 실행 수 (ADR-0062). api.deps.get_db가 쓴다
+    db_slots: RequestSlots = field(default_factory=lambda: RequestSlots(15, wait_s=10.0))
 
 
 def build_container(settings: Settings, **overrides: Any) -> Container:
-    engine = overrides.get("engine") or make_engine(settings.database_url.get_secret_value())
+    engine = overrides.get("engine") or make_engine(
+        settings.database_url.get_secret_value(), pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow, pool_timeout=settings.db_pool_timeout_s)
+    slots = settings.db_request_slots or max(1, (settings.db_pool_size + settings.db_max_overflow) // 2)
     clock = overrides.get("clock") or SystemClock()
     identity = overrides.get("identity") or KeycloakIdentity(
         settings.idp_issuer_url, settings.idp_audience, internal_url=settings.idp_internal_url,
@@ -62,4 +68,5 @@ def build_container(settings: Settings, **overrides: Any) -> Container:
         machine_tokens=machine,
         authenticator=Authenticator(identity, machine, clock),
         warm_storage=warm,
+        db_slots=RequestSlots(slots, wait_s=settings.db_request_slot_wait_s),
     )
