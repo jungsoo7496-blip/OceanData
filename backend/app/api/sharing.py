@@ -155,7 +155,8 @@ def act_share_review(asset_id: str, body: ReviewAction, request: Request, db: Se
     a = load_scoped(db, c, request, Asset, asset_id, p)
     db.refresh(a, with_for_update=True)
     target = sharing.ACTIONS[body.action]
-    allowed = states.SHARE.get((a.share_status, target))
+    applies = sharing.action_applies(body.action, a.share_status)  # 아니면 표에 없는 전이(409)로 넘긴다
+    allowed = states.SHARE.get((a.share_status, target)) if applies else None
     if allowed is not None and not allowed & set(p.roles):  # 전이는 있지만 이 역할의 일이 아니다
         # 권한 거부 감사는 요청이 실패해도 남도록 따로 확정한다 (security.md, ADR-0053)
         c.audit.record("PERMISSION_DENIED", result="DENIED", principal=p, organization_id=a.organization_id,

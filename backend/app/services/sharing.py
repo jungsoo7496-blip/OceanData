@@ -202,6 +202,11 @@ ACTIONS = {
 }
 
 
+def action_applies(action: str, current: str) -> bool:
+    """RESUBMIT는 반려된 것의 재신청(REJECTED → CANDIDATE)만이다. NONE → CANDIDATE는 후보 지정(mark_candidates)으로."""
+    return action != "RESUBMIT" or current == "REJECTED"
+
+
 def review(c: Container, db: Session, a: Asset, action: str, roles: set[str], actor: str, reason: str | None,
            legal_basis_ref: str | None, handling: str | None) -> list[str]:
     """원본 단위 심사 전이 (domain.md 5장 share_status 표). 바뀐 파생본 ID 목록을 돌려준다."""
@@ -209,7 +214,12 @@ def review(c: Container, db: Session, a: Asset, action: str, roles: set[str], ac
     if a.variant != "ORIGINAL":
         raise RuleViolation("공유 심사는 원본 단위로 합니다", [UnmetCondition("variant=ORIGINAL", a.variant)])
     target = ACTIONS[action]
+    if not action_applies(action, a.share_status):
+        raise states.InvalidStateTransition("share_status", a.share_status, target, ",".join(sorted(roles)))
     a_status = states.transition("share_status", a.share_status, target, roles)
+    if target == "CANDIDATE" and a.data_role != "BYPRODUCT":  # 후보는 BYPRODUCT 원본만 (요구사항 1.1, domain.md 5장)
+        raise RuleViolation("공유 후보는 data_role=BYPRODUCT인 원본만입니다",
+                            [UnmetCondition("data_role=BYPRODUCT", a.data_role)])
     if target == "PROCESSING" and not legal_basis_ref:
         raise RuleViolation("법률 검토 통과에는 legal_basis_ref가 필요합니다",
                             [UnmetCondition("legal_basis_ref 기록", None)])
