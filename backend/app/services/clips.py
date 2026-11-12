@@ -32,6 +32,7 @@ from app.db.models import Asset, AssetLineage
 from app.errors import ProblemError
 from app.ports.queue import PermanentJobError
 from app.services.ingest import Quota
+from app.services.quality import apply_rules, load_rules
 from app.timefmt import iso
 
 log = logging.getLogger(__name__)
@@ -216,6 +217,9 @@ def store_clip(c: Container, job_id: str, asset_id: str, path: str, start: float
         child = new_derived(c, db, p, sha=sha, size=size, variant="CLIP", mime="video/mp4", relation="CLIP",
                             tool=tool, job_id=job_id, now=now, provenance_extra={"clip_range_s": [start, end]},
                             overrides=overrides)
+        # 클립은 촬영 시각·구간을 가진 새 자산이다 — 등록 때와 같은 품질 규칙을 적용한다
+        # (원 영상 촬영 시각이 미상이면 클립도 미상 → capture_time_unknown, ADR-0063)
+        apply_rules(child, load_rules(db), now)
     assert child.storage_zone is not None and child.storage_key is not None  # new_derived가 정한다
     bucket, key = s.buckets[child.storage_zone], child.storage_key
     stored = False

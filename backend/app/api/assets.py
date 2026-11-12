@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Header, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Float, column, exists, func, literal, select
 from sqlalchemy.dialects.postgresql import JSONB
@@ -230,12 +231,17 @@ def reprocess_asset(asset_id: str, body: ReprocessRequest, request: Request, db:
     return {"asset_id": a.asset_id, "job_ids": [job_id]}
 
 
+# 감사 로그에 남는 글 — 제어 문자(C0·C1)와 보이지 않는 줄/문단 구분·방향 제어 문자는 계약대로 400
+# (security.md 입력 검증, ADR-0063). 계약 ClipRequest.reason의 pattern과 같다
+CLIP_REASON_PATTERN = r"^[^\x00-\x1f\x7f-\x9f\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]*$"
+
+
 class ClipRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    start_s: float = Field(ge=0, allow_inf_nan=False)
-    end_s: float = Field(gt=0, allow_inf_nan=False)
-    # 감사 로그에 남는 글 — 제어 문자(NUL 등)는 계약대로 400 (security.md 입력 검증)
-    reason: str | None = Field(default=None, min_length=2, max_length=500, pattern=r"^[^\x00-\x1f\x7f]*$")
+    # JSON 숫자만 받는다 — 문자열 "0"·참/거짓을 숫자로 바꾸지 않는다 (계약 type: number, ADR-0063)
+    start_s: float = Field(ge=0, allow_inf_nan=False, strict=True)
+    end_s: float = Field(gt=0, allow_inf_nan=False, strict=True)
+    reason: str | None = Field(default=None, min_length=2, max_length=500, pattern=CLIP_REASON_PATTERN)
 
 
 def _own_binary(a: Asset, p: Principal) -> None:
@@ -256,24 +262,35 @@ def list_asset_clips(asset_id: str, request: Request, db: Session = DB, c: Conta
 
 @router.post("/v1/assets/{asset_id}/clips", status_code=202)
 def create_asset_clip(asset_id: str, body: ClipRequest, request: Request, db: Session = DB,
-                      c: Container = Depends(container), p: Principal = Depends(require("asset:clip"))) -> dict:
+                      c: Container = Depends(container), p: Principal = Depends(require("asset:clip")),
+                      idempotency_key: str | None = Header(default=None, min_length=8, max_length=128),
+                      ) -> JSONResponse:
     """구간 클립 작업 등록 (09번 요구사항 7.2). 결과는 작업 큐가 파생 자산(CLIP)으로 계보에 연결한다.
 
     작업 행·감사·마지막 조회 시각은 요청 트랜잭션 하나로 확정한다.
-    get_db가 응답을 보내기 전에 커밋하므로(ADR-0053) 응답과 기록이 어긋나지 않는다."""
+    get_db가 응답을 보내기 전에 커밋하므로(ADR-0053) 응답과 기록이 어긋나지 않는다.
+    Idempotency-Key를 주면 같은 키·같은 본문은 작업이 끝난 뒤에도 처음 응답을 다시 준다(새 작업·감사 없음, ADR-0063)."""
     from app.services import clips
+    from app.services.idempotency import run_idempotent
     from app.services.tiers import touch_accessed
 
     a = load_scoped(db, c, request, Asset, asset_id, p)
     _own_binary(a, p)
-    out, created = clips.request_clip(c, db, a, p.principal_id, body.start_s, body.end_s)
+
+    def create() -> tuple[int, dict]:
+        out, created = clips.request_clip(c, db, a, p.principal_id, body.start_s, body.end_s)
+        if created:
+            c.audit.record("CLIP_EXPORT_REQUESTED", principal=p, organization_id=a.organization_id,
+                           target_type="Asset", target_id=a.asset_id, reason=body.reason, source_ip=client_ip(request),
+                           details={"job_id": out["job_id"], "start_s": out["start_s"], "end_s": out["end_s"]},
+                           connection=db.connection())
+        return 202, out
+
+    status, out, replayed = run_idempotent(db, c.clock, c.settings.idempotency_retention_s, p,
+                                           f"POST /v1/assets/{a.asset_id}/clips", idempotency_key,
+                                           body.model_dump(), create)
     touch_accessed(db, a.asset_id, c.clock.now())  # 사용자가 원 영상을 쓴다 (계층 규칙의 '마지막 조회')
-    if created:
-        c.audit.record("CLIP_EXPORT_REQUESTED", principal=p, organization_id=a.organization_id, target_type="Asset",
-                       target_id=a.asset_id, reason=body.reason, source_ip=client_ip(request),
-                       details={"job_id": out["job_id"], "start_s": out["start_s"], "end_s": out["end_s"]},
-                       connection=db.connection())
-    return out
+    return JSONResponse(out, status_code=status, headers={"Idempotent-Replayed": "true"} if replayed else None)
 
 
 @router.post("/v1/assets/{asset_id}/download-url")
