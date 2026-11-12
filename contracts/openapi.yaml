@@ -4466,6 +4466,8 @@ paths:
       operationId: decideAccessRequest
       summary: 제공기관 ORG_ADMIN 승인·거절 → 운영자 최종 승인
       description: >-
+        응답 기한(deadline_at)이 지난 신청의 승인(제공기관·운영자)은 409 INVALID_STATE_TRANSITION이다. 거절은 받는다.
+        승인 없이 기한이 지난 신청은 정비 주기에 기본값 거부(DENIED)로 바뀐다.
         운영자 승인 때 데이터셋 버전의 현재 등급이 L3(APPROVED_PARTNERS)에 못 미치면 422 RULE_VIOLATION이다
         (예: 제공기관 승인 뒤 KEEP_UNTIL_EXPIRY로 자산 등급을 낮춘 경우). 이때 결정은 기록하지 않고 신청은 PROVIDER_APPROVED로 남는다.
       x-freeze: G5

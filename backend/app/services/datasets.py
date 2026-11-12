@@ -364,7 +364,9 @@ def create_request(c: Container, db: Session, v: DatasetVersion, consumer_org: s
 
 def decide(c: Container, db: Session, req: AccessRequest, v: DatasetVersion, org: str, roles: set[str],
            approve: bool, reason: str, by: str) -> Grant | None:
-    """제공기관 결정 → 모두 승인이면 PROVIDER_APPROVED. 운영자 결정은 그다음 (요구사항 8.2, 8.6)."""
+    """제공기관 결정 → 모두 승인이면 PROVIDER_APPROVED. 운영자 결정은 그다음 (요구사항 8.2, 8.6).
+
+    응답 기한이 지난 신청의 승인은 받지 않는다 (요구사항 8.3). 비교는 expire와 같다(deadline_at < 지금)."""
     now = c.clock.now()
     operator = "PLATFORM_OPERATOR" in roles
     provider = "ORG_ADMIN" in roles and org in v.provider_organization_ids
@@ -376,6 +378,9 @@ def decide(c: Container, db: Session, req: AccessRequest, v: DatasetVersion, org
         raise states.InvalidStateTransition("grant_status", req.status, "PROVIDER_APPROVED")
     if operator and approve and req.status != "PROVIDER_APPROVED":  # 제공기관 거절은 운영자가 뒤집을 수 없다
         raise states.InvalidStateTransition("grant_status", req.status, "GRANTED")
+    if approve and req.deadline_at < now:  # 응답 기한이 지나면 승인하지 않는다. 거부 전이는 정비 주기(expire)가 한다
+        target = "GRANTED" if operator else "PROVIDER_APPROVED"
+        raise states.InvalidStateTransition("grant_status", req.status, f"{target} (응답 기한 초과)")
     db.add(AccessDecision(access_request_id=req.access_request_id, organization_id=org,
                           role="OPERATOR" if operator else "PROVIDER", decision="APPROVE" if approve else "DENY",
                           reason=reason, decided_by=by, decided_at=now))
