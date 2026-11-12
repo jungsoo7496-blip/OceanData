@@ -36,7 +36,7 @@ from app.domain.normalize import TimeRuleError, check_location, resolve_capture_
 from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.ports.notifier import Notification
-from app.ports.storage import CompletedPart
+from app.ports.storage import CompletedPart, PartsRejected
 from app.services import contracts
 from app.services.quality import apply_rules, load_rules
 from app.services.tenant import NotFoundInScope, get_scoped
@@ -576,11 +576,18 @@ class IngestService:
             if saved is None or saved.etag.strip('"') != part["etag"].strip('"'):
                 raise ProblemError("CONFLICT", detail=mismatch)
             verified.append(saved)
+        # 파트 목록은 방금 저장소 목록과 맞춰 봤다. 저장소가 그래도 목록을 거부하면 409, 장애(연결 실패·시간 초과·
+        # 저장소 내부 오류)면 503이고 세션·예약은 그대로다 — 다시 보낸 완료는 저장소에서 끝났으면
+        # _completed_in_storage로 마친다 (ADR-0082, 요구사항 1.6)
         try:
             self.c.storage.complete_multipart_upload(up.bucket, up.object_key, up.s3_upload_id, verified)
-        except Exception as exc:  # noqa: BLE001 - 잘못된 ETag·누락 파트
-            log.warning("complete_multipart_failed", extra={"error_type": type(exc).__name__})
+        except PartsRejected as exc:
+            log.warning("complete_multipart_rejected", extra={"upload_id": up.upload_id, "error_code": exc.code})
             raise ProblemError("CONFLICT", detail=mismatch) from None
+        except Exception as exc:  # noqa: BLE001 - 저장소 장애
+            log.warning("complete_multipart_failed", extra={"upload_id": up.upload_id,
+                                                            "error_type": type(exc).__name__})
+            raise ProblemError("STORAGE_UNAVAILABLE", headers={"Retry-After": "30"}) from None
         return self._mark_received(p, up)
 
     def _completed_in_storage(self, up: Upload) -> bool:
