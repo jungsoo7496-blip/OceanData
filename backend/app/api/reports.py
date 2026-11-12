@@ -167,8 +167,9 @@ def update_record(record_id: str, body: RecordUpdate, request: Request, db: Sess
     fields = body.model_dump(exclude_unset=True)
     if not fields:
         raise _bad("", "바꿀 값이 없습니다", "minProperties")
-    if fields.get("title", "") is None or fields.get("kind", "") is None:
-        raise _bad("/title", "제목·종류는 비울 수 없습니다")
+    for name in ("title", "kind", "evidence_refs"):  # 계약이 null을 허용하지 않는 항목 — 그 항목 위치로 답한다
+        if name in fields and fields[name] is None:
+            raise _bad(f"/{name}", "비울 수 없는 항목입니다", "not_nullable")
     rec = _record(db, c, request, record_id, p, lock=True)
     cur = _version(db, rec, None)
     values = {k: getattr(cur, k) for k in evidence.RECORD_FIELDS}
