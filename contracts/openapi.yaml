@@ -3528,6 +3528,8 @@ paths:
         - 기관의 대기·실행 중 클립 작업이 설정 한도(CLIP_MAX_PENDING_PER_ORG)에 닿으면 429 RATE_LIMITED와 Retry-After.
         작업 등록과 감사(CLIP_EXPORT_REQUESTED)는 한 트랜잭션으로 확정된다 — 202면 둘 다 남고, 오류 응답이면 둘 다 없다.
         Idempotency-Key를 주면 같은 키·같은 본문은 작업이 끝난 뒤에도 처음 응답을 다시 준다(새 작업·감사 없음).
+        작업의 인코딩 시간 한도는 구간 길이에 비례한다(설정 배수와 최솟값, 전체 ffmpeg 한도 이하, ADR-0069). 한도를 넘으면
+        재시도 없이 작업이 FAILED(error_code=CLIP_TIMEOUT)가 된다.
       x-freeze: G1
       x-status: draft
       parameters:
@@ -6457,6 +6459,7 @@ components:
           maxLength: 64
           description: |
             FAILED일 때 원인 코드 (예 SOURCE_UNAVAILABLE — 원 영상이 격리·삭제됨, CLIP_ENCODE_FAILED — 자르지 못함,
+            CLIP_TIMEOUT — 구간 길이에 비례한 인코딩 시간 한도 안에 끝내지 못함,
             QUOTA_EXCEEDED — 저장 직전 쿼터 확인에서 기관 쿼터를 넘음)
 
     ShareRequestCreate:

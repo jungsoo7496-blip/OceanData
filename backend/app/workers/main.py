@@ -4,6 +4,7 @@
 - 실패는 지수 백오프로 최대 시도(job_policies.max_attempts)까지 재시도하고, 다 쓰면 FAILED (요구사항 7.1)
 - 주기 정리: 임대 만료 작업 회수(1.3), 만료 업로드 세션 정리(04번 3.3), 무결성 로그 일 단위 앵커(5.2)
 - 04번 웹훅 전송은 따로 도는 스레드가 맡는다 — 느린 수신 서버가 작업 처리·정리 주기를 멈추지 않게 (ADR-0041)
+- 가져갈 작업 유형은 WORKER_JOB_TYPES·WORKER_EXCLUDE_JOB_TYPES로 나눌 수 있다 — 클립 전용 워커 (ADR-0069)
 """
 
 from __future__ import annotations
@@ -14,13 +15,14 @@ import signal
 import socket
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Any
 
 from prometheus_client import start_http_server
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.container import Container, build_container
 from app.logging_setup import configure_logging
 from app.metrics import JOB_DURATION, JOB_FAILURES, JOBS_DONE, JOBS_QUEUED, WORKER_REGISTRY
@@ -41,14 +43,31 @@ class Handler:
     fn: Callable[[Container, Job], Any]
     # 재시도를 다 썼을 때 호출 (자산 FAILED 처리 등)
     on_exhausted: Callable[[Container, Job, str], None] | None = None
+    # 도는 동안 임대를 다시 건다 — 임대보다 오래 걸려도 다른 워커가 회수해 한 번 더 돌리지 않게 (ADR-0069)
+    renew_lease: bool = False
 
 
 HANDLERS: dict[str, Handler] = {}
 
 
 def register(job_type: str, fn: Callable[[Container, Job], Any],
-             on_exhausted: Callable[[Container, Job, str], None] | None = None) -> None:
-    HANDLERS[job_type] = Handler(fn, on_exhausted)
+             on_exhausted: Callable[[Container, Job, str], None] | None = None, *, renew_lease: bool = False) -> None:
+    HANDLERS[job_type] = Handler(fn, on_exhausted, renew_lease)
+
+
+def claim_types(settings: Settings) -> list[str]:
+    """이 워커가 가져갈 작업 유형: WORKER_JOB_TYPES(비우면 등록된 모든 유형) − WORKER_EXCLUDE_JOB_TYPES (ADR-0069).
+
+    없는 유형 이름(오타)이나 빈 결과는 ValueError — 빈 목록을 큐에 넘기면 모든 유형을 가져가므로 기동을 막는다."""
+    include = list(settings.worker_job_types)
+    exclude = set(settings.worker_exclude_job_types)
+    unknown = sorted({*include, *exclude} - set(HANDLERS))
+    if unknown:
+        raise ValueError(f"등록되지 않은 작업 유형: {', '.join(unknown)}")
+    types = sorted(set(include or HANDLERS) - exclude)
+    if not types:
+        raise ValueError("가져갈 작업 유형이 없습니다 (WORKER_JOB_TYPES − WORKER_EXCLUDE_JOB_TYPES)")
+    return types
 
 
 def backoff_s(attempt: int, base: float = 15.0, cap: float = 3600.0) -> float:
@@ -192,7 +211,7 @@ def _clip_export(c: Container, job: Job) -> Any:
     return clips.make_clip(c, job.job_id, job.payload)
 
 
-register("clip_export", _clip_export)  # 09번 구간 클립 내보내기 (요구사항 7.2)
+register("clip_export", _clip_export, renew_lease=True)  # 09번 구간 클립 내보내기 (요구사항 7.2, ADR-0069)
 
 
 def _tier_move(c: Container, job: Job) -> Any:
@@ -212,15 +231,45 @@ register("collect_source", _collect_source)  # 12번 (실패는 큐의 지수 �
 register("env_join", _env_join)  # 12번  # 14번 (PROCESSING_STEPS에 TAG가 있을 때 영상 처리 뒤)
 
 
+@contextmanager
+def _lease_kept(c: Container, job: Job, worker_id: str) -> Iterator[None]:
+    """처리기가 도는 동안 임대의 1/3마다 임대를 다시 건다 (ADR-0069).
+
+    다른 워커의 주기 정리(reap_expired_leases)가 아직 도는 작업을 대기로 돌려 한 번 더 돌리지 않게 한다. 워커 프로세스가
+    죽으면 갱신도 멈춰 임대 시간 뒤 회수된다 (요구사항 1.3). 끝내기(complete·fail) 전에 갱신을 멈춘다."""
+    stop = threading.Event()
+    interval = max(0.1, job.lease_s / 3)
+
+    def run() -> None:
+        while not stop.wait(interval):
+            try:
+                if not c.queue.renew_lease(job.job_id, worker_id, job.lease_s):
+                    if not stop.is_set():  # 임대가 이미 지나 회수됐다 (DB 장애가 임대의 2/3보다 길었다 등)
+                        log.warning("job_lease_lost", extra={"job_id": job.job_id, "job_type": job.job_type})
+                    return
+            except Exception as exc:  # noqa: BLE001 - DB 장애 등. 남은 임대 안에서 다음 주기에 다시
+                log.warning("job_lease_renew_failed", extra={"job_id": job.job_id, "job_type": job.job_type,
+                                                             "error_type": type(exc).__name__})
+
+    thread = threading.Thread(target=run, name=f"lease-{job.job_id}", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=30)  # 진행 중인 갱신 한 번만 기다린다 (RUNNING이 아니면 갱신은 아무것도 바꾸지 않는다)
+
+
 def run_once(c: Container, worker_id: str) -> bool:
     classes = tuple(c.settings.worker_resource_classes)
-    job = c.queue.claim(list(HANDLERS), worker_id, classes)
+    job = c.queue.claim(claim_types(c.settings), worker_id, classes)
     if job is None:
         return False
     handler = HANDLERS[job.job_type]
     start = time.perf_counter()
     try:
-        handler.fn(c, job)
+        with _lease_kept(c, job, worker_id) if handler.renew_lease else nullcontext():
+            handler.fn(c, job)
     except Exception as exc:  # noqa: BLE001 - 재시도 대상, 최대 시도 후 FAILED (PermanentJobError는 바로 FAILED)
         known = isinstance(exc, (RetryableError, PermanentJobError))
         code = exc.code if isinstance(exc, (RetryableError, PermanentJobError)) else "INTERNAL"
@@ -378,6 +427,10 @@ def watch(c: Container, operator_webhooks: OperatorWebhookDispatcher | None = No
 def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
+    try:
+        job_types = claim_types(settings)  # 잘못된 WORKER_JOB_TYPES·WORKER_EXCLUDE_JOB_TYPES면 기동하지 않는다
+    except ValueError as exc:
+        raise SystemExit(f"워커 설정 오류: {exc}") from None
     c = build_container(settings)
     start_http_server(settings.worker_metrics_port, registry=WORKER_REGISTRY)
     worker_id = f"{socket.gethostname()}:{os.getpid()}"
@@ -388,7 +441,7 @@ def main() -> None:
 
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
-    log.info("worker_started", extra={"worker_id": worker_id, "job_types": sorted(HANDLERS),
+    log.info("worker_started", extra={"worker_id": worker_id, "job_types": job_types,
                                       "resource_classes": settings.worker_resource_classes})
     last_depth = 0.0
     webhooks_stop = threading.Event()

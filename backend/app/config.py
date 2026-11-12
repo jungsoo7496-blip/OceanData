@@ -121,7 +121,16 @@ class Settings(BaseSettings):
     clip_crf: int = 18  # 낮을수록 고화질·큰 파일 (18 ≈ 눈으로 구별하기 어려운 수준)
     # 기관별 대기·실행 중 클립 작업 한도 — 넘으면 429 (긴 재인코딩으로 한 기관이 공용 작업 큐를 채우지 않게)
     clip_max_pending_per_org: int = Field(default=3, ge=1)
+    # 클립 ffmpeg 시간 한도 = 구간 길이 × 배수, 최솟값 이상·FFMPEG_TIMEOUT_S 이하 (ADR-0069).
+    # 넘으면 FAILED(CLIP_TIMEOUT). 배수 4는 개발 PC 실측(합성 4K·스레드 4개에서 구간 1초에 0.86초)의 약 4.6배 여유다.
+    # 운영 하드웨어에서 다시 잰다
+    clip_timeout_factor: float = Field(default=4.0, gt=0)
+    clip_timeout_min_s: int = Field(default=120, ge=1)
     worker_resource_classes: CsvList = Field(default_factory=lambda: ["CPU"])
+    # 이 워커가 가져갈 작업 유형 (ADR-0069, 예: 클립 전용 워커는 clip_export, 기본 워커는 EXCLUDE에 clip_export).
+    # 비우면 등록된 모든 유형, EXCLUDE는 그중에서 뺀다. 없는 유형 이름·빈 결과면 워커가 기동하지 않는다
+    worker_job_types: CsvList = Field(default_factory=list)
+    worker_exclude_job_types: CsvList = Field(default_factory=list)
     job_lease_reap_interval_s: int = 60
     integrity_sample_size: int = 20
 
@@ -210,7 +219,7 @@ class Settings(BaseSettings):
     idempotency_retention_s: int = 86400
 
     @field_validator("processing_steps", "report_formats", "external_sources", "idp_mfa_acr_values", "deid_classes",
-                     "worker_resource_classes",
+                     "worker_resource_classes", "worker_job_types", "worker_exclude_job_types",
                      mode="before")
     @classmethod
     def _split_csv(cls, v: object) -> object:
