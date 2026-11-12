@@ -103,12 +103,16 @@ def test_location_error_alone_still_replaces_the_geometry_schema_error(name: str
 
 
 def test_many_coordinate_errors_keep_the_geometry_error_when_not_all_were_collected() -> None:
-    """좌표 오류는 200개까지만 모은다. 그보다 많으면 나머지 자리를 고칠 수 없으니 스키마 오류도 남긴다(가리지 않는 쪽)."""
-    def codes(n: int) -> set[str]:
-        location = {"type": "LineString", "coordinates": [[10, 200]] * n}
+    """좌표 오류는 200개까지만 모은다. 그보다 많으면 나머지 자리를 고칠 수 없으니 스키마 오류도 남긴다(가리지 않는 쪽).
+    정확히 200개는 다 모은 것이라 전처럼 가린다 (뒤에 정상 좌표가 이어져도 같다)."""
+    def codes(bad: int, good: int = 0) -> set[str]:
+        location = {"type": "LineString", "coordinates": [[10, 200]] * bad + [[1, 1]] * good}
         return {c for _, c in _under_location(validate_document("upload-manifest", _manifest(location))[0])}
 
     assert codes(150) == {"lonlat_swapped"}
+    assert codes(200) == {"lonlat_swapped"}
+    assert codes(200, good=3) == {"lonlat_swapped"}
+    assert codes(201) == {"lonlat_swapped", "schema.oneOf"}
     assert codes(250) == {"lonlat_swapped", "schema.oneOf"}
 
 
@@ -243,7 +247,7 @@ def _domain_bad(position: Any) -> bool:
 
 
 def test_property_location_second_defects_are_reported_and_lone_domain_errors_still_replace() -> None:
-    from hypothesis import HealthCheck, given, settings
+    from hypothesis import HealthCheck, example, given, settings
     from hypothesis import strategies as st
 
     good = st.tuples(st.floats(*GOOD_RANGE["lon"]), st.floats(*GOOD_RANGE["lat"])).map(list)
@@ -268,6 +272,8 @@ def test_property_location_second_defects_are_reported_and_lone_domain_errors_st
         return geo, any(_domain_bad(p) for p in positions), extra != "none"
 
     @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+    # 무작위 표본과 무관하게 수정 전 코드에서 실패하는 경우를 하나씩 먼저 본다 (아래 두 속성 시험도 같다)
+    @example(case=({"type": "Point", "coordinates": [0, 0], "bbox": [0, 0, 1, 1]}, True, True))
     @given(case=geometry())
     def check(case: tuple[dict[str, Any], bool, bool]) -> None:
         geo, domain_bad, independent = case
@@ -286,7 +292,7 @@ def test_property_location_second_defects_are_reported_and_lone_domain_errors_st
 
 
 def test_property_event_root_error_appears_only_for_an_unknown_field() -> None:
-    from hypothesis import HealthCheck, given, settings
+    from hypothesis import HealthCheck, example, given, settings
     from hypothesis import strategies as st
 
     junk = st.one_of(st.none(), st.booleans(), st.integers(-3, 3), st.text(max_size=8),
@@ -295,6 +301,8 @@ def test_property_event_root_error_appears_only_for_an_unknown_field() -> None:
                                        "human_verified", "source_event_id"}) - {"schema_version"})
 
     @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+    @example(changes={"started_at": "2026-02-30T00:00:00Z"}, drop=[], unknown=False)
+    @example(changes={"severity": "LOUD"}, drop=[], unknown=True)
     @given(changes=st.dictionaries(st.sampled_from(known), junk, max_size=3),
            drop=st.lists(st.sampled_from(known), max_size=2), unknown=st.booleans())
     def check(changes: dict[str, Any], drop: list[str], unknown: bool) -> None:
@@ -315,7 +323,7 @@ def test_property_event_root_error_appears_only_for_an_unknown_field() -> None:
 
 
 def test_property_timezone_hint_means_only_the_offset_is_missing() -> None:
-    from hypothesis import HealthCheck, given, settings
+    from hypothesis import HealthCheck, example, given, settings
     from hypothesis import strategies as st
 
     base = st.sampled_from(["2026-11-02T00:00:00", "2026-11-02T23:59:59.123", "2026-11-02T00:00:00Z",
@@ -332,6 +340,8 @@ def test_property_timezone_hint_means_only_the_offset_is_missing() -> None:
         return text
 
     @settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+    @example(ts="2026-11-02")
+    @example(ts="2026-11-02T00:00:00")
     @given(ts=value())
     def check(ts: str) -> None:
         problems = _check_invariants("observation-batch", _batch_with(ts))

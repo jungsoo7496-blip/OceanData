@@ -123,6 +123,20 @@ def test_observed_at_without_a_time_is_still_rejected_per_item_as_timezone_unkno
     assert results[1]["status"] == "ACCEPTED", results
 
 
+def test_observed_at_without_a_time_and_another_defect_gets_the_reason_an_unreadable_time_gets(ctx) -> None:
+    """항목에 결함이 여럿이면 보고 순서(포인터 순, observed_at < quality_flag)의 첫 사유가 된다 (ADR-0067 결정 3).
+    시각이 없는 값('2026-11-02')은 이제 읽을 수 없는 값('garbage')과 같이 형식 오류로 보고되므로 같은 사유를 받는다.
+    전에는 시간대 힌트가 스키마 오류 뒤에 붙어 MISSING_FLAG_MISMATCH였다."""
+    r = ctx.client.post("/v1/observations", headers=ctx.as_user(102),
+                        json=_batch(_item(observed_at="2026-11-02", quality_flag="BOGUS"),
+                                    _item(observed_at="garbage", quality_flag="BOGUS"), _item()))
+    assert r.status_code == 200, r.text
+    results = r.json()["results"]
+    assert results[:2] == [{"index": 0, "status": "REJECTED", "reason": "TIMEZONE_UNKNOWN"},
+                           {"index": 1, "status": "REJECTED", "reason": "TIMEZONE_UNKNOWN"}], results
+    assert results[2]["status"] == "ACCEPTED", results
+
+
 def test_the_400_body_lists_at_most_100_problems(ctx) -> None:
     """항목마다 다른 이유로 배치 전체가 400이어도 응답은 앞의 100개와 안내 하나다 (요청보다 응답이 크지 않게)."""
     items = [_item(bogus=i) for i in range(150)]  # 계약에 없는 필드: 항목별 사유가 없어 배치 전체 400

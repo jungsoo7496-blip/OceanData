@@ -339,8 +339,9 @@ def _location_explains_schema(contract: str, doc: dict[str, Any], location: list
     errors = [p for p in location if p.severity == "ERROR"]
     if not errors or not any(_within(p.pointer, "/location") for p in schema):
         return False  # 가릴 스키마 오류가 없다
-    if len(errors) >= LOCATION_PROBLEM_LIMIT:
-        return False  # 좌표 오류를 다 모으지 않았다: 나머지 자리를 고칠 수 없으니 스키마 오류도 남긴다
+    if len(errors) >= LOCATION_PROBLEM_LIMIT and \
+            len(check_location(doc["location"], limit=LOCATION_PROBLEM_LIMIT + 1)) > LOCATION_PROBLEM_LIMIT:
+        return False  # 좌표 오류가 수집 상한보다 많다: 모으지 못한 자리를 고칠 수 없으니 스키마 오류도 남긴다
     repaired = _repaired_location(doc["location"], errors)
     if repaired is None:
         return True
