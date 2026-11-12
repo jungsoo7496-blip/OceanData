@@ -63,7 +63,7 @@ SKIP LOCKED 청구(4 스레드·구독 15·이벤트 180에서 중복 전송 0)�
 | W1 | 중간 | `deliver_due`가 라운드 장벽이라 한 기관의 응답 없는 수신 서버가 모든 기관의 전송을 라운드마다 제한 시간만큼 늦춘다(기관 B 6건: 0.32초 → 6.4초). ADR-0041 결정 3("느린 서버는 자기 구독만 늦춘다")과 어긋남. 디스패처 지연 지표도 없다 | **미완** — 재현은 `tests/integration/test_webhook_cross_tenant_isolation.py`(strict xfail). 장벽 없이 전송마다 독립 작업으로 바꾸거나 수신 서버 단위 휴지를 두는 구조 변경이라 W5와 함께 ADR로 정한다 |
 | W2 | 낮음~중간 | 웹훅 URL 경로의 토큰이 httpx INFO 로그에 남는다(정리기는 쿼리만 지움) | **고침** (ADR-0057, `test_webhook_url_not_logged.py`) |
 | W3 | 낮음 | TLS 핸드셰이크 중 기한이 닿으면 TCP 소켓이 GC 때까지 열려 있다(20회 시도에 20개) | **고침** (ADR-0061, `test_webhook_send.py::test_socket_is_closed_when_deadline_hits_during_tls_handshake`). 연 연결을 기록해 `finally`에서 닫음 |
-| W4 | 낮음 | 1xx 응답 범람이 디스패처 스레드 CPU를 기한 내내 쓴다(메인 스레드 처리량 49%) | **미완** — 중간 응답 수·바이트 상한 또는 별도 프로세스, 또는 수용 |
+| W4 | 낮음 | 1xx 응답 범람이 디스패처 스레드 CPU를 기한 내내 쓴다(메인 스레드 처리량 49%) | **고침** (ADR-0064, `test_webhook_send.py::test_interim_response_flood_ends_the_attempt_early`, `test_webhooks.py::test_interim_response_flood_is_an_ordinary_failed_attempt`). 최종 응답 헤더까지 읽는 바이트를 128KiB로 묶어, 몰아서 보내는 범람 시도가 기한 5초가 아니라 약 0.05초에 다른 실패처럼(재시도·백오프 그대로) 끝남. 기한 안에 상한이 차지 않게 천천히 흘리는 수신 서버는 예전처럼 기한까지 감(수정 전과 같음). TLS 계층 안의 비응용 레코드는 세지 않음 |
 | W5 | 낮음 | 독살 이벤트 하나가 건강한 구독을 비활성화하고(`consecutive_failures`는 쓰기 전용) 다른 대기 이벤트를 조용히 취소한다 | **사람 결정** — 구독 비활성화의 의미(연속 실패 N회로?)는 ADR-0030/0041 개정이 필요 |
 | W6 | 낮음 | `ALERT_WEBHOOK_SECRET`·`WEBHOOK_DISPATCH_INTERVAL_S`·`WEBHOOK_BACKOFF_*`가 Compose·`.env.example`에 없어 배포에서 켤 수 없다 | **고침** (ADR-0057). 워커에만 넘김 |
 | W7 | 정보 | 등록 시 거부가 숫자 약식 호스트(`https://2130706433/`)와 존 ID가 붙은 IPv6를 못 거른다 | 정보 — 전송 시점에 막히고 우회 불가(보안 영향 없음) |
