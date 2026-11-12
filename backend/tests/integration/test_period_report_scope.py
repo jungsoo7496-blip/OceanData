@@ -1,8 +1,8 @@
 """기간 보고서 만들기의 사업 범위·기간 검사 (계약 점검 S30·S31, 10번 요구사항 3.2·3.3·4.1).
 
 - S30: 기간 보고서의 관측값 지표(OBSERVATION_STAT)가 같은 기관의 다른 사업 장비 관측값까지 세고, 제출 뒤 관리기관
-  열람자에게 그 장비 ID가 보였다. 이제 그 사업의 회차로 보낸 관측값과 그 사업에 배정된 장비의 관측값만 센다
-  (ADR-0079). '데이터 없음' 판단(has_any_data)도 같은 범위다.
+  열람자에게 그 장비 ID가 보였다. 이제 그 사업의 회차로 보낸 관측값, 그 사업에 배정된 장비의 관측값, 그 사업 회차의
+  장비가 회차 시간 안에 보낸 관측값만 센다 (ADR-0079). '데이터 없음' 판단(has_any_data)도 같은 범위다.
 - S31: 한국 시각으로 바꾸면 9999-12-31을 넘는 from·to(9999-12-31T15:00:00Z 이후)가 500이었다. 400 VALIDATION_ERROR다.
 """
 
@@ -104,6 +104,52 @@ def test_period_report_counts_only_the_projects_observations(ictx: Ctx) -> None:
     seen_temp = _metric(seen.json(), "EXAMPLE_MEAN_WATER_TEMP")
     assert seen_temp["value"] == 15.0
     assert DEV_X not in {source for source, _ in _ranges(seen_temp)}
+
+
+def _session(ctx: Ctx, label: str, starts_at: str, ends_at: str | None, device_ids: list[str]) -> str:
+    r = ctx.client.post("/v1/sessions", headers=ctx.as_user(MEMBER), json={
+        "project_id": PRJ_A, "label": label, "title": f"회차 {label}", "starts_at": starts_at, "ends_at": ends_at,
+        "device_ids": device_ids})
+    assert r.status_code == 201, r.text
+    return str(r.json()["session_id"])
+
+
+def test_period_report_counts_session_device_observations_inside_the_session_window(ctx: Ctx) -> None:
+    """회차 장비(사업 없는 장비·다른 사업 장비)가 회차 표시 없이 회차 시간 안에 보낸 값은 회차 보고서에 들어가므로
+    같은 기간의 사업 보고서에도 들어간다. 회차 시간 밖의 값은 들어가지 않는다."""
+    _other_project(ctx)
+    closed = _session(ctx, "SCOPE-CLOSED", "2025-03-05T00:00:00Z", "2025-03-10T00:00:00Z", [DEV_FREE, DEV_X])
+    _session(ctx, "SCOPE-OPEN", "2025-03-20T00:00:00Z", None, [DEV_FREE])  # 끝이 없는 회차
+    _observe(ctx, DEV_FREE, 12.0, "2025-03-06T00:00:00Z")  # 닫힌 회차 안 — 센다
+    _observe(ctx, DEV_X, 18.0, "2025-03-07T00:00:00Z")  # 다른 사업 장비, 닫힌 회차 안 — 센다
+    _observe(ctx, DEV_FREE, 77.0, "2025-03-10T00:00:00Z")  # 닫힌 회차의 끝 시각(끝은 포함하지 않음) — 세지 않는다
+    _observe(ctx, DEV_FREE, 99.0, "2025-03-15T00:00:00Z")  # 어느 회차 시간도 아님 — 세지 않는다
+    _observe(ctx, DEV_FREE, 30.0, "2025-03-25T00:00:00Z")  # 끝이 없는 회차 안 — 센다
+    _period_template(ctx, "SCOPE_SESSDEV", METRICS)
+
+    r = _period_report(ctx, "SCOPE_SESSDEV", PRJ_A, *MARCH)
+    assert r.status_code == 201, r.text
+    check(r, "POST", REPORTS)
+    temp = _metric(r.json(), "EXAMPLE_MEAN_WATER_TEMP")
+    # 고치기 전(기관 전체): 다섯 건 평균 47.2. 장비·회차 조건만: 이 사업 자료 없음(NO_DATA)
+    assert (temp["status"], temp["value"], temp["input_count"]) == ("OK", 20.0, 3), temp
+    assert _ranges(temp) == sorted([(DEV_FREE, 2), (DEV_X, 1)])
+    # 이 사업 관측값이 있으니 이벤트 수는 '데이터 없음'이 아니라 0건이다 (요구사항 3.3)
+    vessels = _metric(r.json(), "EXAMPLE_VESSEL_EVENTS")
+    assert (vessels["status"], vessels["value"]) == ("OK", 0)
+
+    # 같은 값이 닫힌 회차의 회차 보고서에도 들어간다 — 회차 보고서의 원천은 기간 보고서 원천 안에 있다
+    rs = ctx.client.post(REPORTS, headers=ctx.as_user(MEMBER),
+                         json={"template_code": "EXAMPLE_SESSION_LOG", "session_id": closed})
+    assert rs.status_code == 201, rs.text
+    temp_s = _metric(rs.json(), "EXAMPLE_MEAN_WATER_TEMP")
+    assert (temp_s["value"], temp_s["input_count"], _ranges(temp_s)) == (15.0, 2, sorted([(DEV_FREE, 1), (DEV_X, 1)]))
+
+    # 다른 사업(PRJ_X) 보고서는 자기 장비 값만 — PRJ_A 회차에 붙은 사업 없는 장비 값은 들어가지 않는다
+    other = _period_report(ctx, "SCOPE_SESSDEV", PRJ_X, *MARCH)
+    assert other.status_code == 201, other.text
+    temp_x = _metric(other.json(), "EXAMPLE_MEAN_WATER_TEMP")
+    assert (temp_x["value"], temp_x["input_count"], _ranges(temp_x)) == (18.0, 1, [(DEV_X, 1)])
 
 
 def test_period_report_with_only_other_project_observations_is_no_data(ctx: Ctx) -> None:
