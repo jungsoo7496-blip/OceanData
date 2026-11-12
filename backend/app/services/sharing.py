@@ -161,7 +161,8 @@ def decide_request(c: Container, db: Session, req: ShareRequest, approve: bool, 
 def downgrade(c: Container, db: Session, a: Asset, target: str, handling: str, by: str, reason: str) -> list[str]:
     """하향은 언제든 (요구사항 10.3). 기존 이용 권한 처리 선택을 기록하고, 즉시 철회면 13번 B가 권한을 끊는다.
 
-    끊은 이용 권한 ID를 돌려준다 — 철회 감사를 남기는 호출자가 쓴다 (분류 지정 ADR-0074, data_role CORE 변경 ADR-0076)."""
+    끊은 이용 권한 ID를 돌려준다 — 철회 감사를 남기는 호출자가 쓴다
+    (분류 지정 ADR-0074, data_role CORE 변경 ADR-0076)."""
     now = c.clock.now()
     a.sharing_scope, a.updated_at = target, now
     try:
