@@ -223,7 +223,9 @@ HANDOFF.md, AGENTS.md, .kiro/steering/*.md를 읽고 각 스펙 tasks.md의 남�
 먼저 docs/ACCEPTANCE-STATUS.md의 NOT_IMPLEMENTED 항목부터. 계약(contracts/)부터 고친 다음 구현해.
 ```
 
-### GPT(Codex·ChatGPT)로 이어서 할 때
+### GPT(Codex·ChatGPT)로 이어서 할 때 — 2026-11-12로 끝남 (기록)
+*2026-11-12부터 Claude Code가 이어서 마무리한다. Codex 작업 사본과 시험 컨테이너는 정리했다. 아래는 기록이다.*
+**Codex 사본에만 있던 근거 파일:** 이 문서와 ADR이 가리키는 `var/…` 로그·결과 파일과 ADR-0024의 `work/selfupdate-poc/` PoC 소스는 git 밖(Codex 작업 사본)에만 있었다. 글자 파일(로그·JSON·보고서·PoC 소스, 2,159개)만 개발 PC의 `var/codex-evidence-2026-11-04.zip`(git 밖, 이 PC에만)에 모았다. 안의 경로는 `work/OceanData/var/…`·`work/selfupdate-poc/…`·`outputs/…` 그대로다. 실행 파일·브라우저·의존성 폴더는 넣지 않았다.
 - **`docs/GPT-HANDOFF-PROMPT.md`를 쓴다.** 붙여 넣을 짧은 '첫 메시지'와 끊겼을 때의 '후속 프롬프트', 그리고 GPT가 읽는 작업 지시서(규칙·기준선·해야 할 일 1~13번·하지 말 것·멈춤 규칙)가 한 파일에 있다.
 - Codex는 저장소 루트의 `AGENTS.md`를 자동으로 읽는다. ChatGPT(웹)는 셸·git·Docker를 실행하지 못하므로 시험을 돌린 것처럼 쓰지 말고 코드 읽기·변경안만 하게 한다(지시서 [2] '실행 전제').
 
