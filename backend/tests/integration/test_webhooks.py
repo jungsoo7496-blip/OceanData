@@ -339,6 +339,33 @@ def test_interim_response_flood_is_an_ordinary_failed_attempt(ctx, monkeypatch, 
         assert (sub.active, sub.consecutive_failures) == (True, 1)
 
 
+def test_interim_flood_backlog_is_attempted_back_to_back(ctx, monkeypatch, tmp_path) -> None:
+    """ADR-0064 감수할 점의 근거(통합 검토 WEBHOOKS-1~3): 백오프는 전송마다라, 범람 수신 서버로 가는 구독에 쌓인 건은
+    deliver_due 한 번에 차례로(구독당 한 건씩) 모두 시도되고 건마다 자기 백오프만 받는다. 구독은 한 건이 WEBHOOK_MAX_ATTEMPTS번에
+    닿을 때까지 켜져 있다. 구독 단위로 쉬게 하는 등 이 동작을 바꾸면(W5) ADR-0064의 그 문장도 고친다."""
+    server, trusted = self_signed(tmp_path, "hooks.example.test")
+    rx = SyntheticReceiver(interim_flood, tls=server)
+    monkeypatch.setattr(webhooks, "_lookup", lambda _host, _port: ["127.0.0.1"])  # 이름 → 합성 서버
+    monkeypatch.setattr(webhooks, "_tls_context", lambda: trusted)  # 시험 안에서 만든 인증서만 믿는다
+    try:
+        c = _with(ctx, webhook_allow_private_targets=True)  # 127.0.0.1 합성 서버 (개발용 설정)
+        wid = _subscribe(c, ORG_A, f"https://hooks.example.test:{rx.port}/hook")
+        _emit(c, ORG_A, 4)
+        now = c.clock.now()
+        stats = webhooks.deliver_due(c, now=now)
+    finally:
+        rx.close()
+    assert stats == {"delivered": 0, "retry": 4, "failed": 0, "cancelled": 0}
+    assert sum(1 for m in rx.seen if m.startswith(b"POST ")) == 4  # 쌓인 네 건이 모두 범람 서버에 닿았다
+    ds = _deliveries(ctx, webhook_id=wid)
+    assert [(d.status, d.attempts, d.last_error) for d in ds] == [("PENDING", 1, "RemoteProtocolError")] * 4
+    for d in ds:  # 넷 모두 첫 실패의 백오프 1회분 뒤 — 구독 전체를 쉬게 하지 않는다
+        assert abs((d.next_attempt_at - now) - webhooks.backoff(c.settings, 1)) < timedelta(seconds=1)
+    with ctx.c.sessionmaker() as db:
+        sub = db.get(WebhookSubscription, wid)
+        assert (sub.active, sub.consecutive_failures) == (True, 4)
+
+
 def test_live_lease_blocks_subscription_and_expired_lease_is_resent(ctx) -> None:
     """보내던 워커가 죽은 경우: 임대가 살아 있으면 그 구독은 건너뛰고(한 건씩), 임대가 끝나면 다시 보낸다 (최소 한 번)."""
     wid = _subscribe(ctx.c, ORG_A, PUBLIC_URL)
