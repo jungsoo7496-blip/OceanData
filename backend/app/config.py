@@ -200,7 +200,9 @@ class Settings(BaseSettings):
     webhook_backoff_max_s: int = 6 * 3600
     # 한 건 전체 기한: 이름 풀기·연결·TLS·요청·응답 헤더까지. 본문은 읽지 않는다 (ADR-0041)
     webhook_timeout_s: float = Field(default=5.0, gt=0)
-    webhook_dispatch_interval_s: int = Field(default=10, ge=1)  # 보낼 것이 없을 때 다시 볼 간격 (전용 스레드)
+    # 전용 스레드가 보낼 것이 없을 때, 그리고 보내는 중인 건이 끝나지 않을 때 새로 기한이 된 건을 다시 볼 간격
+    # (뒤의 것은 빈자리가 있을 때 새 건이 기다리는 가장 긴 시간, ADR-0070)
+    webhook_dispatch_interval_s: int = Field(default=10, ge=1)
     # 동시에 보내는 건: 구독당 1건, 기관당 WEBHOOK_MAX_PER_ORG건, 모두 WEBHOOK_BATCH_SIZE건까지 (ADR-0041·0070)
     webhook_batch_size: int = Field(default=20, ge=1)
     webhook_max_per_org: int = Field(default=4, ge=1)
