@@ -5,6 +5,8 @@
   제어 문자(C0·C1)와 보이지 않는 서식 문자(방향 제어 등)가 든 이름도 거부한다.
 - 양식 읽기 메모리: 검사와 내보내기는 항목을 조각으로 읽는다. 검사는 XML 항목을 글로 풀지 않고, 헤더에 적힌 크기보다
   길게 풀리는 압축 자료(압축 폭탄)도 적힌 크기까지만 읽는다.
+- 항목 종류(통합 검토 REPORTS-1): 심볼릭 링크 등 일반 파일·폴더가 아닌 항목은 거부한다. 내보낸 파일에는 양식 항목의
+  이름·순서·시각·압축 방식만 옮기고 외부 속성(유닉스 파일 종류·권한)과 추가 필드는 옮기지 않는다.
 - PDF: WeasyPrint 기본 URL fetcher는 http·file 주소를 가져온다. 지금은 HTML 이스케이프가 사용자 글을 막지만, 그것이
   뚫려도 렌더러는 어떤 주소도 가져오지 않아야 한다.
 
@@ -16,6 +18,7 @@ from __future__ import annotations
 import http.server
 import io
 import random
+import stat
 import struct
 import sys
 import threading
@@ -176,6 +179,82 @@ def test_utf8_parts_with_or_without_declaration_are_accepted(head: str, bom: byt
     assert rr.check_hwpx(data) == []
     out = zipfile.ZipFile(io.BytesIO(rr.render_hwpx(data, _doc(title="합성"))))
     assert out.read("Contents/section0.xml") == bom + (head + "<s>합성 한글</s>").encode()
+
+
+# ------------------------------------------------------------------ HWPX: 항목 종류와 내보낸 항목 (통합 검토 REPORTS-1)
+
+FILE, DIR = stat.S_IFREG | 0o644, stat.S_IFDIR | 0o755
+# 일반 파일·폴더가 아닌 유닉스 파일 종류 (zip 외부 속성의 위 16비트에 적힌다)
+NOT_FILE_KINDS = {"symlink": stat.S_IFLNK, "char-device": stat.S_IFCHR, "block-device": stat.S_IFBLK,
+                  "fifo": stat.S_IFIFO, "socket": stat.S_IFSOCK}
+
+
+def _info(name: str, mode: int, *, system: int = 3, method: int = zipfile.ZIP_DEFLATED,
+          extra: bytes = b"") -> zipfile.ZipInfo:
+    """만든 OS 표시(create_system: 3 유닉스, 0 MS-DOS)와 유닉스 모드(외부 속성의 위 16비트)를 적은 항목."""
+    info = zipfile.ZipInfo(name, (2026, 11, 20, 9, 0, 0))
+    info.create_system, info.compress_type, info.extra = system, method, extra
+    info.external_attr = mode << 16 | (0x10 if name.endswith("/") else 0)  # 0x10: MS-DOS 폴더 표시
+    return info
+
+
+def _zip_infos(entries: list[tuple[zipfile.ZipInfo, bytes | str]]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for info, data in entries:
+            z.writestr(info, data)
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("system", [3, 0], ids=["unix", "msdos"])
+@pytest.mark.parametrize("kind", list(NOT_FILE_KINDS))
+def test_entries_that_are_not_regular_files_or_folders_are_rejected(kind: str, system: int) -> None:
+    """링크 항목(대상은 패키지 밖)과 그 링크를 지나는 파일 항목: 이름은 패키지 안이지만 링크를 따르는 도구로 풀면 패키지
+    밖을 가리킨다. 전에는 검사가 이름만 봐 통과했고(PUT 200), 내보낸 파일이 링크 항목을 그대로 옮겼다."""
+    data = _zip_infos([(_info("Contents/section0.xml", FILE), SECTION),
+                       (_info("BinData/up", NOT_FILE_KINDS[kind] | 0o777, system=system), "../../../../tmp"),
+                       (_info("BinData/up/synthetic.txt", FILE), "합성")])
+    assert rr.check_hwpx(data) == ["zip 항목 종류가 일반 파일·폴더가 아닙니다(심볼릭 링크 등): BinData/up"]
+    with pytest.raises(rr.HwpxTemplateError):
+        rr.render_hwpx(data, _doc())
+
+
+def test_regular_files_and_folders_keep_working_whatever_mode_they_record() -> None:
+    """종류를 적지 않은 항목(위 16비트가 0 — Windows 도구가 만든 zip)과 일반 파일·폴더는 권한·만든 OS 표시와 상관없이 받는다."""
+    entries = [(_info("mimetype", 0, system=0, method=zipfile.ZIP_STORED), "application/hwp+zip"),
+               (_info("Contents/", DIR), b""),
+               (_info("Contents/section0.xml", stat.S_IFREG | 0o600), SECTION),
+               (_info("BinData/image1.png", stat.S_IFREG | 0o755, system=0), b"PNG"),
+               (_info("Preview/", 0, system=0), b"")]
+    data = _zip_infos(entries)
+    assert rr.check_hwpx(data) == []
+    out = zipfile.ZipFile(io.BytesIO(rr.render_hwpx(data, _doc(title="제목"))))
+    assert out.namelist() == [info.filename for info, _ in entries]
+
+
+def test_export_copies_only_name_time_and_compression_of_template_entries() -> None:
+    """내보낸 파일의 항목에는 양식 항목의 이름·순서·시각·압축 방식만 옮기고, 외부 속성(유닉스 파일 종류·권한)과 추가
+    필드는 새로 쓴다. 전에는 양식의 ZipInfo를 그대로 써서 둘 다 옮겼다.
+
+    - 권한: setuid·모두 쓰기(0o4777)가 내보낸 파일에 그대로 실렸다.
+    - 유니코드 경로 추가 필드(0x7075): 머리글 이름이 CP437 바이트 'Contents/(0x80).xml'이면 검사는 그 이름을 'Contents/Ç.xml'로
+      본다(추가 필드의 CRC가 머리글과 맞지 않아 무시된다). 내보낼 때 zipfile이 이름을 UTF-8로 다시 쓰면 같이 옮긴 추가 필드의
+      CRC가 새 머리글과 맞아, 내보낸 파일의 그 항목 이름이 '../../evil.xml'로 읽혔다."""
+    shown = "Contents/" + chr(0xC7) + ".xml"  # CP437 0x80을 푼 이름
+    up = struct.pack("<BL", 1, zlib.crc32(shown.encode())) + b"../../evil.xml"
+    unicode_path = struct.pack("<HH", 0x7075, len(up)) + up
+    entries = [(_info("mimetype", 0, system=0, method=zipfile.ZIP_STORED), "application/hwp+zip"),
+               (_info("Contents/", DIR), b""),
+               (_info("Contents/section0.xml", FILE), SECTION),
+               (_info("Contents/X.xml", stat.S_IFREG | 0o4777, extra=unicode_path), "<a/>")]
+    data = _zip_infos(entries).replace(b"Contents/X.xml", b"Contents/" + bytes([0x80]) + b".xml")
+    assert zipfile.ZipFile(io.BytesIO(data)).namelist()[-1] == shown
+    assert rr.check_hwpx(data) == []
+    out = zipfile.ZipFile(io.BytesIO(rr.render_hwpx(data, _doc())))
+    assert out.namelist() == ["mimetype", "Contents/", "Contents/section0.xml", shown]  # 전에는 끝이 '../../evil.xml'
+    for got, (want, _) in zip(out.infolist(), entries, strict=True):
+        assert (got.date_time, got.compress_type, got.extra) == (want.date_time, want.compress_type, b""), got
+        assert got.external_attr >> 16 == (DIR if got.is_dir() else FILE), (got.filename, oct(got.external_attr))
 
 
 # ------------------------------------------------------------------ HWPX: 읽을 때 메모리 (검토 지적, ADR-0066)

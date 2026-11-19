@@ -2,6 +2,7 @@
 
 - 렌더러가 쓸 수 없는 HWPX 양식(UTF-8 아님·항목 경로가 패키지 밖)은 PUT에서 400이다. 전에는 200으로 저장되고
   내보내기가 500이었다. 이 검사 전에 저장된 양식으로 내보내면 409 CONFLICT(양식을 다시 올리라는 안내)다.
+  심볼릭 링크 등 일반 파일·폴더가 아닌 항목이 든 양식도 같다 (통합 검토 REPORTS-1).
 - PDF 렌더는 프로세스마다 동시에 REPORT_PDF_MAX_CONCURRENT건까지다. 넘으면 기다리지 않고 429 RATE_LIMITED와
   Retry-After — 느린 렌더가 요청 스레드와 DB 차례(ADR-0062)를 한없이 쥐지 않게 한다. XLSX·HWPX는 상관없다.
 """
@@ -9,6 +10,7 @@
 from __future__ import annotations
 
 import io
+import stat
 import threading
 import zipfile
 from collections.abc import Iterator
@@ -109,6 +111,40 @@ def test_export_with_a_stored_unusable_template_is_a_conflict_not_500(app_ctx: C
     r = c.client.get(EXPORT.format(report_id=rid), params={"format": "HWPX"}, headers=c.as_user(MEMBER))
     assert r.status_code == 200, r.text
     assert zipfile.ZipFile(io.BytesIO(r.content)).read("Contents/section0.xml").decode() == "<s>초안</s>"
+
+
+def _link_template() -> bytes:
+    """심볼릭 링크 항목(대상은 패키지 밖)과 그 링크를 지나는 파일 항목이 든 양식 (합성)."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("mimetype", "application/hwp+zip")
+        z.writestr("Contents/section0.xml", "<s>{{report.status}}</s>")
+        link = zipfile.ZipInfo("BinData/up")
+        link.create_system, link.external_attr = 3, (stat.S_IFLNK | 0o777) << 16
+        z.writestr(link, "../../../../tmp")
+        z.writestr("BinData/up/synthetic.txt", "합성")
+    return buf.getvalue()
+
+
+def test_put_rejects_link_entries_and_export_of_a_stored_one_is_a_conflict(app_ctx: Ctx) -> None:
+    """통합 검토 REPORTS-1: 전에는 PUT이 200으로 저장했고, 그 양식의 HWPX 내보내기가 링크 항목을 그대로 옮겼다."""
+    c = app_ctx
+    r = _put(c, _link_template())
+    check(r, "PUT", PUT)
+    assert r.status_code == 400 and r.json()["code"] == "VALIDATION_ERROR", r.text
+    assert "심볼릭 링크" in r.json()["errors"][0]["message"]
+
+    rid = _report(c)  # 검사가 생기기 전에 저장된 같은 양식
+    key = "ops/report-templates/EXAMPLE_SESSION_LOG/v1.hwpx"
+    c.c.storage.put_object(c.c.settings.bucket_evidence, key, _link_template(), rr.MIME["HWPX"])
+    with c.c.sessionmaker.begin() as db:
+        tpl = db.execute(select(ReportTemplate).where(ReportTemplate.code == "EXAMPLE_SESSION_LOG")).scalar_one()
+        tpl.hwpx_key, tpl.hwpx_sha256 = key, "0" * 64
+    r = c.client.get(EXPORT.format(report_id=rid), params={"format": "HWPX"}, headers=c.as_user(MEMBER))
+    assert r.status_code == 409 and r.json()["code"] == "CONFLICT", r.text
+    check(r, "GET", EXPORT)
+    assert "다시 올리" in r.json()["detail"]
+    assert "REPORT_EXPORTED" not in c.audit_actions()
 
 
 def test_pdf_renders_beyond_the_process_cap_are_rate_limited(app_ctx: Ctx, monkeypatch: pytest.MonkeyPatch) -> None:

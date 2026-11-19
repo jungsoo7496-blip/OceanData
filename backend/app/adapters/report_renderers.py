@@ -13,6 +13,7 @@ import io
 import logging
 import lzma
 import re
+import stat
 import threading
 import unicodedata
 import zipfile
@@ -282,6 +283,38 @@ def _bad_entry_name(name: str) -> bool:
             or any(unicodedata.category(ch) in _NAME_FORBIDDEN for ch in name))
 
 
+# 양식 항목으로 받는 유닉스 파일 종류: 일반 파일·폴더, 그리고 종류를 적지 않은 항목
+# (외부 속성의 위 16비트가 0 — Windows 도구가 만든 zip)
+_ENTRY_KINDS = frozenset({0, stat.S_IFREG, stat.S_IFDIR})
+
+
+def _bad_entry_kind(info: zipfile.ZipInfo) -> bool:
+    """zip 외부 속성의 위 16비트(유닉스 모드)에 적힌 파일 종류가 일반 파일·폴더가 아니면(심볼릭 링크·장치·FIFO·소켓) 참.
+
+    링크 항목은 이름이 패키지 안이어도 링크를 따르는 풀기 도구에서 패키지 밖을 가리킨다('BinData/up' → '../../..').
+    풀기 도구마다 어느 OS 표시(create_system)의 위 16비트를 유닉스 모드로 읽는지 다를 수 있어 OS 표시와 상관없이 본다
+    (통합 검토 REPORTS-1)."""
+    return stat.S_IFMT(info.external_attr >> 16) not in _ENTRY_KINDS
+
+
+# 내보낸 항목의 외부 속성: 일반 파일 rw-r--r--, 폴더 rwxr-xr-x와 MS-DOS 폴더 표시(0x10)
+_EXPORT_FILE_ATTR = (stat.S_IFREG | 0o644) << 16
+_EXPORT_DIR_ATTR = (stat.S_IFDIR | 0o755) << 16 | 0x10
+
+
+def _export_info(info: zipfile.ZipInfo) -> zipfile.ZipInfo:
+    """내보낼 항목의 머리글을 새로 만든다: 양식 항목에서 이름·시각·압축 방식만 옮긴다.
+
+    양식의 ZipInfo를 그대로 쓰면 외부 속성(유닉스 파일 종류·권한)과 추가 필드도 옮겨진다. 유니코드 경로 추가
+    필드(0x7075)는 머리글 이름의 CRC가 맞을 때 이름을 대신한다. zipfile이 이름을 UTF-8로 다시 쓰면 검사 때는 맞지 않던
+    CRC가 맞아, 검사하지 않은 이름('../../x.xml')이 내보낸 파일에 실릴 수 있다 (통합 검토 REPORTS-1)."""
+    out = zipfile.ZipInfo(info.filename, info.date_time)
+    out.compress_type = info.compress_type
+    out.create_system = 3  # 외부 속성의 위 16비트를 유닉스 모드로 읽게
+    out.external_attr = _EXPORT_DIR_ATTR if info.is_dir() else _EXPORT_FILE_ATTR
+    return out
+
+
 def _is_xml(info: zipfile.ZipInfo) -> bool:
     return info.filename.lower().endswith(".xml")
 
@@ -343,6 +376,8 @@ def _template_entries(data: bytes, *, keep: bool) -> Iterator[tuple[zipfile.ZipI
         infos = z.infolist()
         if any(_bad_entry_name(i.filename) for i in infos):
             raise HwpxTemplateError("zip 항목 경로가 올바르지 않습니다")
+        if bad := next((i for i in infos if _bad_entry_kind(i)), None):
+            raise HwpxTemplateError(f"zip 항목 종류가 일반 파일·폴더가 아닙니다(심볼릭 링크 등): {bad.filename[:120]}")
         if not any(_is_xml(i) for i in infos):
             raise HwpxTemplateError("XML 항목이 없습니다")
         if sum(i.file_size for i in infos) > HWPX_MAX_UNPACKED:
@@ -352,7 +387,7 @@ def _template_entries(data: bytes, *, keep: bool) -> Iterator[tuple[zipfile.ZipI
 
 
 def check_hwpx(data: bytes) -> list[str]:
-    """올린 양식을 렌더러가 쓸 수 있는지 본다: zip 항목 이름, 모든 항목 읽기, XML 항목의 UTF-8 (ADR-0018·0066)."""
+    """올린 양식을 렌더러가 쓸 수 있는지 본다: zip 항목 이름·종류, 모든 항목 읽기, XML 항목의 UTF-8 (ADR-0018·0066)."""
     try:
         for _ in _template_entries(data, keep=False):
             pass
@@ -397,10 +432,10 @@ def render_hwpx(template: bytes, doc: dict[str, Any], *, required: tuple[str, ..
 
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w") as dst:
-        # 순서·압축 방식을 그대로 둔다 (첫 항목이 무압축이어야 하는 패키지 형식 대비)
+        # 순서·압축 방식을 그대로 둔다 (첫 항목이 무압축이어야 하는 패키지 형식 대비). 머리글은 새로 만든다
         for info, content in _template_entries(template, keep=True):
             data = PLACEHOLDER.sub(sub, content).encode("utf-8") if isinstance(content, str) else content
-            dst.writestr(info, data, compress_type=info.compress_type)
+            dst.writestr(_export_info(info), data, compress_type=info.compress_type)
     missing = [name for name in required if name not in seen]
     if missing:
         raise HwpxPlaceholderMissing(missing)
