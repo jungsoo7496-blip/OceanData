@@ -40,10 +40,10 @@
 | S27 | medium | `GET /v1/deletion-certificates/{certificate_id}` | missing-audit | 구현 | 고침 |
 | S28 | medium | `POST /v1/assets/{asset_id}/download-url` | missing-audit | 구현 | 고침 |
 | S29 | low | `GET /v1/assets/{asset_id}/clips` | data-semantics | 계약 문구 | 고침 — 계약에 limit·cursor를 더하고 구현 (ADR-0077) |
-| S30 | medium | `POST /v1/reports` | data-semantics | 구현 | 미처리 |
-| S31 | low | `POST /v1/reports` | wrong-status | 구현 | 미처리 |
-| S32 | low | `PUT /v1/report-templates/{template_code}/versions/{version}/hwpx` | wrong-status | 구현 | 미처리 |
-| S33 | low | `PUT /v1/report-templates/{template_code}/versions/{version}/hwpx` | wrong-status | 계약 문구 | 미처리 |
+| S30 | medium | `POST /v1/reports` | data-semantics | 구현 | 고침 (ADR-0079) |
+| S31 | low | `POST /v1/reports` | wrong-status | 구현 | 고침 (ADR-0079) — 회차 시각이 9999-12-31T15:00:00Z 이후인 회차 보고서의 500은 고치지 않음 |
+| S32 | low | `PUT /v1/report-templates/{template_code}/versions/{version}/hwpx` | wrong-status | 구현 | 고침 (ADR-0079) |
+| S33 | low | `PUT /v1/report-templates/{template_code}/versions/{version}/hwpx` | wrong-status | 계약 문구 | 계약 문구 고침 (ADR-0079) |
 | S34 | medium | `POST /v1/reports/{report_id}/versions` | data-semantics | 구현 | 미처리 |
 | S35 | medium | `GET /v1/reports/{report_id}/export` | missing-behavior | 구현 | 미처리 |
 | S36 | low | `GET /v1/reports/{report_id}/export` | wrong-status | 구현 | 미처리 |
@@ -92,6 +92,10 @@
 - **S40 관측 구간 근거의 없는 시각** — 형식은 맞지만 없는 날짜·시각(2월 30일, 25시, 13월, 윤초)을 `from`·`to`에 넣으면 등록·수정 모두 DB 작업 전에 400 `VALIDATION_ERROR`를 반환한다. 없는 장비와 함께 와도 같다. 오류 위치는 같은 항목의 형식 오류와 같다(`/evidence_refs/{i}/OBSERVATION_RANGE/from`).
 - **S41 근거의 다른 기관 ID** — 응답은 없는 ID와 같은 400 `not_found`로 그대로 둔다. 행이 있고 소유 기관이 다른 자산·이벤트·장비이면 대상마다 `CROSS_ORG_ACCESS_ATTEMPT` 한 행(소유 기관·대상 종류·ID·경로)을 요청 트랜잭션과 따로 커밋해 남긴다. 없는 ID와 같은 기관의 삭제된 자산은 감사하지 않는다(ADR-0078).
 - **S42 회차 기록 수정의 `kind: null` 오류 위치** — `/title`이 아니라 `/kind`를 가리킨다. `title`·`kind`·`evidence_refs`의 null은 모두 그 항목 위치와 `not_nullable`로 답한다(회차 수정 `PATCH /v1/sessions/{id}`와 같은 모양).
+- **S30 기간 보고서 관측값 범위** — 기간 보고서의 관측값 지표는 세 가지 관측값만 센다. 그 사업의 회차로 보낸 관측값, 지금 그 사업에 배정된 장비의 관측값, 그 사업 회차의 장비가 그 회차 시간 안에 보낸 관측값(회차 표시 없어도)이다. 같은 기관의 다른 사업 장비나 사업 없는 장비의 관측값은 이 셋에 들지 않으면 값과 원천 목록(`observation_ranges`)에 들어가지 않는다. 그래서 제출본을 보는 관리기관 열람자에게 관계없는 사업의 장비 ID와 값이 보이지 않는다. 그 사업 회차 보고서에 드는 관측값은 같은 기간의 기간 보고서에서 빠지지 않는다. '데이터 없음'과 0건의 구분도 같은 범위로 한다. 이미 저장된 보고서 버전은 그대로다(ADR-0079).
+- **S31 9999년 끝 기간 보고서** — `from`·`to`가 9999-12-31T15:00:00Z 이후(한국 시각으로 쓸 수 없는 시각)이면 500이 아니라 400 `VALIDATION_ERROR`를 반환하고, 넘는 값마다 `/from`·`/to` 오류를 단다. 보고서와 생성 감사는 남기지 않는다. 고치지 않은 것: 회차 시각이 9999-12-31T15:00:00Z 이후인 회차(회차 등록이 그 시각을 받는다)의 회차 보고서는 아직 500이다(ADR-0079 감수할 점).
+- **S32 HWPX 양식 버전 0** — 경로의 `version`이 0이나 음수이면 400 `VALIDATION_ERROR`(`/path/version`)를 반환한다. 어느 버전에도 파일을 붙이지 않고 감사도 남기지 않는다. 전에는 0이 최신 버전에 붙었고 음수는 404였다.
+- **S33 HWPX 양식 크기 초과** — 10MiB를 넘는 본문의 413 `PAYLOAD_TOO_LARGE`를 계약에 적었다. 구현은 그대로다.
 
 ## datasets (버전·배포·카탈로그) — 발견 5건
 
