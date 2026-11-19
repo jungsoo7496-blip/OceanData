@@ -173,7 +173,7 @@ def downgrade(c: Container, db: Session, a: Asset, target: str, handling: str, b
 
 
 def lock_family(db: Session, a: Asset) -> list[Asset]:
-    """자신과 모든 파생본 행을 잠그고 최신 값으로 다시 읽는다 (분류 지정, ADR-0074).
+    """자신과 모든 파생본 행을 잠그고 최신 값으로 다시 읽는다 (분류 지정 ADR-0074, data_role CORE 변경 ADR-0076).
 
     잠금 순서는 원 자산 → 파생본이고, 계보 단계마다 asset_id 순이다. 삭제(retention.with_descendants)·클립 기록·
     검수 결정(deid.decide — 같은 회차 재검수가 여는 다른 원본의 비식별본도 원본부터, ADR-0088)과 같은 순서라 서로

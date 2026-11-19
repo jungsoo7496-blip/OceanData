@@ -130,7 +130,15 @@ def patch_asset(asset_id: str, body: AssetPatch, request: Request, db: Session =
     if not body.model_fields_set - {"reason"}:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "", "code": "min_properties",
                                                         "message": "바꿀 항목이 하나 이상 필요합니다"}])
+    from app.services import sharing
+
     a = load_scoped(db, c, request, Asset, asset_id, p)
+    family: list[Asset] | None = None
+    if body.data_role == "CORE" and a.data_role != "CORE":
+        # 판단하기 전에 자신과 모든 파생본을 원 자산 → 파생본 순으로 잠그고 다시 읽는다 (ADR-0074와 같은 순서).
+        # 잠그지 않으면 파생본을 내리며 그 행부터 잠가 분류 지정·삭제·검수 결정과 교착하고, 그사이 확정된 파생본의
+        # L1 → L2 상향을 못 봐 CORE 원본의 파생본이 L1을 넘은 채 남는다 (통합 검토 ASSETS-1·ASSETS-3, ADR-0076)
+        family = sharing.lock_family(db, a)
     now = c.clock.now()
     old_role = a.data_role
     downgraded: list[tuple[Asset, str, list[str]]] = []  # CORE 변경으로 등급을 내린 자산, 이전 등급, 끊은 권한
@@ -145,9 +153,8 @@ def patch_asset(asset_id: str, body: AssetPatch, request: Request, db: Session =
             raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/reason", "code": "required",
                                                             "message": "data_role을 바꾸려면 사유가 필요합니다"}])
         if body.data_role == "CORE":  # 13번 요구사항 2.2: L1 이하로 내리고 하향 처리 (자신과 파생본)
-            from app.services import sharing
-
-            for x in [a, *sharing.descendants(db, a.asset_id)]:
+            assert family is not None  # noqa: S101 - 위에서 잠갔다 (잠근 뒤에도 CORE가 아니면 여기에 온다)
+            for x in family:
                 if x.sharing_scope not in ("PRIVATE", "PROGRAM_REVIEW"):
                     before = x.sharing_scope
                     revoked = sharing.downgrade(c, db, x, "PROGRAM_REVIEW", "REVOKE_NOW", p.principal_id,
