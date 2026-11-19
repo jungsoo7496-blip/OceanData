@@ -516,7 +516,7 @@ const GET = {
       chain: [{ asset_id: AST_DEID, relation: 'DEID', variant: 'DEID' }, { asset_id: AST_CANDIDATE, relation: 'ORIGINAL', variant: 'ORIGINAL' }],
       processing: { model: { name: 'deid-baseline', version: '0.1.0', sha256: null, license: 'Apache-2.0' }, processed_at: '2026-11-03T12:00:00Z' },
       reviews: [{ review_id: RVW1, reviewer_id: USR_REVIEWER, status: 'PASSED', decided_at: '2026-11-03T13:00:00Z' }], review_result: 'PASSED' }] }),
-  '/v1/deid-reviews': () => ({ items: DEID_REVIEWS }),
+  '/v1/deid-reviews': () => ({ items: DEID_REVIEWS, next_cursor: null }),
   '/v1/deid-quality': () => ({ reviews: 12, reprocess_ratio: 0.083, note: '검수 결과 집계입니다. 적정성 보증이 아닙니다',
     classes: [{ class: 'FACE', detected: 40, missed: 2, miss_rate: 0.05 }, { class: 'LICENSE_PLATE', detected: 9, missed: 0, miss_rate: 0 }] }),
   '/v1/integration-cards': () => ({ items: [{ integration_card_id: id('icd', 1), version: 2, organization_id: ORG_A, device_id: DEV_CAM,
