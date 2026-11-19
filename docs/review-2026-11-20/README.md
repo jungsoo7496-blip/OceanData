@@ -149,6 +149,11 @@
 | VALIDATE-4 | validate_document가 경고 100개 뒤의 ERROR를 잘랐을 때 사전 검증은 valid:true인데, 운영 경로는 그 항목을 거부한다 | 중간 | 확인 | 고침 (이 PR) |
 | VALIDATE-R1 | 계약이 validateContract 판정이 호출 기관의 하위 코드 등록에 달려 있다는 것을 말하지 않는다 | 낮음 | 반박 | 계약은 사전 검증이 보는 규칙·문제 코드를 나열한 적이 없고, 상태·필드·헤더가 바뀌지 않았다. 이벤트 제출도 등록되지 않은 하위 코드를 422로 거부한다 |
 
+- **VALIDATE-1 큰 geometry의 좌표 하나로 메모리 폭증** — **고침** (ADR-0086, `test_contract_validator_cost.py`). 계약 검증기의 oneOf가 맞지 않은 가지의 오류(context)를 모으지 않고, 표준과 같은 오류 하나를 낸다. 좌표 하나가 틀린 2만 좌표 이벤트 항적의 RSS 증가가 475MB에서 2MB로 줄었고, 판정·문제 목록은 같다. 좌표 수 상한(계약 maxItems 또는 서버 상한)은 사람 결정으로 남는다.
+- **VALIDATE-2 이벤트 위치 오류에 location을 되풀이해 검사** — **고침** (ADR-0086, `test_contract_validator_cost.py`). unevaluatedProperties 보정은 표준을 한 번만 돌리고, 위치 재검사는 계약의 location 속성 스키마로만 하며 깊은 복사를 하지 않는다. 같은 문서 CPU 14.6초 → 2.7초(좌표 스키마 적용 13n → 3n번). ADR-0067 결과의 수치도 바로잡았다.
+- **VALIDATE-3 이벤트 확인 표시 거부의 감사 누락** — **고침** (`test_event_verify_denial_audit.py`). 수집기·API 키의 human_verified 403(등록·PATCH)이 PERMISSION_DENIED 감사를 요청과 따로 확정해 남긴다. 응답은 그대로다.
+- **VALIDATE-4 사전 검증이 경고 뒤로 잘린 ERROR를 놓침** — **고침** (ADR-0086, `test_contract_prevalidate_rules.py`·`test_contract_validator_rules.py`). 목록에 ERROR가 없는데 잘렸으면 운영 경로의 ITEM_PROBLEM_LIMIT 목록으로 다시 판정한다(그래도 잘리면 무효). 보여 주는 목록과, 앞 목록만으로 판정이 정해지는 문서의 비용은 그대로다.
+
 ## 범위 메모 분류
 
 각 항목의 범위 메모에 '고치지 않음'으로 적힌 것을 다시 본 결과다. 범위 메모·ADR에 이미 남은 일로 적힌 것은 새 결함이 아니라서 반박으로 두었다.
