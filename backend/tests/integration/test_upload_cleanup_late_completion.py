@@ -1,4 +1,4 @@
-"""통합 검토 UPLOADS-1·UPLOADS-3 (ADR-0084): 503으로 끝난 완료를 저장소가 늦게 마친 경우의 정리, 만료 정리 한 번의 시간.
+"""통합 검토 UPLOADS-1·UPLOADS-3·UPLOADS-4 (ADR-0084): 늦게 끝난 완료의 정리, 만료 정리 한 번의 시간, 취소의 기다림.
 
 UPLOADS-1: 완료 요청의 저장소 완료 호출이 시간 초과로 503이 되면(ADR-0082) 요청 트랜잭션이 되돌려져 업로드 행 잠금이 풀린다.
 저장소는 그 완료를 그 뒤에도 마칠 수 있다. 정리(취소·만료 정리기·자산 삭제)의 완성 객체 확인(HEAD)과 멀티파트 중단 사이에 그
@@ -7,20 +7,28 @@ UPLOADS-1: 완료 요청의 저장소 완료 호출이 시간 초과로 503이 �
 
 UPLOADS-3: 만료 정리기는 후보(최대 100개)를 차례로 정리하는데 시간 한도가 없었다. 응답하지 않는 저장소면 세션마다 저장소 호출
 시간 초과(어댑터 설정으로 약 90초)를 기다리고, 정리하지 못한 세션은 UPLOADING으로 남아(ADR-0065) 다음 주기에도 같은 일을 했다.
-그동안 그 워커는 작업·임대 회수·감시 규칙을 돌리지 못한다. 실제 S3 API(moto 또는 TEST_S3_ENDPOINT), 합성 값.
+그동안 그 워커는 작업·임대 회수·감시 규칙을 돌리지 못한다.
+
+UPLOADS-4: 계약 abortUpload는 '다른 요청이 처리 중인 세션은 409'라 했지만, 취소는 업로드 행을 기다리는 FOR UPDATE로 잠근다
+(ADR-0065 결정 3). 그 요청이 끝나기를 기다렸다가, 세션을 끝냈으면 409이고 되돌려졌으면 이어서 취소해 204다. 계약을 동작에 맞췄다.
+실제 S3 API(moto 또는 TEST_S3_ENDPOINT), 합성 값.
 """
 
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from time import monotonic, sleep
 from typing import Any
 
 import pytest
+import yaml
 from botocore.exceptions import ReadTimeoutError
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.db.models import Asset, DeletionCertificate, Upload
 from app.ports.storage import CompletedPart
+from app.services.contracts import contracts_dir
 from tests.conftest import Ctx
 from tests.contract.openapi_contract import assert_matches_contract as check
 from tests.integration.test_upload_cleanup_storage_errors import (
@@ -179,3 +187,41 @@ def test_sweep_pass_stops_at_its_time_budget_while_storage_hangs(
     assert _sweep(ictx) == 3  # 저장소가 돌아오면 다음 주기가 모두 정리한다
     for created, _, _ in started:
         assert _state(ictx, created) == ("EXPIRED", 0, 0, None)
+
+
+# ---------------------------------------------------------------- UPLOADS-4
+def _blocked_on_a_lock(ictx: Ctx) -> bool:
+    with ictx.c.engine.connect() as conn:
+        return bool(conn.scalar(text("""
+            SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+                AND pid <> pg_backend_pid() AND cardinality(pg_blocking_pids(pid)) > 0)""")))
+
+
+@pytest.mark.parametrize(("holder_ends", "status"), [("rollback", 204), ("finished", 409)])
+def test_cancel_waits_for_a_request_holding_the_session(ictx: Ctx, holder_ends: str, status: int) -> None:
+    """같은 세션을 다른 요청이 쥐고 있으면 취소는 기다린다. 그 요청이 되돌려지면 이어서 취소(204), 세션을 끝냈으면 409다."""
+    description = yaml.safe_load((contracts_dir() / "openapi.yaml").read_text(encoding="utf-8")
+                                 )["paths"]["/v1/uploads/{upload_id}"]["delete"]["description"]
+    assert "다른 요청이 처리 중인 세션은 409" not in description, "계약이 기다리는 취소를 바로 409라고 한다"
+    assert "끝날 때까지 기다린" in description
+
+    created, up, _ = _start(ictx, 6580 + status)
+    with ictx.c.engine.connect() as holder, ThreadPoolExecutor(max_workers=1) as pool:
+        holder.execute(text("SELECT 1 FROM uploads WHERE upload_id = :u FOR UPDATE"), {"u": up.upload_id})
+        cancelling = pool.submit(ictx.client.delete, CANCEL.format(upload_id=up.upload_id), headers=ictx.as_user(102))
+        deadline = monotonic() + 5
+        while not _blocked_on_a_lock(ictx):
+            assert monotonic() < deadline and not cancelling.done(), "취소가 업로드 행 잠금을 기다리지 않았다"
+            sleep(0.02)
+        if holder_ends == "rollback":  # 예: 완료 요청이 503으로 되돌려졌다
+            holder.rollback()
+        else:  # 합성: 그 요청이 세션을 끝내고 확정했다
+            holder.execute(text("UPDATE uploads SET status = 'ABORTED' WHERE upload_id = :u"), {"u": up.upload_id})
+            holder.commit()
+        r = cancelling.result(timeout=10)
+    assert r.status_code == status, r.text
+    check(r, "DELETE", CANCEL)
+    if status == 204:
+        assert _state(ictx, created) == ("ABORTED", 0, 0, None)
+    else:
+        assert r.json()["code"] == "CONFLICT"
