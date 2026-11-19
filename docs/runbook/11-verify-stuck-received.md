@@ -27,7 +27,8 @@
    오류 코드, 없으면 null), `reserved_bytes`(묶인 예약), `malware_scan_required`, `updated_at`(오래된 것부터)을 본다.
    재시도 대기 중이거나 워커가 처리 중인 자산은 목록에 나오지 않는다 — 기다리면 스스로 끝난다.
 2. 원인부터 없앤다.
-   - 검사기: 워커에 검사기를 켠다(`.env`의 `MALWARE_SCANNER`를 바꾸고 `$COMPOSE up -d worker`). 지금 저장소의 어댑터는
+   - 검사기: 워커에 검사기를 켠다(`.env`의 `MALWARE_SCANNER`를 바꾸고 `$COMPOSE up -d worker`. 클립 전용 워커
+     `worker-clips`는 검증 작업을 가져가지 않아 다시 만들지 않아도 된다). 지금 저장소의 어댑터는
      `none`과 시험용 `mock-eicar`(실제 악성코드는 못 찾는다)뿐이다 — 실제 검사기 제품은 결정 대기(ADR-0031, **확인 필요**).
      기관 정책을 끄는 것(`python -m app.cli org-policy <기관> --malware-scan off`, 감사 ORG_POLICY_CHANGED)은 정책 결정이므로
      운영기관·해당 기관과 합의한 뒤에만 한다.

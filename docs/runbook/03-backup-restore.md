@@ -19,6 +19,8 @@
    `BACKUP_DATABASE_URL`은 백업·임시 DB 생성 권한을 갖춘 계정으로 지정한다.
    개발 Compose에서 비우면 `migrate`·`worker`에 `MIGRATION_DATABASE_URL`을 전달한다. 일반 API에는 이 소유자 연결을 넘기지 않는다.
    설정을 바꾸면 `docker compose --env-file .env -f deploy/compose/docker-compose.yml up -d --force-recreate worker`로 반영한다.
+   클립 전용 워커를 쓰면([07](07-queue-stopped.md) 5번) 끝을 `worker worker-clips`로 한다 — 전용 워커도 정기 백업 시점을
+   자기 컨테이너의 `BACKUP_*`로 판단한다(ADR-0069).
 6. 도구 확인: `docker compose --env-file .env -f deploy/compose/docker-compose.yml run --rm migrate pg_dump --version`과
    같은 명령의 `pg_restore --version`이 모두 16인지 확인한다. 컨테이너 밖에서는 `PG_DUMP_BIN`·`PG_RESTORE_BIN`을
    서버와 같은 주버전 도구 경로로 지정한다. T10도 이 설정 경로를 사용한다.
