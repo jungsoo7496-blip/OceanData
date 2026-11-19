@@ -172,9 +172,30 @@ def _unevaluated_properties(validator: Any, unevaluated: Any, instance: Any,
     yield from _STANDARD_UNEVALUATED(validator, unevaluated, instance, {**schema, "allOf": [*members, stub]})
 
 
+def _one_of(validator: Any, one_of: list[Any], instance: Any, schema: dict[str, Any]) -> Iterator[ValidationError]:
+    """oneOf — 판정·오류 자리·메시지는 표준 그대로, 맞지 않은 가지의 오류(context)만 모으지 않는다 (ADR-0086).
+
+    표준은 맞는 가지가 없으면 가지마다의 오류를 모두 모아 오류 하나에 달아 둔다. geometry(Point·LineString·Polygon)에서
+    좌표 하나가 틀린 큰 항적은 Polygon 가지가 좌표마다 오류를 만들어 문서 1MB에 1GB 넘게 썼다. 문제 목록은 오류의
+    자리·키워드·메시지만 쓰므로, 가지가 맞는지는 첫 오류까지만 본다."""
+    subschemas = enumerate(one_of)
+    for index, subschema in subschemas:
+        if next(validator.descend(instance, subschema, schema_path=index), None) is None:
+            first_valid = subschema
+            break
+    else:
+        yield ValidationError(f"{instance!r} is not valid under any of the given schemas")
+        return
+    more_valid = [each for _, each in subschemas if validator.evolve(schema=each).is_valid(instance)]
+    if more_valid:
+        more_valid.append(first_valid)
+        reprs = ", ".join(repr(each) for each in more_valid)
+        yield ValidationError(f"{instance!r} is valid under each of {reprs}")
+
+
 _ContractValidator = validators.extend(
     Draft202012Validator,
-    validators={"unevaluatedProperties": _unevaluated_properties},
+    validators={"unevaluatedProperties": _unevaluated_properties, "oneOf": _one_of},
     type_checker=Draft202012Validator.TYPE_CHECKER.redefine("number", _is_number))
 
 _DATE_TIME = re.compile(
