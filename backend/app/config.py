@@ -123,8 +123,8 @@ class Settings(BaseSettings):
     clip_max_pending_per_org: int = Field(default=3, ge=1)
     # 클립 ffmpeg 시간 한도 = 구간 길이 × 배수, 최솟값 이상·FFMPEG_TIMEOUT_S 이하 (ADR-0069).
     # 넘으면 FAILED(CLIP_TIMEOUT). 배수 4는 개발 PC 실측(합성 4K·스레드 4개에서 구간 1초에 0.86초)의 약 4.6배 여유다.
-    # 운영 하드웨어에서 다시 잰다
-    clip_timeout_factor: float = Field(default=4.0, gt=0)
+    # 운영 하드웨어에서 다시 잰다. inf·nan은 기동 때 막는다(통합 검토 CLIPS-3)
+    clip_timeout_factor: float = Field(default=4.0, gt=0, allow_inf_nan=False)
     clip_timeout_min_s: int = Field(default=120, ge=1)
     worker_resource_classes: CsvList = Field(default_factory=lambda: ["CPU"])
     # 이 워커가 가져갈 작업 유형 (ADR-0069, 예: 클립 전용 워커는 clip_export, 기본 워커는 EXCLUDE에 clip_export).

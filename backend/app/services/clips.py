@@ -160,9 +160,13 @@ def clip_args(s: Any, src: str, out: str, start_s: float, end_s: float) -> list[
 def clip_timeout_s(s: Any, length_s: float) -> int:
     """클립 ffmpeg·ffprobe 시간 한도(초) = 구간 길이 × CLIP_TIMEOUT_FACTOR.
 
-    CLIP_TIMEOUT_MIN_S보다 짧게 하지 않고(프로세스 시작·키프레임부터 디코딩) FFMPEG_TIMEOUT_S를 넘지 않는다."""
-    want = max(int(s.clip_timeout_min_s), math.ceil(float(length_s) * float(s.clip_timeout_factor)))
-    return max(1, min(int(s.ffmpeg_timeout_s), want))
+    CLIP_TIMEOUT_MIN_S보다 짧게 하지 않고(프로세스 시작·키프레임부터 디코딩) FFMPEG_TIMEOUT_S를 넘지 않는다.
+    곱이 전체 한도 이상이면 올림 전에 자른다 — 아주 큰 배수는 곱이 inf로 넘쳐 math.ceil이 OverflowError를 낸다."""
+    cap = int(s.ffmpeg_timeout_s)
+    scaled = float(length_s) * float(s.clip_timeout_factor)
+    if not math.isfinite(scaled) or scaled >= cap:
+        return max(1, cap)
+    return max(1, min(cap, max(int(s.clip_timeout_min_s), math.ceil(scaled))))
 
 
 def _usable(a: Asset | None) -> bool:
