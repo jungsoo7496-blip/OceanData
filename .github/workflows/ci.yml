@@ -43,8 +43,8 @@ jobs:
           docker run -d --name pg -p 5432:5432 -e POSTGRES_USER=marine_owner -e POSTGRES_PASSWORD=ci-owner \
             -e POSTGRES_DB=marine -e APP_DB_PASSWORD=ci-app marine-postgres:ci
           for i in $(seq 1 60); do docker exec pg pg_isready -U marine_owner -d marine && break; sleep 1; done
-      # fonts-nanum: 보고서 PDF 시험이 API 이미지(backend/Dockerfile)와 같은 나눔 글꼴로 렌더하게 (ADR-0018)
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg postgresql-client-16 fonts-nanum
+      # 보고서 PDF(WeasyPrint)용 패키지는 API 이미지(backend/Dockerfile)와 같게: pango·HarfBuzz-Subset·나눔 글꼴 (ADR-0018)
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg postgresql-client-16 libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 fonts-nanum
       - name: 백업 런타임 이미지·PG16 도구 확인
         run: |
           docker build -t marine-api:ci -f backend/Dockerfile .
