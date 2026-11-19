@@ -20,7 +20,7 @@ from sqlalchemy.exc import OperationalError
 
 from app.db.models import Asset, AssetLineage, DeidReview
 from app.domain.ids import new_id
-from app.seed import DEV_A_CAMERA, ORG_A, PRJ_A
+from app.seed import DEV_A_CAMERA, ORG_A, PRJ_A, fid
 from app.services import deid
 from tests.conftest import Ctx
 from tests.integration.test_catalog import _asset
@@ -78,6 +78,58 @@ def test_review_decision_and_classification_take_rows_in_the_same_order(ctx: Ctx
     r = race["response"]
     assert (decided, r.status_code) == ("ok", 200), r.text
     assert _scope(ctx, ids["deid"]) == "PROGRAM_REVIEW"  # 결정 뒤의 상태로 분류 지정이 판단했다
+
+
+def test_session_recheck_and_classification_of_another_original_do_not_deadlock(ctx: Ctx) -> None:
+    """같은 회차의 미탐 결정은 다른 원본 B의 비식별본 B'에 재검수를 연다. B' 행을 잠근 채 B 분류 지정이 들어와 기다리게
+    한 뒤 결정을 끝낸다. 둘 다 성공해야 한다 (전: 결정은 B'를 B보다 먼저 잠그고 재검수 행의 외래 키로 B를 기다리고,
+    분류 지정은 B를 잠근 채 B'를 기다려 교착 → 한쪽이 409 또는 중단, 통합 검토 SHARING-1, ADR-0088)."""
+    from tests.integration.test_deid_recheck import MISSED, REVIEWER, _mk
+
+    with ctx.c.sessionmaker.begin() as db:
+        b_child, b_rid = _mk(db, "PASSED")  # 회차 SES_A의 통과한 비식별본 B'
+        _, a_rid = _mk(db, "ASSIGNED")  # 같은 회차에서 결정할 비식별본 A'
+        b_orig = db.get(DeidReview, b_rid).original_asset_id  # type: ignore[union-attr]
+    main, race = threading.get_ident(), {}
+
+    def classify() -> None:
+        race["response"] = ctx.client.patch(f"/v1/assets/{b_orig}/classification", headers=ctx.as_user(OP),
+                                            json={"basis_ref": "점검-2026-11-20-01", "reason": "민감 해역 확인",
+                                                  "sensitivity_class": "SECURITY"})
+
+    def after_sibling_lock(_conn: Any, _cur: Any, statement: str, params: Any, *_a: Any) -> None:
+        if threading.get_ident() != main or "FOR UPDATE" not in statement or "thread" in race:
+            return
+        if b_child not in (params.values() if isinstance(params, dict) else params):
+            return
+        race["thread"] = t = threading.Thread(target=classify)
+        t.start()
+        deadline = time.monotonic() + 10
+        while t.is_alive() and not _lock_waiters(ctx) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        race["classify_waited"] = t.is_alive() and _lock_waiters(ctx) > 0
+
+    event.listen(ctx.c.engine, "after_cursor_execute", after_sibling_lock)
+    try:
+        with ctx.c.sessionmaker.begin() as db:
+            rv = db.get(DeidReview, a_rid, with_for_update=True)
+            assert rv is not None
+            flagged = deid.decide(ctx.c, db, rv, "MISSED", MISSED["missed"], [], None, {"REVIEWER"},
+                                  fid("usr", REVIEWER))
+        decided = "ok"
+    except OperationalError as exc:  # 교착에서 이쪽이 중단된 경우
+        decided = f"aborted: {exc.orig!r}"
+    finally:
+        event.remove(ctx.c.engine, "after_cursor_execute", after_sibling_lock)
+    assert "thread" in race, "결정이 B' 행을 잠그지 않았다"
+    race["thread"].join(timeout=30)
+    assert race["classify_waited"], "분류 지정이 행 잠금을 기다리지 않았다"
+    r = race["response"]
+    assert (decided, r.status_code) == ("ok", 200), r.text
+    with ctx.c.sessionmaker() as db:  # 재검수는 열렸고 분류도 바뀌었다
+        assert [x.review_id for x in db.execute(select(DeidReview).where(
+            DeidReview.deid_asset_id == b_child, DeidReview.status == "ASSIGNED")).scalars()] == flagged
+        assert db.execute(select(Asset.sensitivity_class).where(Asset.asset_id == b_orig)).scalar_one() == "SECURITY"
 
 
 def _family(ctx: Ctx, n: int, scope: str = "PRIVATE") -> str:

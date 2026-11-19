@@ -203,6 +203,7 @@ def _recheck_session(c: Container, db: Session, rv: DeidReview) -> list[str]:
 
     이미 열린 검수가 있는 비식별본은 새로 만들지 않고 그 검수 ID를 돌려준다. 지금 결정한 비식별본 자신과 이미
     불합격(FAILED)인 비식별본은 옛 PASSED 검수가 남아 있어도 다시 열지 않는다 (계약 점검 S20, ADR-0075).
+    다른 원본의 비식별본도 원본 → 비식별본 순으로 잠근다 — 분류 지정(sharing.lock_family)·삭제와 같은 순서 (ADR-0088).
     """
     if not rv.session_id:
         return []
@@ -210,7 +211,7 @@ def _recheck_session(c: Container, db: Session, rv: DeidReview) -> list[str]:
     others = db.execute(select(DeidReview).where(
         DeidReview.session_id == rv.session_id, DeidReview.review_id != rv.review_id,
         DeidReview.deid_asset_id != rv.deid_asset_id, DeidReview.status == "PASSED")
-        .order_by(DeidReview.deid_asset_id, DeidReview.review_id)).scalars().all()
+        .order_by(DeidReview.original_asset_id, DeidReview.deid_asset_id, DeidReview.review_id)).scalars().all()
     seen: set[str] = set()
     for o in others:
         if o.deid_asset_id in seen:
@@ -219,9 +220,11 @@ def _recheck_session(c: Container, db: Session, rv: DeidReview) -> list[str]:
         if (opened := _open_review(db, o.deid_asset_id)) is not None:  # 결정 중인 다른 검수도 여기서 걸러진다
             out.append(opened)
             continue
-        # 잠근 뒤 다시 본다: 같은 회차의 다른 미탐 결정이 동시에 같은 비식별본을 표시하면 하나만 만든다
+        # 잠근 뒤 다시 본다: 같은 회차의 다른 미탐 결정이 동시에 같은 비식별본을 표시하면 하나만 만든다.
+        # 원본을 먼저 잠근다. 비식별본만 잠그면 새 검수 행의 외래 키(원본 KEY SHARE)를 기다리는 동안, 원본을 잠그고
+        # 비식별본을 기다리는 분류 지정과 교착한다 (통합 검토 SHARING-1)
+        orig = db.get(Asset, o.original_asset_id, with_for_update=True)
         child = db.get(Asset, o.deid_asset_id, with_for_update=True)
-        orig = db.get(Asset, o.original_asset_id)
         if child is None or orig is None or child.review_result == "FAILED":
             continue
         if (opened := _open_review(db, o.deid_asset_id)) is not None:

@@ -176,7 +176,8 @@ def lock_family(db: Session, a: Asset) -> list[Asset]:
     """자신과 모든 파생본 행을 잠그고 최신 값으로 다시 읽는다 (분류 지정, ADR-0074).
 
     잠금 순서는 원 자산 → 파생본이고, 계보 단계마다 asset_id 순이다. 삭제(retention.with_descendants)·클립 기록·
-    검수 결정(deid.decide)과 같은 순서라 서로 교착하지 않는다. 등급과 상관없이 모두 잠근다 — 같은 때 L0·L1에서
+    검수 결정(deid.decide — 같은 회차 재검수가 여는 다른 원본의 비식별본도 원본부터, ADR-0088)과 같은 순서라 서로
+    교착하지 않는다. 등급과 상관없이 모두 잠근다 — 같은 때 L0·L1에서
     L2 이상으로 올리는 신청이 바뀌기 전 분류를 보고 지나가지 않게 한다 (그 신청은 이 잠금을 기다린 뒤 바뀐 분류를 본다).
     """
     db.refresh(a, with_for_update=True)

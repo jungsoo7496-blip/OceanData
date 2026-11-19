@@ -111,7 +111,7 @@ def _missed_in(ctx: Any, db: Any, rid: str) -> list[str]:
 
 
 def test_concurrent_missed_waits_on_child_lock_and_reuses_recheck(ctx) -> None:
-    """같은 회차의 미탐 결정 둘이 겹치면, 뒤 결정은 비식별본 행 잠금에서 기다렸다가 앞 결정이 연 재검수를 돌려준다.
+    """같은 회차의 미탐 결정 둘이 겹치면, 뒤 결정은 원본·비식별본 행 잠금에서 기다렸다가 앞 결정이 연 재검수를 돌려준다.
 
     차례로 결정하면 첫 확인에서 걸러져 '잠근 뒤 다시 확인'을 타지 않는다. 그래서 앞 결정을 커밋하지 않은 채 뒤 결정을
     다른 스레드에서 서비스 함수로 직접 부른다 (ADR-0075 결정 3).
@@ -140,7 +140,7 @@ def test_concurrent_missed_waits_on_child_lock_and_reuses_recheck(ctx) -> None:
         race["waited"] = t.is_alive() and _lock_waiters(ctx) > 0
     t.join(timeout=60)
     assert not t.is_alive() and "error" not in race, race.get("error")
-    assert race["waited"], "뒤 결정이 A 비식별본 행 잠금을 기다리지 않았다"
+    assert race["waited"], "뒤 결정이 A 원본·비식별본 행 잠금을 기다리지 않았다"
     assert race["second"] == [first], "잠금을 기다린 뒤 다시 확인하지 않고 재검수를 또 만들었다"
     rows = _reviews(ctx, a_child)
     assert [(s, rc) for _, s, rc in rows] == [("PASSED", False), ("ASSIGNED", True)]
