@@ -10,6 +10,8 @@ from pydantic import Field, SecretStr, ValidationError, field_validator, model_v
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 CsvList = Annotated[list[str], NoDecode]
+# 요청 본문 한도 기본값 = 웹 프록시(web/nginx.conf `client_max_body_size 20m`, nginx의 m은 1024²)와 같다 (ADR-0068)
+MAX_REQUEST_BODY_BYTES_DEFAULT = 20 * 1024 * 1024
 
 
 class Settings(BaseSettings):
@@ -78,6 +80,9 @@ class Settings(BaseSettings):
     gpu_enabled: bool = False
     processing_steps: CsvList = Field(default_factory=lambda: ["META"])
     report_formats: CsvList = Field(default_factory=list)
+    # 프로세스마다 동시에 만드는 보고서 PDF 수 (ADR-0066). 차면 기다리지 않고 429 RATE_LIMITED + Retry-After.
+    # PDF 렌더는 요청 안에서 CPU를 오래 쓰고(계약 한계 길이의 기록 한 건이 10초대) 그동안 DB 차례(ADR-0062)를 쥔다
+    report_pdf_max_concurrent: int = Field(2, ge=1)
     external_sources: CsvList = Field(default_factory=list)
 
     # 사전 서명 URL 유효시간 (security.md). URL 호스트는 클라이언트가 접근하는 주소여야 한다
@@ -93,6 +98,9 @@ class Settings(BaseSettings):
     default_retention_days: int = 3650
     quarantine_retention_days: int = 30
     rate_limit_per_minute: int = 600
+    # 요청 본문 한도(바이트). 프록시를 거치지 않고 API로 바로 오는 요청에도 적용한다 — 넘으면 413 PAYLOAD_TOO_LARGE.
+    # 기본은 웹 프록시 한도와 같다(오늘 프록시가 받는 요청은 앱도 받는다). 바꿀 때는 프록시 값도 함께 본다 (ADR-0068)
+    max_request_body_bytes: int = Field(MAX_REQUEST_BODY_BYTES_DEFAULT, ge=1)
 
     # 처리 파이프라인 (05번). FFmpeg는 별도 프로세스, 하드웨어 인코더는 GPU_ENABLED일 때만
     ffmpeg_path: str = "ffmpeg"
@@ -113,7 +121,16 @@ class Settings(BaseSettings):
     clip_crf: int = 18  # 낮을수록 고화질·큰 파일 (18 ≈ 눈으로 구별하기 어려운 수준)
     # 기관별 대기·실행 중 클립 작업 한도 — 넘으면 429 (긴 재인코딩으로 한 기관이 공용 작업 큐를 채우지 않게)
     clip_max_pending_per_org: int = Field(default=3, ge=1)
+    # 클립 ffmpeg 시간 한도 = 구간 길이 × 배수, 최솟값 이상·FFMPEG_TIMEOUT_S 이하 (ADR-0069).
+    # 넘으면 FAILED(CLIP_TIMEOUT). 배수 4는 개발 PC 실측(합성 4K·스레드 4개에서 구간 1초에 0.86초)의 약 4.6배 여유다.
+    # 운영 하드웨어에서 다시 잰다
+    clip_timeout_factor: float = Field(default=4.0, gt=0)
+    clip_timeout_min_s: int = Field(default=120, ge=1)
     worker_resource_classes: CsvList = Field(default_factory=lambda: ["CPU"])
+    # 이 워커가 가져갈 작업 유형 (ADR-0069, 예: 클립 전용 워커는 clip_export, 기본 워커는 EXCLUDE에 clip_export).
+    # 비우면 등록된 모든 유형, EXCLUDE는 그중에서 뺀다. 없는 유형 이름·빈 결과면 워커가 기동하지 않는다
+    worker_job_types: CsvList = Field(default_factory=list)
+    worker_exclude_job_types: CsvList = Field(default_factory=list)
     job_lease_reap_interval_s: int = 60
     integrity_sample_size: int = 20
 
@@ -184,7 +201,7 @@ class Settings(BaseSettings):
     # 한 건 전체 기한: 이름 풀기·연결·TLS·요청·응답 헤더까지. 본문은 읽지 않는다 (ADR-0041)
     webhook_timeout_s: float = Field(default=5.0, gt=0)
     webhook_dispatch_interval_s: int = Field(default=10, ge=1)  # 보낼 것이 없을 때 다시 볼 간격 (전용 스레드)
-    # 한 라운드: 구독당 1건, 기관당 WEBHOOK_MAX_PER_ORG건, 모두 WEBHOOK_BATCH_SIZE건까지 동시에 보낸다 (ADR-0041)
+    # 동시에 보내는 건: 구독당 1건, 기관당 WEBHOOK_MAX_PER_ORG건, 모두 WEBHOOK_BATCH_SIZE건까지 (ADR-0041·0070)
     webhook_batch_size: int = Field(default=20, ge=1)
     webhook_max_per_org: int = Field(default=4, ge=1)
     webhook_max_subscriptions_per_org: int = Field(default=10, ge=1)  # 지우지 않은 구독 수 (넘으면 409)
@@ -202,7 +219,7 @@ class Settings(BaseSettings):
     idempotency_retention_s: int = 86400
 
     @field_validator("processing_steps", "report_formats", "external_sources", "idp_mfa_acr_values", "deid_classes",
-                     "worker_resource_classes",
+                     "worker_resource_classes", "worker_job_types", "worker_exclude_job_types",
                      mode="before")
     @classmethod
     def _split_csv(cls, v: object) -> object:
@@ -215,6 +232,12 @@ class Settings(BaseSettings):
     def _empty_is_none(cls, v: object) -> object:
         # .env.example·Compose는 선택 숫자를 빈 값(`KEY=`)으로 둔다 — 빈 값은 '설정 안 함'이다
         return None if isinstance(v, str) and not v.strip() else v
+
+    @field_validator("max_request_body_bytes", mode="before")
+    @classmethod
+    def _empty_is_default(cls, v: object) -> object:
+        # 기본값이 있는 숫자는 빈 값(`KEY=`)이면 기본값을 쓴다 ('설정 안 함'이지 '한도 없음'이 아니다)
+        return MAX_REQUEST_BODY_BYTES_DEFAULT if isinstance(v, str) and not v.strip() else v
 
     @model_validator(mode="after")
     def _warm_not_hot(self) -> Settings:

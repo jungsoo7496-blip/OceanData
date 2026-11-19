@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import DB, client_ip, container, load_scoped, page_params, require
 from app.api.pagination import decode_cursor, encode_cursor, paginate
 from app.container import Container
-from app.db.models import Asset, Device, Event, EventAsset, ObservationMapping, OrgEventCode, TrialSession
+from app.db.models import Asset, Device, Event, EventAsset, ObservationMapping, TrialSession
 from app.domain.ids import has_prefix, new_id
 from app.domain.normalize import TimeRuleError, parse_rfc3339
 from app.domain.principal import Principal
@@ -32,6 +32,7 @@ from app.services.observations import (
     next_mapping_version,
     record_view,
 )
+from app.services.org_event_codes import subcode_registered
 from app.services.tenant import scoped_select
 from app.timefmt import iso
 
@@ -334,14 +335,16 @@ def event_view(db: Session, e: Event) -> dict[str, Any]:
 
 
 def _check_code(db: Session, p: Principal, code: str) -> None:
-    top = code.split(".")[0]
-    cats = {x["code"] for x in contracts.code_table("event-categories")["items"]}
-    if top not in cats:
-        raise ProblemError("RULE_VIOLATION", detail="공통 상위분류에 없는 이벤트 코드입니다",
-                           unmet_conditions=[{"condition": "event_code 상위분류 ∈ event-categories", "actual": top}])
-    if "." in code and db.get(OrgEventCode, (p.organization_id, code)) is None:  # 요구사항 7.5
-        raise ProblemError("RULE_VIOLATION", detail="기관 하위코드가 등록되어 있지 않습니다",
-                           unmet_conditions=[{"condition": "기관 하위코드 등록", "actual": code}])
+    """이벤트 코드표 규칙을 사전 검증과 같은 함수로 보고 422로 거부한다 (ADR-0081)."""
+    problem = contracts.event_code_problem(code, lambda sub: subcode_registered(db, p.organization_id, sub))
+    if problem is None:
+        return
+    unmet: dict[str, str | None]
+    if problem.code == "unknown_event_category":
+        unmet = {"condition": "event_code 상위분류 ∈ event-categories", "actual": code.split(".")[0]}
+    else:  # 요구사항 7.5
+        unmet = {"condition": "기관 하위코드 등록", "actual": code}
+    raise ProblemError("RULE_VIOLATION", detail=problem.message, unmet_conditions=[unmet])
 
 
 def _link_assets(db: Session, c: Container, request: Request, p: Principal, event: Event, ids: list[str]) -> None:
@@ -366,11 +369,9 @@ def create_event(request: Request, body: Any = Body(...), db: Session = DB,
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/source_system_id", "code": "required",
                                                         "message": "수집기는 원천 장비를 밝혀야 합니다"}])
     _check_code(db, p, body["event_code"])
+    _problems_to_400(contracts.time_order_problems("event", body), False)  # 사전 검증과 같은 함수 (ADR-0081)
     started = parse_rfc3339(body["started_at"])
     ended = parse_rfc3339(body["ended_at"]) if body.get("ended_at") else None
-    if ended is not None and ended < started:
-        raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/ended_at", "code": "before_start",
-                                                        "message": "종료가 시작보다 빠릅니다"}])
 
     def create() -> tuple[int, dict[str, Any]]:
         if body.get("source_event_id"):  # 원천 이벤트 ID로 중복 방지 (요구사항 7.4)

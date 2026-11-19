@@ -158,15 +158,65 @@ def decide_request(c: Container, db: Session, req: ShareRequest, approve: bool, 
     return a
 
 
-def downgrade(c: Container, db: Session, a: Asset, target: str, handling: str, by: str, reason: str) -> None:
-    """하향은 언제든 (요구사항 10.3). 기존 이용 권한 처리 선택을 기록하고, 즉시 철회면 13번 B가 권한을 끊는다."""
+def downgrade(c: Container, db: Session, a: Asset, target: str, handling: str, by: str, reason: str) -> list[str]:
+    """하향은 언제든 (요구사항 10.3). 기존 이용 권한 처리 선택을 기록하고, 즉시 철회면 13번 B가 권한을 끊는다.
+
+    끊은 이용 권한 ID를 돌려준다 — 철회 감사를 남기는 호출자가 쓴다
+    (분류 지정 ADR-0074, data_role CORE 변경 ADR-0076)."""
     now = c.clock.now()
     a.sharing_scope, a.updated_at = target, now
     try:
         from app.services.datasets import on_downgrade
     except ImportError:
-        return
-    on_downgrade(c, db, a, handling, by, reason)
+        return []
+    return on_downgrade(c, db, a, handling, by, reason)
+
+
+def lock_family(db: Session, a: Asset) -> list[Asset]:
+    """자신과 모든 파생본 행을 잠그고 최신 값으로 다시 읽는다 (분류 지정, ADR-0074).
+
+    잠금 순서는 원 자산 → 파생본이고, 계보 단계마다 asset_id 순이다. 삭제(retention.with_descendants)·클립 기록·
+    검수 결정(deid.decide)과 같은 순서라 서로 교착하지 않는다. 등급과 상관없이 모두 잠근다 — 같은 때 L0·L1에서
+    L2 이상으로 올리는 신청이 바뀌기 전 분류를 보고 지나가지 않게 한다 (그 신청은 이 잠금을 기다린 뒤 바뀐 분류를 본다).
+    """
+    db.refresh(a, with_for_update=True)
+    family, seen, frontier = [a], {a.asset_id}, [a.asset_id]
+    while frontier:
+        kids = sorted(set(db.execute(select(AssetLineage.child_asset_id)
+                                     .where(AssetLineage.parent_asset_id.in_(frontier))).scalars()) - seen)
+        if not kids:
+            break
+        seen |= set(kids)
+        family += list(db.execute(select(Asset).where(Asset.asset_id.in_(kids)).order_by(Asset.asset_id)
+                                  .with_for_update().execution_options(populate_existing=True)).scalars())
+        frontier = kids
+    return family
+
+
+def shared_facts(db: Session, family: list[Asset], now: datetime) -> dict[str, rules.Facts]:
+    """L2 이상인 자산의 사실. L0·L1은 조건이 승인뿐이라 분류로 내릴 일이 없어 모으지 않는다 (scope_after_change)."""
+    return {x.asset_id: facts_for(db, x, now) for x in family if rules.LEVEL[x.sharing_scope] >= 2}
+
+
+def lower_after_classification(c: Container, db: Session, before: dict[str, rules.Facts], family: list[Asset],
+                               by: str, reason: str, now: datetime) -> list[dict[str, Any]]:
+    """분류 지정 뒤 자신·파생본의 등급을 다시 본다 (요구사항 3.6·4.6, domain.md 3장 상속, ADR-0074).
+
+    before는 바꾸기 전에 모은 L2 이상 자산의 사실이다(shared_facts). 분류 조건(sensitivity_class·privacy_status)을
+    못 맞추거나 이번 변경으로 다른 조건을 새로 못 맞추게 된 자산은 조건을 충족하는 가장 높은 등급으로 내리고,
+    그 자산이 든 데이터셋 버전의 이용 권한은 즉시 철회한다 (data_role CORE 변경과 같은 처리).
+    내린 자산마다 끊은 권한 ID를 함께 돌려준다.
+    """
+    lowered: list[dict[str, Any]] = []
+    for x in family:
+        if x.asset_id not in before:
+            continue
+        target = rules.scope_after_change(x.sharing_scope, before[x.asset_id], facts_for(db, x, now))
+        if rules.is_downgrade(x.sharing_scope, target):
+            item: dict[str, Any] = {"asset_id": x.asset_id, "from": x.sharing_scope, "to": target}
+            item["revoked_grant_ids"] = downgrade(c, db, x, target, "REVOKE_NOW", by, f"분류 변경: {reason}")
+            lowered.append(item)
+    return lowered
 
 
 # ------------------------------------------------------------------ 공유 후보·심사 흐름 (요구사항 1, 2, 4)
@@ -202,6 +252,11 @@ ACTIONS = {
 }
 
 
+def action_applies(action: str, current: str) -> bool:
+    """RESUBMIT는 반려된 것의 재신청(REJECTED → CANDIDATE)만이다. NONE → CANDIDATE는 후보 지정(mark_candidates)으로."""
+    return action != "RESUBMIT" or current == "REJECTED"
+
+
 def review(c: Container, db: Session, a: Asset, action: str, roles: set[str], actor: str, reason: str | None,
            legal_basis_ref: str | None, handling: str | None) -> list[str]:
     """원본 단위 심사 전이 (domain.md 5장 share_status 표). 바뀐 파생본 ID 목록을 돌려준다."""
@@ -209,7 +264,12 @@ def review(c: Container, db: Session, a: Asset, action: str, roles: set[str], ac
     if a.variant != "ORIGINAL":
         raise RuleViolation("공유 심사는 원본 단위로 합니다", [UnmetCondition("variant=ORIGINAL", a.variant)])
     target = ACTIONS[action]
+    if not action_applies(action, a.share_status):
+        raise states.InvalidStateTransition("share_status", a.share_status, target, ",".join(sorted(roles)))
     a_status = states.transition("share_status", a.share_status, target, roles)
+    if target == "CANDIDATE" and a.data_role != "BYPRODUCT":  # 후보는 BYPRODUCT 원본만 (요구사항 1.1, domain.md 5장)
+        raise RuleViolation("공유 후보는 data_role=BYPRODUCT인 원본만입니다",
+                            [UnmetCondition("data_role=BYPRODUCT", a.data_role)])
     if target == "PROCESSING" and not legal_basis_ref:
         raise RuleViolation("법률 검토 통과에는 legal_basis_ref가 필요합니다",
                             [UnmetCondition("legal_basis_ref 기록", None)])

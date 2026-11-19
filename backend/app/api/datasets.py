@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from datetime import date
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import DB, client_ip, container, require
+from app.api.deps import DB, client_ip, container, page_params, require
+from app.api.pagination import decode_cursor, encode_cursor
 from app.container import Container
 from app.db.models import (
     AccessDecision,
@@ -41,6 +43,22 @@ def _consumer(p: Principal) -> bool:
 
 def _versions_with_org(org: str) -> Any:
     return select(DatasetVersion.dataset_id).where(DatasetVersion.provider_organization_ids.any(org))  # type: ignore[arg-type]
+
+
+def _not_found(db: Session, c: Container, request: Request, p: Principal, model: type[Grant] | type[AccessRequest],
+               ident: str) -> ProblemError:
+    """역할별 조회(_requests_for·_grants_for)에서 빠진 행. 다른 기관 행이면 교차 기관 시도로 감사한다.
+
+    load_scoped와 같은 기록이다 (security.md, 02번 요구사항 2.2). 행의 기관은 이용기관(organization_id)이고,
+    같은 기관인데 역할 범위 밖이면 교차 기관이 아니다(tenant.get_scoped와 같은 규칙). 응답은 없는 행과 같은
+    404이고, 감사는 되돌려지는 요청 트랜잭션과 따로 확정한다 (ADR-0053)."""
+    pk = model.__mapper__.primary_key[0]
+    owner = db.execute(select(model.organization_id).where(pk == ident)).scalar_one_or_none()
+    if owner is not None and owner != p.organization_id:
+        c.audit.record("CROSS_ORG_ACCESS_ATTEMPT", result="DENIED", principal=p, organization_id=owner,
+                       target_type=model.__name__, target_id=ident, source_ip=client_ip(request),
+                       details={"path": request.url.path})
+    return ProblemError("NOT_FOUND")
 
 
 def _load_dataset(db: Session, p: Principal, dataset_id: str) -> Dataset:
@@ -88,21 +106,39 @@ def create_dataset(body: DatasetCreate, request: Request, db: Session = DB,
     return datasets.dataset_view(db, ds, [])
 
 
+def _dataset_page(db: Session, stmt: Any, consumer: bool, limit: int,
+                  cursor: str | None) -> tuple[list[tuple[Dataset, list[DatasetVersion]]], str | None]:
+    """dataset_id 순으로 한 쪽 (api-conventions.md 커서). 커서는 마지막으로 돌려준 데이터셋 ID다.
+
+    이용기관에게 보이는 버전(게시·L3 이상·READY)은 visible_versions가 파이썬에서 고르므로, 보이는 버전이 없는
+    데이터셋은 건너뛰며 쪽이 찰 때까지 limit+1개씩 더 읽는다 — 쪽이 짧거나 다음 쪽이 비지 않게."""
+    after = decode_cursor(cursor) if cursor else None
+    out: list[tuple[Dataset, list[DatasetVersion]]] = []
+    while True:
+        q = stmt if after is None else stmt.where(Dataset.dataset_id > after)
+        rows = list(db.execute(q.order_by(Dataset.dataset_id).limit(limit + 1)).scalars())
+        for ds in rows:
+            vs = datasets.visible_versions(db, ds, consumer=consumer)
+            if consumer and not vs:
+                continue
+            if len(out) == limit:  # 다음 쪽에 보일 것이 있다
+                return out, encode_cursor(out[-1][0].dataset_id)
+            out.append((ds, vs))
+        if len(rows) <= limit:
+            return out, None
+        after = rows[-1].dataset_id
+
+
 @router.get("/v1/datasets")
 def list_datasets(db: Session = DB, c: Container = Depends(container),
-                  p: Principal = Depends(require("dataset:read"))) -> dict:
-    stmt = select(Dataset).order_by(Dataset.dataset_id)
+                  p: Principal = Depends(require("dataset:read")), page: dict = Depends(page_params)) -> dict:
+    stmt = select(Dataset)
     if _consumer(p):
         stmt = stmt.where(Dataset.published.is_(True))
     elif not _operator(p):
         stmt = stmt.where(Dataset.dataset_id.in_(_versions_with_org(p.organization_id)))
-    out = []
-    for ds in db.execute(stmt).scalars():
-        vs = datasets.visible_versions(db, ds, consumer=_consumer(p))
-        if _consumer(p) and not vs:
-            continue
-        out.append(_with_samples(c, datasets.dataset_view(db, ds, vs), vs))
-    return {"items": out, "next_cursor": None}
+    rows, nxt = _dataset_page(db, stmt, _consumer(p), page["limit"], page["cursor"])
+    return {"items": [_with_samples(c, datasets.dataset_view(db, ds, vs), vs) for ds, vs in rows], "next_cursor": nxt}
 
 
 @router.get("/v1/datasets/{dataset_id}")
@@ -111,17 +147,38 @@ def get_dataset(dataset_id: str, db: Session = DB, c: Container = Depends(contai
     return _view(db, c, p, _load_dataset(db, p, dataset_id))
 
 
+ASSET_ID = r"^ast_[0-9A-HJKMNP-TV-Z]{26}$"  # common.schema.json#/$defs/asset_id
+MAX_ITEM_ERRORS = 100
+
+
 class VersionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
-    item_asset_ids: list[str] = Field(min_length=1, max_length=20000)
+    item_asset_ids: list[Annotated[str, Field(pattern=ASSET_ID)]] = Field(min_length=1, max_length=20000)
     data_card: dict[str, Any]
+
+
+def _duplicate_items(ids: list[str]) -> list[dict[str, str]]:
+    """계약의 uniqueItems: 앞에서 이미 나온 ID 자리마다 오류 하나 (앞의 MAX_ITEM_ERRORS개까지)."""
+    seen: set[str] = set()
+    out: list[dict[str, str]] = []
+    for i, x in enumerate(ids):
+        if x in seen:
+            out.append({"pointer": f"/item_asset_ids/{i}", "code": "unique", "message": "자산 ID가 중복됐습니다"})
+            if len(out) == MAX_ITEM_ERRORS:
+                break
+        seen.add(x)
+    return out
 
 
 @router.post("/v1/datasets/{dataset_id}/versions", status_code=201)
 def create_version(dataset_id: str, body: VersionCreate, request: Request, db: Session = DB,
                    c: Container = Depends(container), p: Principal = Depends(require("dataset:write")),
                    idempotency_key: str | None = Header(default=None)) -> JSONResponse:
+    dup = _duplicate_items(body.item_asset_ids)
+    if dup:  # 조용히 합치지 않는다. 멱등 기록을 남기기 전에 거부한다
+        raise ProblemError("VALIDATION_ERROR", errors=dup)
+
     def create() -> tuple[int, dict]:
         ds = db.get(Dataset, dataset_id, with_for_update=True)
         if ds is None:
@@ -129,7 +186,7 @@ def create_version(dataset_id: str, body: VersionCreate, request: Request, db: S
         if db.execute(select(DatasetVersion).where(DatasetVersion.dataset_id == ds.dataset_id,
                                                    DatasetVersion.version == body.version)).scalar() is not None:
             raise ProblemError("CONFLICT", detail="같은 버전이 이미 있습니다 (버전은 바꿀 수 없고 새 번호로 만든다)")
-        ids = sorted(set(body.item_asset_ids))
+        ids = sorted(body.item_asset_ids)  # 중복은 위에서 400
         if len(ids) > c.settings.dataset_sync_max_items:  # 큰 버전은 작업 큐에서 (13번 작업 32)
             bv, job_id = datasets.start_build(c, db, ds, body.version, ids, body.data_card, p.principal_id)
             c.audit.record("DATASET_VERSION_BUILD_STARTED", principal=p, target_type="DatasetVersion",
@@ -194,6 +251,19 @@ class Period(BaseModel):
     start_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     end_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
 
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def _calendar_date(cls, value: str, info: ValidationInfo) -> str:
+        """형식만 맞고 달력에 없는 날짜(2월 30일·13월)는 400 (계약 format: date). 문자열 그대로 두어 멱등 지문을
+        바꾸지 않는다. 이용 기간 끝은 끝 날짜 다음 날 0시라 date.max는 끝 날짜가 될 수 없다 (계약 점검 S07)."""
+        try:
+            day = date.fromisoformat(value)
+        except ValueError:
+            raise ValueError("달력에 있는 날짜여야 합니다") from None
+        if info.field_name == "end_date" and day == date.max:
+            raise ValueError("끝 날짜는 9999-12-30까지입니다 (이용 기간은 끝 날짜 다음 날 0시에 끝납니다)")
+        return value
+
 
 class AccessCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -257,7 +327,7 @@ def decide_access_request(access_request_id: str, body: Decision, request: Reque
     req = db.execute(_requests_for(db, p).where(AccessRequest.access_request_id == access_request_id)
                      .with_for_update()).scalar_one_or_none()
     if req is None:
-        raise ProblemError("NOT_FOUND")
+        raise _not_found(db, c, request, p, AccessRequest, access_request_id)
     v = db.get(DatasetVersion, req.dataset_version_id)
     assert v is not None  # noqa: S101 - FK
     try:
@@ -311,7 +381,7 @@ def revoke_grant(grant_id: str, body: Revoke, request: Request, db: Session = DB
                  c: Container = Depends(container), p: Principal = Depends(require("grant:revoke"))) -> dict:
     g = db.execute(_grants_for(p).where(Grant.grant_id == grant_id).with_for_update()).scalar_one_or_none()
     if g is None:
-        raise ProblemError("NOT_FOUND")
+        raise _not_found(db, c, request, p, Grant, grant_id)
     datasets.revoke(c, db, g, set(p.roles), p.principal_id, body.reason)
     c.audit.record("GRANT_REVOKED", principal=p, organization_id=g.organization_id, target_type="Grant",
                    target_id=g.grant_id, reason=body.reason, source_ip=client_ip(request))
@@ -324,7 +394,7 @@ def confirm_destruction(grant_id: str, request: Request, db: Session = DB,
                         p: Principal = Depends(require("grant:confirm_destruction"))) -> dict:
     g = db.execute(_grants_for(p).where(Grant.grant_id == grant_id).with_for_update()).scalar_one_or_none()
     if g is None:
-        raise ProblemError("NOT_FOUND")
+        raise _not_found(db, c, request, p, Grant, grant_id)
     if g.status not in ("REVOKED", "EXPIRED") or g.destruction_confirmed_at is not None:
         raise ProblemError("CONFLICT", detail="철회·만료된 권한에 한 번만 제출합니다")
     g.destruction_confirmed_at = c.clock.now()
@@ -345,7 +415,7 @@ def create_distribution(body: DistributionCreate, request: Request, db: Session 
                         p: Principal = Depends(require("distribution:create"))) -> dict:
     g = db.execute(_grants_for(p).where(Grant.grant_id == body.grant_id)).scalar_one_or_none()
     if g is None:
-        raise ProblemError("NOT_FOUND")
+        raise _not_found(db, c, request, p, Grant, body.grant_id)
     try:
         out = datasets.distribute(c, db, g, p.principal_id, body.paths)
     except datasets.GrantInactive as exc:

@@ -104,7 +104,7 @@ export function SharingConsole() {
     queryKey: ['share-queue'],
     queryFn: async () => (await Promise.all(statuses.map((s) => api<Page<Asset & { share_status: string; organization_id?: string }>>(`/v1/assets?share_status=${s}&limit=200`)))).flatMap((p) => p.items),
   })
-  const sets = useQuery({ queryKey: ['datasets'], queryFn: () => api<{ items: DatasetT[] }>('/v1/datasets') })
+  const sets = useQuery({ queryKey: ['datasets'], queryFn: () => api<{ items: DatasetT[] }>('/v1/datasets?limit=500') })
   const requests = useQuery({ queryKey: ['access-requests'], queryFn: () => api<{ items: AccessReq[] }>('/v1/access-requests') })
   const refresh = () => ['share-queue', 'datasets', 'access-requests'].forEach((k) => void qc.invalidateQueries({ queryKey: [k] }))
   const act = useMutation({
@@ -223,7 +223,7 @@ function LineageModal({ target, onClose }: { target: { ds: string; vid: string }
 export function Catalog() {
   const qc = useQueryClient()
   const fail = useFail()
-  const sets = useQuery({ queryKey: ['datasets'], queryFn: () => api<{ items: DatasetT[] }>('/v1/datasets') })
+  const sets = useQuery({ queryKey: ['datasets'], queryFn: () => api<{ items: DatasetT[] }>('/v1/datasets?limit=500') })
   const reqs = useQuery({ queryKey: ['access-requests'], queryFn: () => api<{ items: AccessReq[] }>('/v1/access-requests') })
   const grants = useQuery({ queryKey: ['grants'], queryFn: () => api<{ items: GrantT[] }>('/v1/grants') })
   const [target, setTarget] = useState<{ ds: DatasetT; vid: string } | null>(null)

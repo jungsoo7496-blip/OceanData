@@ -47,7 +47,9 @@ def test_large_dataset_version_builds_in_queue(ictx) -> None:
         check(r, "GET", "/v1/datasets/{dataset_id}")
         assert r.json()["versions"][0]["status"] == "BUILDING"
         assert ctx.client.post(f"/v1/datasets/{ds}/publish", headers=ctx.as_user(OP)).status_code == 422
-        assert ctx.client.get(f"{path}/{vid}/lineage", headers=ctx.as_user(OP)).status_code == 409
+        r = ctx.client.get(f"{path}/{vid}/lineage", headers=ctx.as_user(OP))
+        check(r, "GET", "/v1/datasets/{dataset_id}/versions/{dataset_version_id}/lineage")
+        assert r.status_code == 409
 
         # 작업 큐 → READY: 사본·매니페스트·sha256
         assert _run_build_jobs(ctx) == ["READY"]

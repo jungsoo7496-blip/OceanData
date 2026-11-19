@@ -913,7 +913,7 @@ class Report(Base):
     organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.organization_id"), index=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.project_id"), index=True)
     session_id: Mapped[str | None] = mapped_column(ForeignKey("sessions.session_id"))
-    period_from: Mapped[datetime | None] = mapped_column(TS)
+    period_from: Mapped[datetime | None] = mapped_column(TS)  # 최신 버전의 기간. 버전마다의 기간은 ReportVersion
     period_to: Mapped[datetime | None] = mapped_column(TS)
     title: Mapped[str] = mapped_column(String(200))
     template_code: Mapped[str] = mapped_column(String(60))
@@ -932,6 +932,9 @@ class ReportVersion(Base):
     status: Mapped[str] = mapped_column(String(12))
     generated_at: Mapped[datetime] = mapped_column(TS)
     data_as_of: Mapped[datetime] = mapped_column(TS)
+    # 이 버전을 만들 때의 데이터 기간. 새 버전이 앞 버전의 기간을 바꾸지 않게 버전마다 둔다 (ADR-0080)
+    period_from: Mapped[datetime | None] = mapped_column(TS)
+    period_to: Mapped[datetime | None] = mapped_column(TS)
     variables: Mapped[dict[str, Any]] = mapped_column(JSONB)
     fields: Mapped[list[Any]] = mapped_column(JSONB)
     metrics: Mapped[list[Any]] = mapped_column(JSONB)

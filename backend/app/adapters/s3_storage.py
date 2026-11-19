@@ -11,9 +11,11 @@ from botocore.client import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.config import Settings
-from app.ports.storage import CompletedPart, ObjectInfo
+from app.ports.storage import CompletedPart, ObjectInfo, PartsRejected
 
 log = logging.getLogger(__name__)
+# CompleteMultipartUpload에서 파트 목록에 대한 저장소의 판정인 S3 오류 코드. 그 밖의 오류는 장애로 올린다 (ADR-0082)
+PART_LIST_ERRORS = frozenset({"InvalidPart", "InvalidPartOrder", "EntityTooSmall", "NoSuchUpload"})
 
 
 class ChunkReader(io.RawIOBase):
@@ -202,13 +204,24 @@ class S3Storage:
 
     def complete_multipart_upload(self, bucket: str, key: str, upload_id: str,
                                   parts: list[CompletedPart]) -> None:
-        self.client.complete_multipart_upload(  # type: ignore[attr-defined]
-            Bucket=bucket, Key=key, UploadId=upload_id,
-            MultipartUpload={"Parts": [{"PartNumber": p.part_number, "ETag": p.etag}
-                                       for p in sorted(parts, key=lambda p: p.part_number)]},
-        )
+        """파트 목록 거부(PART_LIST_ERRORS)만 PartsRejected로 바꾼다. 연결 실패·시간 초과·다른 S3 오류는 그대로다."""
+        try:
+            self.client.complete_multipart_upload(  # type: ignore[attr-defined]
+                Bucket=bucket, Key=key, UploadId=upload_id,
+                MultipartUpload={"Parts": [{"PartNumber": p.part_number, "ETag": p.etag}
+                                           for p in sorted(parts, key=lambda p: p.part_number)]},
+            )
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code in PART_LIST_ERRORS:
+                raise PartsRejected(code) from exc
+            raise
 
     def abort_multipart_upload(self, bucket: str, key: str, upload_id: str) -> None:
+        """NoSuchUpload(이미 중단·완료된 멀티파트)만 성공으로 본다. 그 밖의 오류는 그대로 올린다 (ADR-0065).
+
+        완료된 멀티파트를 중단하면 저장소에 따라 NoSuchUpload이거나 성공(SeaweedFS 3.80은 204, ADR-0046)이다 —
+        어느 쪽이든 완성 객체는 남으므로 호출자가 head_object로 확인한다."""
         try:
             self.client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)  # type: ignore[attr-defined]
         except ClientError as exc:

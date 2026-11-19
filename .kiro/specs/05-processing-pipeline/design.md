@@ -5,6 +5,9 @@
 - `job_policies`: 작업 유형별 우선순위·자원 클래스(CPU/GPU)·GPU 없을 때(CPU 실행/WAIT)·최대 시도·임대 시간. 기본 integrity_verify 100 > deid 90 > media_probe 85 > make_proxy 80 > make_thumbnail 75 > tag 60 > embed 50 > reprocess 40.
 - 워커는 `WORKER_RESOURCE_CLASSES`(기본 CPU)로 가져갈 작업을 고른다. 실패는 15초×2^(n−1) 백오프(최대 1시간), 최대 시도 후 FAILED + on_exhausted(자산 FAILED, 실패 직전 단계 기록).
 - 다른 스펙은 `app.workers.main.register(job_type, fn, on_exhausted)`로 작업 유형을 더한다.
+- 워커가 가져갈 작업 유형은 `WORKER_JOB_TYPES`(비우면 모든 유형)·`WORKER_EXCLUDE_JOB_TYPES`로 나눌 수 있다 — 클립 전용 워커(Compose
+  `worker-clips`, 프로필 clip-worker). `register(..., renew_lease=True)`인 유형(지금은 clip_export)은 도는 동안 워커가 임대의 1/3마다
+  임대를 다시 걸어, 임대보다 오래 걸려도 다른 워커가 회수해 두 번 돌리지 않는다 (ADR-0069).
 
 ## 흐름
 ```

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Float, column, exists, func, literal, select
@@ -13,11 +14,12 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from app.api.deps import DB, client_ip, container, load_scoped, page_params, require
-from app.api.pagination import paginate
+from app.api.pagination import decode_cursor, encode_cursor, paginate
 from app.container import Container
-from app.db.models import Asset, TrialSession
+from app.db.models import Asset, Grant, TrialSession
 from app.domain import states
-from app.domain.normalize import generalize_location
+from app.domain.ids import has_prefix
+from app.domain.normalize import generalize_location, parse_rfc3339
 from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services.external import public_env
@@ -130,8 +132,14 @@ def patch_asset(asset_id: str, body: AssetPatch, request: Request, db: Session =
                                                         "message": "바꿀 항목이 하나 이상 필요합니다"}])
     a = load_scoped(db, c, request, Asset, asset_id, p)
     now = c.clock.now()
+    old_role = a.data_role
+    downgraded: list[tuple[Asset, str, list[str]]] = []  # CORE 변경으로 등급을 내린 자산, 이전 등급, 끊은 권한
     if body.data_role is not None and body.data_role != a.data_role:
         if not p.has_role("ORG_ADMIN"):
+            # 권한 거부 감사 (security.md). 요청이 되돌아가도 남게 따로 커밋한다 — require()의 거부와 같다
+            c.audit.record("PERMISSION_DENIED", result="DENIED", principal=p, organization_id=a.organization_id,
+                           target_type="Asset", target_id=a.asset_id, source_ip=client_ip(request),
+                           details={"action": "asset:data_role", "from": a.data_role, "to": body.data_role})
             raise ProblemError("FORBIDDEN", detail="data_role 변경은 ORG_ADMIN만 할 수 있습니다")
         if not body.reason:
             raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/reason", "code": "required",
@@ -141,13 +149,12 @@ def patch_asset(asset_id: str, body: AssetPatch, request: Request, db: Session =
 
             for x in [a, *sharing.descendants(db, a.asset_id)]:
                 if x.sharing_scope not in ("PRIVATE", "PROGRAM_REVIEW"):
-                    sharing.downgrade(c, db, x, "PROGRAM_REVIEW", "REVOKE_NOW", p.principal_id,
-                                      f"data_role CORE 변경: {body.reason}")
+                    before = x.sharing_scope
+                    revoked = sharing.downgrade(c, db, x, "PROGRAM_REVIEW", "REVOKE_NOW", p.principal_id,
+                                                f"data_role CORE 변경: {body.reason}")
+                    downgraded.append((x, before, revoked))
                 if x.share_status != "NONE" and x is a:
                     x.share_status = states.transition("share_status", x.share_status, "NONE", p.roles)
-        c.audit.record("DATA_ROLE_CHANGED", principal=p, organization_id=a.organization_id, target_type="Asset",
-                       target_id=a.asset_id, reason=body.reason, source_ip=client_ip(request),
-                       details={"from": a.data_role, "to": body.data_role})
         a.data_role = body.data_role
     if body.location_precision is not None:
         a.location_precision = body.location_precision if a.location else None
@@ -171,7 +178,33 @@ def patch_asset(asset_id: str, body: AssetPatch, request: Request, db: Session =
             raise ProblemError("CONFLICT", detail="등록된 자산의 회차는 바꿀 수 없습니다")
     a.updated_at = now
     db.flush()
+    if a.data_role != old_role:
+        _audit_reclassified(c, db, request, p, a, old_role, body.reason, downgraded)
     return asset_views(db, [a], p)[0]
+
+
+def _audit_reclassified(c: Container, db: Session, request: Request, p: Principal, a: Asset, old_role: str,
+                        reason: str | None, downgraded: list[tuple[Asset, str, list[str]]]) -> None:
+    """data_role 변경과 그에 따른 공유 등급 하향·이용 권한 철회 감사 (security.md, 13번 요구사항 2.2·10.3).
+
+    모든 검사와 flush를 통과한 뒤 요청 트랜잭션에 쓴다. 같은 요청의 회차 지정 등이 실패해 변경이 되돌아가면
+    감사도 남지 않는다 (ADR-0053, ADR-0076)."""
+    conn, ip = db.connection(), client_ip(request)
+    c.audit.record("DATA_ROLE_CHANGED", principal=p, organization_id=a.organization_id, target_type="Asset",
+                   target_id=a.asset_id, reason=reason, source_ip=ip, details={"from": old_role, "to": a.data_role},
+                   connection=conn)
+    for x, before, revoked in downgraded:
+        c.audit.record("SHARE_SCOPE_DOWNGRADED", principal=p, organization_id=x.organization_id,
+                       target_type="Asset", target_id=x.asset_id, reason=reason, source_ip=ip,
+                       details={"from": before, "to": x.sharing_scope, "existing_grant_handling": "REVOKE_NOW",
+                                "cause": "DATA_ROLE_CHANGED", "origin_asset_id": a.asset_id,
+                                "revoked_grant_ids": revoked}, connection=conn)
+        for grant_id in revoked:  # 수동 철회(POST /v1/grants/{id}/revoke)와 같은 행 — 대상 기관은 이용 기관
+            g = db.get(Grant, grant_id)
+            assert g is not None  # noqa: S101 - 방금 철회한 행
+            c.audit.record("GRANT_REVOKED", principal=p, organization_id=g.organization_id, target_type="Grant",
+                           target_id=g.grant_id, reason=reason, source_ip=ip,
+                           details={"cause": "SHARE_SCOPE_DOWNGRADED", "asset_id": x.asset_id}, connection=conn)
 
 
 @router.get("/v1/assets/{asset_id}/receipt")
@@ -201,6 +234,9 @@ def reprocess_asset(asset_id: str, body: ReprocessRequest, request: Request, db:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/steps", "code": "unique",
                                                         "message": "단계가 중복되었습니다"}])
     a = load_scoped(db, c, request, Asset, asset_id, p)
+    # 겹친 재처리·검증이 끝난 뒤의 상태로 판단한다. 읽어 둔 FAILED로 판단하면 그사이 등록된 자산을 VALIDATING으로
+    # 덮어쓰고 검증을 또 넣는다 — 그 검증은 무결성 로그 고유키에 걸려 FAILED로 끝난다 (ADR-0076)
+    db.refresh(a, with_for_update=True)
     sensor = body.steps == ["SENSOR_PARSE"]
     if "SENSOR_PARSE" in body.steps and not sensor:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/steps", "code": "mixed",
@@ -224,8 +260,16 @@ def reprocess_asset(asset_id: str, body: ReprocessRequest, request: Request, db:
     for x in with_descendants(db, [a]):
         x.last_reprocessed_at = now
     db.flush()
-    job_id = c.queue.enqueue(jobs[0], {"asset_id": a.asset_id, "chain": jobs[1:], "run": run, "reprocess": True},
-                             organization_id=a.organization_id, dedupe_key=f"{jobs[0]}:{a.asset_id}:{run}")
+    if a.ingest_status in ("RECEIVED", "VALIDATING"):
+        # 무결성 검증에서 재시도를 다 써 FAILED가 됐던 자산이다. 처리 단계는 REGISTERED가 아니면 건너뛰므로 검증부터
+        # 다시 한다 — 검증은 VALIDATING을 이어 하고(ADR-0058) 등록되면 보통 처리 순서를 등록하므로 요청한 단계는 따로
+        # 넣지 않는다. 끝난 검증 작업이 원래 키를 쥐고 있어 이번 실행의 키를 쓴다 (ADR-0076)
+        job_id = c.queue.enqueue("integrity_verify", {"asset_id": a.asset_id, "run": run, "reprocess": True},
+                                 organization_id=a.organization_id, dedupe_key=f"integrity_verify:{a.asset_id}:{run}",
+                                 connection=db.connection())
+    else:
+        job_id = c.queue.enqueue(jobs[0], {"asset_id": a.asset_id, "chain": jobs[1:], "run": run, "reprocess": True},
+                                 organization_id=a.organization_id, dedupe_key=f"{jobs[0]}:{a.asset_id}:{run}")
     c.audit.record("REPROCESS_REQUESTED", principal=p, organization_id=a.organization_id, target_type="Asset",
                    target_id=a.asset_id, reason=body.reason, source_ip=client_ip(request), details={"steps": order})
     return {"asset_id": a.asset_id, "job_ids": [job_id]}
@@ -249,15 +293,40 @@ def _own_binary(a: Asset, p: Principal) -> None:
         raise ProblemError("FORBIDDEN", detail="다른 기관 자산의 영상은 자를 수 없습니다")
 
 
+def _clip_cursor(cursor: str) -> tuple[datetime, str]:
+    """클립 목록 커서 = 앞 페이지 마지막 작업의 [요청 시각(시간대 포함 ISO 8601), 작업 ID] (ADR-0077).
+
+    시각은 여기서 UTC로 바꾼다. UTC로 바꾸면 1~9999년 밖인 시각(예: 0001-01-01T00:00:00+14:00)은
+    DB 드라이버가 매개변수를 만들다 OverflowError를 내고 그 연결을 망가뜨리므로, 질의 전에 400으로 거른다."""
+    try:
+        value = json.loads(decode_cursor(cursor))
+        if not isinstance(value, list) or len(value) != 2 or not all(isinstance(v, str) for v in value):
+            raise ValueError
+        requested_at, job_id = parse_rfc3339(value[0]), value[1]
+        if not has_prefix(job_id, "job"):
+            raise ValueError
+        return requested_at, job_id
+    except (ValueError, OverflowError):
+        raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/query/cursor", "code": "invalid",
+                                                        "message": "커서 형식이 올바르지 않습니다"}]) from None
+
+
 @router.get("/v1/assets/{asset_id}/clips")
-def list_asset_clips(asset_id: str, request: Request, db: Session = DB, c: Container = Depends(container),
+def list_asset_clips(asset_id: str, request: Request, limit: int = Query(100, ge=1, le=500),
+                     cursor: str | None = Query(None, min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_-]+$"),
+                     db: Session = DB, c: Container = Depends(container),
                      p: Principal = Depends(require("asset:clip"))) -> dict:
-    """이 영상의 구간 클립 작업과 결과 (09번 요구사항 7.2)."""
+    """이 영상의 구간 클립 작업과 결과 (09번 요구사항 7.2). 최근 요청부터 limit건씩, next_cursor로 이어 본다.
+
+    기본 페이지 크기 100건은 전에 말없이 자르던 건수와 같다.
+    조건 없이 부르던 화면은 같은 첫 페이지를 받는다 (ADR-0077)."""
     from app.services import clips
 
     a = load_scoped(db, c, request, Asset, asset_id, p)
     _own_binary(a, p)
-    return {"items": clips.list_clips(c, db, a)}
+    items, nxt = clips.list_clips(c, db, a, limit=limit, before=_clip_cursor(cursor) if cursor is not None else None)
+    next_cursor = encode_cursor(json.dumps([nxt[0].isoformat(), nxt[1]])) if nxt is not None else None
+    return {"items": items, "next_cursor": next_cursor}
 
 
 @router.post("/v1/assets/{asset_id}/clips", status_code=202)
@@ -293,6 +362,17 @@ def create_asset_clip(asset_id: str, body: ClipRequest, request: Request, db: Se
     return JSONResponse(out, status_code=status, headers={"Idempotent-Replayed": "true"} if replayed else None)
 
 
+def _download_denied(c: Container, request: Request, p: Principal, a: Asset, reason: str,
+                     detail: str) -> ProblemError:
+    """권한 표는 통과했지만 이 바이너리는 줄 수 없다 — 권한 거부를 감사하고 403 (security.md, 02번 요구사항 7.1).
+
+    감사는 따로 커밋한다(연결을 넘기지 않는다): 요청 트랜잭션은 오류로 되돌려지지만 거부 기록은 남아야 한다."""
+    c.audit.record("PERMISSION_DENIED", result="DENIED", principal=p, organization_id=a.organization_id,
+                   target_type="Asset", target_id=a.asset_id, source_ip=client_ip(request),
+                   details={"action": "asset:download", "reason": reason})
+    return ProblemError("FORBIDDEN", detail=detail)
+
+
 @router.post("/v1/assets/{asset_id}/download-url")
 def create_download_url(asset_id: str, request: Request, db: Session = DB,
                         c: Container = Depends(container), p: Principal = Depends(require("asset:download"))) -> dict:
@@ -306,10 +386,11 @@ def create_download_url(asset_id: str, request: Request, db: Session = DB,
             from app.services.break_glass import active_grant_for
 
             grant = active_grant_for(db, a, p.principal_id, c.clock.now())
-            if grant is None:
-                raise ProblemError("FORBIDDEN", detail="운영자의 원본 접근은 유효한 긴급 열람 승인이 있어야 합니다")
+            if grant is None:  # 승인 없음·승인 전·만료·남의 승인 — 모두 같은 거부
+                raise _download_denied(c, request, p, a, "no_active_break_glass",
+                                       "운영자의 원본 접근은 유효한 긴급 열람 승인이 있어야 합니다")
         else:
-            raise ProblemError("FORBIDDEN", detail="다른 기관 자산의 바이너리는 받을 수 없습니다")
+            raise _download_denied(c, request, p, a, "cross_org_binary", "다른 기관 자산의 바이너리는 받을 수 없습니다")
     if not a.has_binary or not a.storage_key or a.ingest_status in ("UPLOADING", "RECEIVED", "VALIDATING"):
         raise ProblemError("CONFLICT", detail="아직 내려받을 수 있는 바이너리가 없습니다")
     if a.ingest_status == "QUARANTINED":
