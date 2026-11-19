@@ -136,6 +136,9 @@
 | REPORTS-2 | exportReport 요약이 아직 `/v1/capabilities`를 가리킨다(설명과 실제 경로는 `/v1/system/capabilities`) | 낮음 | 확인 | 고침 (이 PR) |
 | REPORTS-R1 | 마이그레이션 0025 downgrade가 버전별 기간을 말없이 잃고, ADR 되돌리기 절이 이를 말하지 않는다 | 낮음 | 반박 | downgrade 주석이 버전별 기간을 버린다고 밝히고, ADR 감수할 점이 다시 채우는 방식을 적었다. 저장소의 일반적인 downgrade 관례다 |
 
+- **REPORTS-1 HWPX 양식의 심볼릭 링크 항목** — **고침** (ADR-0066 갱신, 단위·통합 `test_report_export_hardening.py`). 외부 속성에 심볼릭 링크·장치·FIFO·소켓을 적은 항목이 든 양식은 만든 OS 표시와 상관없이 PUT 400이고, 이미 저장된 것은 내보내기 409다. 내보낸 HWPX 항목의 머리글은 이름·순서·시각·압축 방식만 옮겨 새로 만든다(일반 파일 0o644·폴더 0o755, 추가 필드 없음). 고치면서 유니코드 경로 추가 필드(0x7075) 때문에 내보낸 항목 이름이 '../../evil.xml'로 읽히던 길도 같이 막았다.
+- **REPORTS-2 내보내기 요약의 기능 상태 경로** — **고침** (`tests/contract/test_contract_text_paths.py`). exportReport 요약이 설명·실제 라우트와 같은 `/v1/system/capabilities`를 가리킨다. 계약·스키마 글에 적힌 '/v1/…' 경로가 모두 계약 경로인지 시험이 본다. 생성 클라이언트는 다시 만들어야 한다.
+
 ## 계약 검증
 
 | id | 지적 | 심각도 | 판정 | 처리 |
