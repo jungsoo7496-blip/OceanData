@@ -347,6 +347,17 @@ def _check_code(db: Session, p: Principal, code: str) -> None:
     raise ProblemError("RULE_VIOLATION", detail=problem.message, unmet_conditions=[unmet])
 
 
+def _human_verified_denied(c: Container, request: Request, p: Principal, organization_id: str,
+                           event_id: str | None = None) -> ProblemError:
+    """사람이 아닌 주체의 확인 표시 거부 403 (07번 요구사항 7.3). 권한 거부로 감사한다 (security.md).
+
+    감사는 따로 확정한다(연결을 넘기지 않는다): 요청 트랜잭션은 오류로 되돌려지지만 거부 기록은 남아야 한다."""
+    c.audit.record("PERMISSION_DENIED", result="DENIED", principal=p, organization_id=organization_id,
+                   target_type="Event", target_id=event_id, source_ip=client_ip(request),
+                   details={"action": "event:write", "reason": "human_verified_requires_user"})
+    return ProblemError("FORBIDDEN", detail="사람 사용자만 확인 표시를 할 수 있습니다")
+
+
 def _link_assets(db: Session, c: Container, request: Request, p: Principal, event: Event, ids: list[str]) -> None:
     for aid in sorted(set(ids)):
         load_scoped(db, c, request, Asset, aid, p)  # 같은 기관 자산만 (요구사항 7.2)
@@ -361,7 +372,7 @@ def create_event(request: Request, body: Any = Body(...), db: Session = DB,
     problems, rejected = contracts.validate_document("event", body)
     _problems_to_400(problems, rejected)
     if body.get("human_verified") is True and not p.user_id:  # 사람만 확인할 수 있다 (07번 요구사항 7.3, PATCH와 같게)
-        raise ProblemError("FORBIDDEN", detail="사람 사용자만 확인 표시를 할 수 있습니다")
+        raise _human_verified_denied(c, request, p, p.organization_id)
     session = load_scoped(db, c, request, TrialSession, body["session_id"], p)
     if body.get("source_system_id"):
         _source_device(db, c, request, p, body["source_system_id"])
@@ -516,7 +527,7 @@ def patch_event(event_id: str, body: EventPatch, request: Request, db: Session =
             raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/human_verified", "code": "const",
                                                             "message": "확인 취소는 새 이벤트로 기록합니다"}])
         if not p.user_id:  # 사람만 확인할 수 있다 (요구사항 7.3)
-            raise ProblemError("FORBIDDEN", detail="사람 사용자만 확인 표시를 할 수 있습니다")
+            raise _human_verified_denied(c, request, p, e.organization_id, e.event_id)
         if not e.human_verified:
             e.human_verified, e.verified_by, e.verified_at = True, p.user_id, c.clock.now()
             c.audit.record("EVENT_VERIFIED", principal=p, organization_id=e.organization_id, target_type="Event",
