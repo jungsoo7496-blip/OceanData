@@ -44,6 +44,12 @@
 | WEBHOOKS-5 | 04번 design.md 전송 규칙에 W4의 128KiB 응답 헤더 상한이 빠졌다 | 낮음 | 확인 | 고침 (이 PR) |
 | WEBHOOKS-R1 | W1의 새 디스패처 지표가 클립 전용 워커(C7)의 두 번째 디스패처를 빠뜨린다(worker-clips는 수집 대상이 아님) | 낮음 | 반박 | C7 범위 메모가 worker-clips의 Prometheus 수집을 범위 밖으로 적었고 ADR-0069에도 있다. 워커 복제가 여럿일 때도 같은 배포 수집 문제다 |
 
+- **WEBHOOKS-1 ADR-0064 지속 부하 문장** — **고침** (문서, `test_webhooks.py::test_interim_flood_backlog_is_attempted_back_to_back`). 백오프는 전송마다라 범람 구독에 쌓인 N건이 차례로 시도된다고 바로잡고, 구독이 꺼질 때(기본 약 64분)까지 부하가 기관의 이벤트 수에 비례한다고 적음. 구독 단위로 묶는 것은 W5(사람 결정)
+- **WEBHOOKS-2 백오프 근거 오류** — **고침** (WEBHOOKS-1과 같은 문장). 라운드 디스패처 때도 같았고 W1이 만든 문제가 아님을 적고, 통합 검토 측정(메인 스레드 95~97%)과 ADR-0070이 버린 '구독 쉬게 하기'를 인용
+- **WEBHOOKS-3 ADR-0064의 라운드 서술** — **고침**. ADR-0064에 갱신 절(ADR-0070)을 더해 결정 3·버린 대안의 '라운드'가 전송마다 따로·보내는 중인 건까지 세는 기관 몫으로 바뀌었음을 적음
+- **WEBHOOKS-4 WEBHOOK_DISPATCH_INTERVAL_S 설명** — **고침**. `config.py`·`.env.example` 설명에 보내는 중인 건이 끝나지 않을 때 새로 기한이 된 건을 다시 보는 간격이기도 하다는 것(ADR-0070)을 더함
+- **WEBHOOKS-5 design.md 응답 헤더 상한 누락** — **고침**. 04번 `design.md` 전송 ②에 `RESPONSE_HEAD_MAX_BYTES`(128KiB)·`RemoteProtocolError`·ADR-0064, ③에 백오프는 실패한 그 건만 미룬다는 것, 시험 목록에 1xx 범람 시험을 더함
+
 ## 클립
 
 | id | 지적 | 심각도 | 판정 | 처리 |
