@@ -392,6 +392,8 @@ export interface paths {
          *     - XML 항목(.xml)은 UTF-8이어야 하고, XML 선언에 인코딩이 있으면 UTF-8이어야 한다 (내보내기는 UTF-8로 쓴다).
          *     - XML 항목이 하나 이상 있어야 하고, 압축을 푼 크기(zip 헤더에 적힌 항목 크기의 합)는 100MiB 이하다.
          *       항목은 헤더에 적힌 크기까지만 읽는다.
+         *     초안을 HWPX로 내보내려면 XML 항목에 {{report.status}} 자리표시자가 있어야 한다("초안" 표시 자리, exportReport).
+         *     올릴 때는 이것을 요구하지 않는다(승인·제출본만 내보내는 양식).
          */
         put: operations["putReportTemplateHwpx"];
         post?: never;
@@ -449,7 +451,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 최신 데이터로 새 초안 버전을 만든다 (이전 버전은 보존) */
+        /**
+         * 최신 데이터로 새 초안 버전을 만든다 (이전 버전은 보존)
+         * @description 데이터 기간(period_from·period_to)은 버전마다 저장한다. 회차 보고서의 새 버전은 회차 끝 시각(진행 중이면 지금)까지를
+         *     쓰고, 이전 버전(승인·제출본 포함)의 기간은 바뀌지 않는다 (ADR-0080).
+         */
         post: operations["createReportVersion"];
         delete?: never;
         options?: never;
@@ -525,8 +531,12 @@ export interface paths {
         };
         /**
          * 보고서 내보내기 (켜진 형식만, /v1/capabilities의 report_formats). 초안은 "초안" 표시
-         * @description PDF·XLSX의 근거 손상 안내는 보고서 조회와 같은 범위의 손상 자산 ID를 표시한다.
+         * @description 보고서·버전을 먼저 확인한다: 없거나 다른 기관 보고서면 형식과 관계없이 404다. 볼 수 있는 보고서의 형식이 꺼져 있으면 409 CONFLICT다
+         *     (켜진 형식은 /v1/system/capabilities의 report_formats와 같다. PDF는 렌더러를 불러올 수 없으면 꺼진 것이다).
+         *     PDF·XLSX의 근거 손상 안내는 보고서 조회와 같은 범위의 손상 자산 ID를 표시한다.
          *     HWPX: 저장된 양식을 쓸 수 없으면(양식 검사가 생기기 전에 올린 양식 등) 409 CONFLICT다. 양식을 다시 올린 뒤 내보낸다.
+         *     HWPX의 "초안" 표시는 양식의 {{report.status}} 자리로만 들어간다. 초안(DRAFT) 버전은 양식의 XML 항목에 이 자리표시자가
+         *     없으면(여러 텍스트 조각으로 나뉜 경우 포함) 표시 없는 파일을 만들지 않고 409 CONFLICT다 (ADR-0080). 다른 상태의 버전은 상관없다.
          *     PDF: 외부 주소(이미지·글꼴·스타일, http·file 모두)를 가져오지 않는다. 서버 프로세스마다 동시에 만드는 PDF 수에
          *     설정 한도(REPORT_PDF_MAX_CONCURRENT)가 있어, 차면 기다리지 않고 429 RATE_LIMITED와 Retry-After를 준다 (ADR-0066).
          */
@@ -1008,6 +1018,8 @@ export interface paths {
         /**
          * 매니페스트 신고 → 업로드 세션과 파트 URL 발급
          * @description - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
+         *     - 파트 URL(parts)은 응답 하나에 서버 한도(기본 1000개)까지만 1번 파트부터 번호 순으로 담는다. parts가 part_count보다
+         *       적으면 받은 파트를 올린 뒤 GET /v1/uploads/{upload_id}/parts로 남은 파트의 URL을 받는다(잘렸다는 표시는 따로 없다).
          *     - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
          *     - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
          *     - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
@@ -1100,6 +1112,9 @@ export interface paths {
          *     본문은 저장소가 먼저 거부할 수 있다.
          *     저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
          *     Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
+         *     저장소의 멀티파트 완료 호출이 파트 목록 거부가 아닌 이유(연결 실패·시간 초과·저장소 내부 오류)로 실패해도 503
+         *     STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다 — 같은 요청을 다시 보낸다(저장소에서 이미
+         *     완료됐으면 그 객체로 마친다).
          *     유효 기간이 지난 세션은 저장소를 정리(남은 완성 객체 포함)하고 쿼터 예약을 해제한 뒤 410 GONE이다. 만료 세션을
          *     저장소에서 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
          */
@@ -2782,6 +2797,7 @@ export interface components {
             schema_versions: string[];
             gpu_enabled: boolean;
             processing_steps: ("META" | "PROXY" | "THUMBNAIL" | "SENSOR_PARSE" | "DEID" | "TAG" | "EMBED")[];
+            /** @description 보고서 내보내기(exportReport)가 받는 형식. REPORT_FORMATS에 켠 형식 중 PDF는 렌더러(WeasyPrint)를 불러올 수 있을 때만 포함한다 (ADR-0018). */
             report_formats: ("PDF" | "XLSX" | "HWPX")[];
             external_sources: string[];
             features?: {
@@ -3534,12 +3550,15 @@ export interface components {
             organization_id: components["schemas"]["organization_id"];
             project_id: components["schemas"]["project_id"];
             session_id?: components["schemas"]["session_id"] | null;
+            /** @description 이 버전(version)의 데이터 기간 시작. 기간은 버전마다 저장한다 */
             period_from?: components["schemas"]["utc_datetime"] | null;
+            /** @description 이 버전(version)의 데이터 기간 끝. 새 버전을 만들어도 이전 버전의 값은 바뀌지 않는다 */
             period_to?: components["schemas"]["utc_datetime"] | null;
             title: string;
             template_code: components["schemas"]["TemplateCode"];
             template_version: number;
             version: number;
+            /** @description 조회자에게 보이는 최신 버전. 관리기관 열람자(PROGRAM_VIEWER)에게는 제출된 버전 중 최신이다. */
             latest_version?: number;
             status: components["schemas"]["report_status"];
             generated_at: components["schemas"]["utc_datetime"];
@@ -3949,6 +3968,7 @@ export interface components {
             asset_id: components["schemas"]["asset_id"];
             part_size?: number;
             part_count?: number;
+            /** @description 1번 파트부터 번호 순으로 서버 한도(기본 1000개)까지의 업로드 URL. part_count보다 적으면 이 파트들을 올린 뒤 GET /v1/uploads/{upload_id}/parts로 남은 파트의 URL을 받는다(잘렸다는 표시는 따로 없다). */
             parts?: components["schemas"]["PartUrl"][];
             expires_at?: components["schemas"]["utc_datetime"];
         } & unknown;
@@ -3956,11 +3976,13 @@ export interface components {
             upload_id: components["schemas"]["upload_id"];
             part_size: number;
             part_count: number;
+            /** @description 저장소에 올라간 파트 전부 (한도로 잘리지 않는다). */
             completed_parts: {
                 part_number: number;
                 etag: string;
                 size: number;
             }[];
+            /** @description 저장소에 아직 없는 파트의 새 업로드 URL. 번호가 낮은 파트부터 서버 한도(기본 1000개)까지 담는다. completed_parts와 합쳐 part_count보다 적으면 이 파트들을 올린 뒤 GET /v1/uploads/{upload_id}/parts를 다시 불러 나머지를 받는다. */
             pending_parts: components["schemas"]["PartUrl"][];
             expires_at: components["schemas"]["utc_datetime"];
         };
@@ -6151,6 +6173,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            413: components["responses"]["PayloadTooLarge"];
             429: components["responses"]["TooManyRequests"];
         };
     };

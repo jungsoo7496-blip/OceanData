@@ -613,6 +613,7 @@ type ObservationMappingRecord struct {
 
 // PartList defines model for PartList.
 type PartList struct {
+	// CompletedParts 저장소에 올라간 파트 전부 (한도로 잘리지 않는다).
 	CompletedParts []struct {
 		Etag       string `json:"etag"`
 		PartNumber int    `json:"part_number"`
@@ -620,11 +621,13 @@ type PartList struct {
 	} `json:"completed_parts"`
 
 	// ExpiresAt RFC 3339 UTC (Z로 끝남)
-	ExpiresAt    ExternalCommonSchemaDefsUtcDatetime546d5477 `json:"expires_at"`
-	PartCount    int                                         `json:"part_count"`
-	PartSize     int                                         `json:"part_size"`
-	PendingParts []PartUrl                                   `json:"pending_parts"`
-	UploadId     ExternalCommonSchemaDefsUploadIdA6bfb6ed    `json:"upload_id"`
+	ExpiresAt ExternalCommonSchemaDefsUtcDatetime546d5477 `json:"expires_at"`
+	PartCount int                                         `json:"part_count"`
+	PartSize  int                                         `json:"part_size"`
+
+	// PendingParts 저장소에 아직 없는 파트의 새 업로드 URL. 번호가 낮은 파트부터 서버 한도(기본 1000개)까지 담는다. completed_parts와 합쳐 part_count보다 적으면 이 파트들을 올린 뒤 GET /v1/uploads/{upload_id}/parts를 다시 불러 나머지를 받는다.
+	PendingParts []PartUrl                                `json:"pending_parts"`
+	UploadId     ExternalCommonSchemaDefsUploadIdA6bfb6ed `json:"upload_id"`
 }
 
 // PartUrl defines model for PartUrl.
@@ -680,9 +683,11 @@ type UploadCreated struct {
 	ExpiresAt *ExternalCommonSchemaDefsUtcDatetime546d5477 `json:"expires_at,omitempty"`
 	PartCount *int                                         `json:"part_count,omitempty"`
 	PartSize  *int                                         `json:"part_size,omitempty"`
-	Parts     *[]PartUrl                                   `json:"parts,omitempty"`
-	Status    interface{}                                  `json:"status"`
-	UploadId  *ExternalCommonSchemaDefsUploadIdA6bfb6ed    `json:"upload_id,omitempty"`
+
+	// Parts 1번 파트부터 번호 순으로 서버 한도(기본 1000개)까지의 업로드 URL. part_count보다 적으면 이 파트들을 올린 뒤 GET /v1/uploads/{upload_id}/parts로 남은 파트의 URL을 받는다(잘렸다는 표시는 따로 없다).
+	Parts    *[]PartUrl                                `json:"parts,omitempty"`
+	Status   interface{}                               `json:"status"`
+	UploadId *ExternalCommonSchemaDefsUploadIdA6bfb6ed `json:"upload_id,omitempty"`
 }
 
 // UploadStatus defines model for UploadStatus.
@@ -1293,6 +1298,8 @@ type ClientInterface interface {
 	// CreateUploadWithBody 매니페스트 신고 → 업로드 세션과 파트 URL 발급
 	//
 	// - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
+	// - 파트 URL(parts)은 응답 하나에 서버 한도(기본 1000개)까지만 1번 파트부터 번호 순으로 담는다. parts가 part_count보다
+	//   적으면 받은 파트를 올린 뒤 GET /v1/uploads/{upload_id}/parts로 남은 파트의 URL을 받는다(잘렸다는 표시는 따로 없다).
 	// - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
 	// - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
 	// - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
@@ -1311,6 +1318,8 @@ type ClientInterface interface {
 	// CreateUpload 매니페스트 신고 → 업로드 세션과 파트 URL 발급
 	//
 	// - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
+	// - 파트 URL(parts)은 응답 하나에 서버 한도(기본 1000개)까지만 1번 파트부터 번호 순으로 담는다. parts가 part_count보다
+	//   적으면 받은 파트를 올린 뒤 GET /v1/uploads/{upload_id}/parts로 남은 파트의 URL을 받는다(잘렸다는 표시는 따로 없다).
 	// - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
 	// - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
 	// - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
@@ -1354,6 +1363,9 @@ type ClientInterface interface {
 	// 본문은 저장소가 먼저 거부할 수 있다.
 	// 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
 	// Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
+	// 저장소의 멀티파트 완료 호출이 파트 목록 거부가 아닌 이유(연결 실패·시간 초과·저장소 내부 오류)로 실패해도 503
+	// STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다 — 같은 요청을 다시 보낸다(저장소에서 이미
+	// 완료됐으면 그 객체로 마친다).
 	// 유효 기간이 지난 세션은 저장소를 정리(남은 완성 객체 포함)하고 쿼터 예약을 해제한 뒤 410 GONE이다. 만료 세션을
 	// 저장소에서 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 	//
@@ -1374,6 +1386,9 @@ type ClientInterface interface {
 	// 본문은 저장소가 먼저 거부할 수 있다.
 	// 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
 	// Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
+	// 저장소의 멀티파트 완료 호출이 파트 목록 거부가 아닌 이유(연결 실패·시간 초과·저장소 내부 오류)로 실패해도 503
+	// STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다 — 같은 요청을 다시 보낸다(저장소에서 이미
+	// 완료됐으면 그 객체로 마친다).
 	// 유효 기간이 지난 세션은 저장소를 정리(남은 완성 객체 포함)하고 쿼터 예약을 해제한 뒤 410 GONE이다. 만료 세션을
 	// 저장소에서 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 	//
@@ -1608,6 +1623,8 @@ func (c *Client) PostObservations(ctx context.Context, params *PostObservationsP
 // CreateUploadWithBody 매니페스트 신고 → 업로드 세션과 파트 URL 발급
 //
 //   - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
+//   - 파트 URL(parts)은 응답 하나에 서버 한도(기본 1000개)까지만 1번 파트부터 번호 순으로 담는다. parts가 part_count보다
+//     적으면 받은 파트를 올린 뒤 GET /v1/uploads/{upload_id}/parts로 남은 파트의 URL을 받는다(잘렸다는 표시는 따로 없다).
 //   - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
 //   - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
 //   - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
@@ -1636,6 +1653,8 @@ func (c *Client) CreateUploadWithBody(ctx context.Context, params *CreateUploadP
 // CreateUpload 매니페스트 신고 → 업로드 세션과 파트 URL 발급
 //
 //   - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
+//   - 파트 URL(parts)은 응답 하나에 서버 한도(기본 1000개)까지만 1번 파트부터 번호 순으로 담는다. parts가 part_count보다
+//     적으면 받은 파트를 올린 뒤 GET /v1/uploads/{upload_id}/parts로 남은 파트의 URL을 받는다(잘렸다는 표시는 따로 없다).
 //   - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
 //   - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
 //   - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
@@ -1709,6 +1728,9 @@ func (c *Client) GetUpload(ctx context.Context, uploadId UploadId, reqEditors ..
 // 본문은 저장소가 먼저 거부할 수 있다.
 // 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
 // Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
+// 저장소의 멀티파트 완료 호출이 파트 목록 거부가 아닌 이유(연결 실패·시간 초과·저장소 내부 오류)로 실패해도 503
+// STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다 — 같은 요청을 다시 보낸다(저장소에서 이미
+// 완료됐으면 그 객체로 마친다).
 // 유효 기간이 지난 세션은 저장소를 정리(남은 완성 객체 포함)하고 쿼터 예약을 해제한 뒤 410 GONE이다. 만료 세션을
 // 저장소에서 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 //
@@ -1739,6 +1761,9 @@ func (c *Client) CompleteUploadWithBody(ctx context.Context, uploadId UploadId, 
 // 본문은 저장소가 먼저 거부할 수 있다.
 // 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
 // Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
+// 저장소의 멀티파트 완료 호출이 파트 목록 거부가 아닌 이유(연결 실패·시간 초과·저장소 내부 오류)로 실패해도 503
+// STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다 — 같은 요청을 다시 보낸다(저장소에서 이미
+// 완료됐으면 그 객체로 마친다).
 // 유효 기간이 지난 세션은 저장소를 정리(남은 완성 객체 포함)하고 쿼터 예약을 해제한 뒤 410 GONE이다. 만료 세션을
 // 저장소에서 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 //
@@ -2428,6 +2453,8 @@ type ClientWithResponsesInterface interface {
 	// CreateUploadWithBodyWithResponse 매니페스트 신고 → 업로드 세션과 파트 URL 발급
 	//
 	// - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
+	// - 파트 URL(parts)은 응답 하나에 서버 한도(기본 1000개)까지만 1번 파트부터 번호 순으로 담는다. parts가 part_count보다
+	//   적으면 받은 파트를 올린 뒤 GET /v1/uploads/{upload_id}/parts로 남은 파트의 URL을 받는다(잘렸다는 표시는 따로 없다).
 	// - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
 	// - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
 	// - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
@@ -2446,6 +2473,8 @@ type ClientWithResponsesInterface interface {
 	// CreateUploadWithResponse 매니페스트 신고 → 업로드 세션과 파트 URL 발급
 	//
 	// - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
+	// - 파트 URL(parts)은 응답 하나에 서버 한도(기본 1000개)까지만 1번 파트부터 번호 순으로 담는다. parts가 part_count보다
+	//   적으면 받은 파트를 올린 뒤 GET /v1/uploads/{upload_id}/parts로 남은 파트의 URL을 받는다(잘렸다는 표시는 따로 없다).
 	// - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
 	// - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
 	// - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
@@ -2493,6 +2522,9 @@ type ClientWithResponsesInterface interface {
 	// 본문은 저장소가 먼저 거부할 수 있다.
 	// 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
 	// Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
+	// 저장소의 멀티파트 완료 호출이 파트 목록 거부가 아닌 이유(연결 실패·시간 초과·저장소 내부 오류)로 실패해도 503
+	// STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다 — 같은 요청을 다시 보낸다(저장소에서 이미
+	// 완료됐으면 그 객체로 마친다).
 	// 유효 기간이 지난 세션은 저장소를 정리(남은 완성 객체 포함)하고 쿼터 예약을 해제한 뒤 410 GONE이다. 만료 세션을
 	// 저장소에서 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 	//
@@ -2513,6 +2545,9 @@ type ClientWithResponsesInterface interface {
 	// 본문은 저장소가 먼저 거부할 수 있다.
 	// 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
 	// Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
+	// 저장소의 멀티파트 완료 호출이 파트 목록 거부가 아닌 이유(연결 실패·시간 초과·저장소 내부 오류)로 실패해도 503
+	// STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다 — 같은 요청을 다시 보낸다(저장소에서 이미
+	// 완료됐으면 그 객체로 마친다).
 	// 유효 기간이 지난 세션은 저장소를 정리(남은 완성 객체 포함)하고 쿼터 예약을 해제한 뒤 410 GONE이다. 만료 세션을
 	// 저장소에서 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 	//
@@ -4169,6 +4204,8 @@ func (c *ClientWithResponses) PostObservationsWithResponse(ctx context.Context, 
 // CreateUploadWithBodyWithResponse 매니페스트 신고 → 업로드 세션과 파트 URL 발급
 //
 //   - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
+//   - 파트 URL(parts)은 응답 하나에 서버 한도(기본 1000개)까지만 1번 파트부터 번호 순으로 담는다. parts가 part_count보다
+//     적으면 받은 파트를 올린 뒤 GET /v1/uploads/{upload_id}/parts로 남은 파트의 URL을 받는다(잘렸다는 표시는 따로 없다).
 //   - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
 //   - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
 //   - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
@@ -4193,6 +4230,8 @@ func (c *ClientWithResponses) CreateUploadWithBodyWithResponse(ctx context.Conte
 // CreateUploadWithResponse 매니페스트 신고 → 업로드 세션과 파트 URL 발급
 //
 //   - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
+//   - 파트 URL(parts)은 응답 하나에 서버 한도(기본 1000개)까지만 1번 파트부터 번호 순으로 담는다. parts가 part_count보다
+//     적으면 받은 파트를 올린 뒤 GET /v1/uploads/{upload_id}/parts로 남은 파트의 URL을 받는다(잘렸다는 표시는 따로 없다).
 //   - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
 //   - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
 //   - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
@@ -4258,6 +4297,9 @@ func (c *ClientWithResponses) GetUploadWithResponse(ctx context.Context, uploadI
 // 본문은 저장소가 먼저 거부할 수 있다.
 // 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
 // Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
+// 저장소의 멀티파트 완료 호출이 파트 목록 거부가 아닌 이유(연결 실패·시간 초과·저장소 내부 오류)로 실패해도 503
+// STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다 — 같은 요청을 다시 보낸다(저장소에서 이미
+// 완료됐으면 그 객체로 마친다).
 // 유효 기간이 지난 세션은 저장소를 정리(남은 완성 객체 포함)하고 쿼터 예약을 해제한 뒤 410 GONE이다. 만료 세션을
 // 저장소에서 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 //
@@ -4284,6 +4326,9 @@ func (c *ClientWithResponses) CompleteUploadWithBodyWithResponse(ctx context.Con
 // 본문은 저장소가 먼저 거부할 수 있다.
 // 저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
 // Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
+// 저장소의 멀티파트 완료 호출이 파트 목록 거부가 아닌 이유(연결 실패·시간 초과·저장소 내부 오류)로 실패해도 503
+// STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다 — 같은 요청을 다시 보낸다(저장소에서 이미
+// 완료됐으면 그 객체로 마친다).
 // 유효 기간이 지난 세션은 저장소를 정리(남은 완성 객체 포함)하고 쿼터 예약을 해제한 뒤 410 GONE이다. 만료 세션을
 // 저장소에서 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
 //
