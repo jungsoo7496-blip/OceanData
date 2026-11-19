@@ -56,9 +56,13 @@ veryfast, CRF 18, AAC 128k), 합성 testsrc2 30fps 원본(8 Mbps, 4K는 30 Mbps)
 2. **전용 워커는 워커가 가져갈 작업 유형을 설정으로 나눠 만든다.** `WORKER_JOB_TYPES`(비우면 등록된 모든 유형) −
    `WORKER_EXCLUDE_JOB_TYPES`(`workers.main.claim_types`). 기본은 둘 다 비어 지금과 같다. 없는 유형 이름(오타)이나 빈 결과는 워커가
    기동하지 않는다 — 빈 목록을 큐에 넘기면 모든 유형을 가져가기 때문이다. Compose에 선택 서비스 `worker-clips`(프로필 `clip-worker`,
-   기본 워커와 같은 환경 + `WORKER_JOB_TYPES=clip_export`)를 두었다. 켜는 법: `.env`에 `WORKER_EXCLUDE_JOB_TYPES=clip_export`를 두고
-   `worker`를 다시 띄운 뒤 `--profile clip-worker up -d worker-clips`(runbook 07 5번). 유형은 가져갈 때 나누므로 대기 중인 클립에도
-   바로 적용되고, 되돌리면(줄을 지우고 `worker` 재시작) 그대로 기본 워커가 처리한다.
+   기본 워커와 같은 환경 + `WORKER_JOB_TYPES=clip_export`)를 두었다. 켜는 법: `.env`에 `WORKER_EXCLUDE_JOB_TYPES=clip_export`와
+   `COMPOSE_PROFILES=clip-worker`를 함께 두고 `make up`(runbook 07 5번). 프로필도 `.env`에 둔다 — 처음에는 프로필을 명령줄
+   (`--profile clip-worker up -d worker-clips`)로만 켜게 적었는데, 그러면 제외 설정은 남고 프로필은 남지 않아 다음 `make up`
+   (재부팅 뒤 기동 포함)에서 `worker-clips`만 빠지고 클립이 오류 없이 대기에 남았다(통합 검토 CLIPS-1).
+   `make up`(`tools/compose_up.sh`)은 기본 워커가 `clip_export`를 가져가지 않는데 `worker-clips`가 꺼져 있으면 경고한다(기동은
+   막지 않는다). 유형은 가져갈 때 나누므로 대기 중인 클립에도 바로 적용되고, 되돌리면(두 줄을 지우고 `worker`를 다시 띄운 뒤
+   `worker-clips`를 멈춤) 그대로 기본 워커가 처리한다.
    - 버린 대안(검토 방향의 예시): 클립을 등록할 때 자원 클래스를 설정(예: `CLIP`)으로 정하고 `WORKER_RESOURCE_CLASSES`로 나누기 —
      (가) 지금 배정 조건이 CPU 이외 클래스를 걸러내지 않아 GPU 대체 규칙과 함께 배정 SQL의 의미를 바꿔야 한다, (나) 클래스가 등록 때
      작업 행에 찍혀 설정을 바꿔도 이미 대기 중인 클립은 옛 경로로 가고, 되돌리면 전용 클래스 작업을 아무도 가져가지 않는다,
@@ -92,7 +96,7 @@ veryfast, CRF 18, AAC 128k), 합성 testsrc2 30fps 원본(8 Mbps, 4K는 30 Mbps)
   (runbook 07) 갱신이 멈추고 임대 시간 뒤 회수된다.
 - 전용 워커도 주기 정리·감시·웹훅 전송을 함께 돈다(여러 워커용 잠금으로 겹치지 않는다). 그래서 기본 워커와 같은 환경(알림 서명 비밀
   등)을 받는다. Prometheus 수집 대상(`deploy/compose/prometheus/prometheus.yml`)에는 넣지 않았다.
-- 기본 워커에서 `clip_export`를 빼고 전용 워커를 띄우지 않으면 클립이 대기에 남는다(runbook에 적었다).
+- 기본 워커에서 `clip_export`를 빼고 전용 워커를 띄우지 않으면 클립이 대기에 남는다(runbook에 적었고 `make up`이 경고한다).
 
 남은 것(사람 결정): `sensor_parse`(07번)·`tag_scenes`·`env_join`·`deidentify`(14번)·`collect_source`(12번)는 정책 행이 없어 기본
 우선순위 0으로 클립(70)보다 뒤에 배정된다. 0005의 `deid`(90, GPU→CPU)·`tag`(60, GPU 대기) 행은 실제 작업 유형 이름

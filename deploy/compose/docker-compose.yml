@@ -189,8 +189,9 @@ services:
       retries: 30
 
   # --- 선택: 구간 클립 전용 워커 (ADR-0069). 긴 재인코딩이 수집 처리(무결성 검증·프록시 등)를 막지 않게 따로 돌린다.
-  #     .env에 WORKER_EXCLUDE_JOB_TYPES=clip_export 를 두고(기본 워커가 클립을 빼게) docker compose --profile clip-worker up -d
-  #     프로필 없이 띄우면 이 서비스는 없고 기본 워커가 클립도 처리한다(기본 동작). 환경은 기본 워커와 같고 유형만 다르다
+  #     .env에 WORKER_EXCLUDE_JOB_TYPES=clip_export(기본 워커가 클립을 빼게)와 COMPOSE_PROFILES=clip-worker를 함께 두고
+  #     make up. 프로필도 .env에 둬야 make up·make down(재부팅 뒤 기동 포함)에서 함께 오르내린다(명령줄 --profile만으로는 다음 make up에서
+  #     빠진다). 프로필 없이 띄우면 이 서비스는 없고 기본 워커가 클립도 처리한다(기본 동작). 환경은 기본 워커와 같고 유형만 다르다
   worker-clips:
     profiles: [clip-worker]
     image: marine-api:dev
