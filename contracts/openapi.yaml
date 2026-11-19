@@ -4343,8 +4343,12 @@ paths:
       tags: [datasets]
       operationId: listGrants
       summary: 이용 권한 (이용기관은 자기 것, 제공기관은 자기 자산이 든 것, 운영자는 전체)
+      description: grant_id(만든 순서) 순으로 limit개씩 나누고, 다음 쪽이 있으면 next_cursor를 준다.
       x-freeze: G5
       x-status: draft
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
       responses:
         '200':
           description: 권한 목록
@@ -4352,9 +4356,11 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items]
+                required: [items, next_cursor]
                 properties:
                   items: {type: array, items: {$ref: '#/components/schemas/Grant'}}
+                  next_cursor: {type: [string, 'null']}
+        '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
@@ -4423,8 +4429,12 @@ paths:
       tags: [datasets]
       operationId: getUsageHistory
       summary: 제공기관 이용 이력 — 자기 자산이 든 데이터셋의 신청·결정·다운로드 (이용기관 이름 포함)
+      description: 사건 하나가 항목 하나다. at(초 단위)·kind 순, 같으면 사건 순으로 limit개씩 나누고, 다음 쪽이 있으면 next_cursor를 준다. 쪽을 이어 붙이면 한 번에 받는 것과 같은 순서다.
       x-freeze: G5
       x-status: draft
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
       responses:
         '200':
           description: 이력
@@ -4432,8 +4442,9 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items]
+                required: [items, next_cursor]
                 properties:
+                  next_cursor: {type: [string, 'null']}
                   items:
                     type: array
                     items:
@@ -4447,6 +4458,7 @@ paths:
                         consumer_organization: {type: string}
                         purpose: {$ref: './schemas/common.schema.json#/$defs/purpose'}
                         detail: {type: string}
+        '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
@@ -4456,8 +4468,12 @@ paths:
       tags: [datasets]
       operationId: listAccessRequests
       summary: 이용 신청 (이용기관은 자기 신청, 제공기관은 결정할 신청, 운영자는 전체)
+      description: access_request_id(만든 순서) 순으로 limit개씩 나누고, 다음 쪽이 있으면 next_cursor를 준다.
       x-freeze: G5
       x-status: draft
+      parameters:
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
       responses:
         '200':
           description: 신청 목록
@@ -4465,9 +4481,11 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items]
+                required: [items, next_cursor]
                 properties:
                   items: {type: array, items: {$ref: '#/components/schemas/AccessRequest'}}
+                  next_cursor: {type: [string, 'null']}
+        '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '429': {$ref: '#/components/responses/TooManyRequests'}

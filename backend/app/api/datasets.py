@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import date
+import json
+from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
-from sqlalchemy import select
+from sqlalchemy import DateTime, Integer, String, Text, cast, func, join, literal, null, select, tuple_, union_all
 from sqlalchemy.orm import Session
 
 from app.api.deps import DB, client_ip, container, page_params, require
-from app.api.pagination import decode_cursor, encode_cursor
+from app.api.pagination import decode_cursor, encode_cursor, paginate
 from app.container import Container
 from app.db.models import (
     AccessDecision,
@@ -24,6 +25,7 @@ from app.db.models import (
     Organization,
 )
 from app.domain.ids import new_id
+from app.domain.normalize import parse_rfc3339
 from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services import contracts, datasets
@@ -310,7 +312,7 @@ def create_access_request(body: AccessCreate, request: Request, db: Session = DB
 
 
 def _requests_for(db: Session, p: Principal) -> Any:
-    stmt = select(AccessRequest).order_by(AccessRequest.created_at, AccessRequest.access_request_id)
+    stmt = select(AccessRequest)
     if _operator(p):
         return stmt
     if _consumer(p):
@@ -321,8 +323,11 @@ def _requests_for(db: Session, p: Principal) -> Any:
 
 
 @router.get("/v1/access-requests")
-def list_access_requests(db: Session = DB, p: Principal = Depends(require("access_request:read"))) -> dict:
-    return {"items": [datasets.request_view(db, r) for r in db.execute(_requests_for(db, p)).scalars()]}
+def list_access_requests(db: Session = DB, p: Principal = Depends(require("access_request:read")),
+                         page: dict = Depends(page_params)) -> dict:
+    """access_request_id(ULID라 만든 순서) 순으로 limit개씩 (api-conventions.md, 통합 검토 SHARING-3, ADR-0088)."""
+    rows, nxt = paginate(db, _requests_for(db, p), AccessRequest.access_request_id, page["limit"], page["cursor"])
+    return {"items": [datasets.request_view(db, r) for r in rows], "next_cursor": nxt}
 
 
 class Decision(BaseModel):
@@ -367,7 +372,7 @@ def grant_view(g: Grant) -> dict:
 
 
 def _grants_for(p: Principal) -> Any:
-    stmt = select(Grant).order_by(Grant.created_at, Grant.grant_id)
+    stmt = select(Grant)
     if _operator(p):
         return stmt
     if _consumer(p):
@@ -378,8 +383,11 @@ def _grants_for(p: Principal) -> Any:
 
 
 @router.get("/v1/grants")
-def list_grants(db: Session = DB, p: Principal = Depends(require("grant:read"))) -> dict:
-    return {"items": [grant_view(g) for g in db.execute(_grants_for(p)).scalars()]}
+def list_grants(db: Session = DB, p: Principal = Depends(require("grant:read")),
+                page: dict = Depends(page_params)) -> dict:
+    """grant_id(ULID라 만든 순서) 순으로 limit개씩 (api-conventions.md, 통합 검토 SHARING-3, ADR-0088)."""
+    rows, nxt = paginate(db, _grants_for(p), Grant.grant_id, page["limit"], page["cursor"])
+    return {"items": [grant_view(g) for g in rows], "next_cursor": nxt}
 
 
 class Revoke(BaseModel):
@@ -441,32 +449,81 @@ def create_distribution(body: DistributionCreate, request: Request, db: Session 
 # ------------------------------------------------------------------ 이용 이력·DCAT (요구사항 11, 12)
 
 
-@router.get("/v1/usage-history")
-def usage_history(db: Session = DB, p: Principal = Depends(require("usage_history:read"))) -> dict:
-    """제공기관: 자기 자산이 든 데이터셋 버전의 신청·결정·권한·다운로드 이력."""
+USAGE_KINDS = frozenset({"REQUESTED", "DECIDED", "GRANTED", "DOWNLOAD_ISSUED", "REVOKED", "EXPIRED"})
+
+
+def _usage_events(org: str) -> Any:
+    """제공기관 이용 이력의 사건을 한 줄씩 모은 하위 질의 (통합 검토 SHARING-3, ADR-0088).
+
+    열은 초 단위 시각(at)·종류(kind)·사건 ID(event_id), 신청의 버전·이용기관·목적, 설명을 만들 값(text·until·files)이다.
+    사건 ID는 종류 안에서 겹치지 않으므로 (at, kind, event_id)가 쪽을 나누는 열쇠다. 신청마다 따로 읽지 않는다."""
     vids = select(DatasetVersion.dataset_version_id).where(
-        DatasetVersion.provider_organization_ids.any(p.organization_id))  # type: ignore[arg-type]
-    names: dict[str, str] = {o: n for o, n in db.execute(select(Organization.organization_id, Organization.name)).all()}
+        DatasetVersion.provider_organization_ids.any(org))  # type: ignore[arg-type]
+    r = select(AccessRequest).where(AccessRequest.dataset_version_id.in_(vids)).subquery("r")
+    ts = DateTime(timezone=True)
+
+    def row(kind: Any, at: Any, event_id: Any, text: Any = None, until: Any = None, files: Any = None) -> Any:
+        return select(cast(kind, String).label("kind"), func.date_trunc("second", at, type_=ts).label("at"),
+                      cast(event_id, String).label("event_id"), r.c.access_request_id, r.c.dataset_version_id,
+                      r.c.organization_id, r.c.purpose, cast(null() if text is None else text, Text).label("text"),
+                      cast(null() if until is None else until, ts).label("until"),
+                      cast(null() if files is None else files, Integer).label("files"))
+
+    g, d, dl = Grant, AccessDecision, Distribution
+    by_request = r.c.access_request_id
+    return union_all(
+        row(literal("REQUESTED"), r.c.created_at, by_request, r.c.purpose_detail).select_from(r),
+        row(literal("DECIDED"), d.decided_at, d.access_request_id + ":" + d.organization_id,
+            d.role + " " + d.decision + ": " + d.reason).select_from(join(d, r, by_request == d.access_request_id)),
+        row(literal("GRANTED"), g.created_at, g.grant_id, until=g.expires_at)
+        .select_from(join(g, r, by_request == g.access_request_id)),
+        row(literal("DOWNLOAD_ISSUED"), dl.created_at, dl.distribution_id, files=dl.file_count)
+        .select_from(join(dl, g, g.grant_id == dl.grant_id).join(r, by_request == g.access_request_id)),
+        row(g.status, func.coalesce(g.revoked_at, g.expires_at), g.grant_id, func.coalesce(g.revoke_reason, ""))
+        .select_from(join(g, r, by_request == g.access_request_id)).where(g.status.in_(("REVOKED", "EXPIRED"))),
+    ).subquery("ev")
+
+
+def _usage_cursor(cursor: str) -> tuple[datetime, str, str]:
+    """이용 이력 커서 = 앞 쪽 마지막 사건의 [at(초 단위 RFC 3339), kind, 사건 ID] (ADR-0088)."""
+    try:
+        value = json.loads(decode_cursor(cursor))
+        if not isinstance(value, list) or len(value) != 3 or not all(isinstance(v, str) for v in value):
+            raise ValueError
+        if value[1] not in USAGE_KINDS:
+            raise ValueError
+        return parse_rfc3339(value[0]), value[1], value[2]
+    except (ValueError, OverflowError):
+        raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/query/cursor", "code": "invalid",
+                                                        "message": "커서 형식이 올바르지 않습니다"}]) from None
+
+
+@router.get("/v1/usage-history")
+def usage_history(db: Session = DB, p: Principal = Depends(require("usage_history:read")),
+                  page: dict = Depends(page_params)) -> dict:
+    """제공기관: 자기 자산이 든 데이터셋 버전의 신청·결정·권한·다운로드 이력.
+
+    사건 하나가 항목 하나이고 (at 초 단위, kind, 사건 ID) 순으로 limit개씩 나눈다. 쪽을 이어 붙이면 전에 한 번에
+    주던 순서(at·kind)와 같다 (api-conventions.md, 통합 검토 SHARING-3, ADR-0088)."""
+    ev, limit = _usage_events(p.organization_id), page["limit"]
+    stmt = select(ev)
+    if page["cursor"]:
+        at, kind, event_id = _usage_cursor(page["cursor"])
+        stmt = stmt.where(tuple_(ev.c.at, ev.c.kind, ev.c.event_id) > tuple_(
+            literal(at, DateTime(timezone=True)), literal(kind, String), literal(event_id, String)))
+    rows = db.execute(stmt.order_by(ev.c.at, ev.c.kind, ev.c.event_id).limit(limit + 1)).all()
+    orgs = {x.organization_id for x in rows[:limit]}
+    names: dict[str, str] = dict(db.execute(select(Organization.organization_id, Organization.name).where(
+        Organization.organization_id.in_(orgs))).tuples().all()) if orgs else {}
     items: list[dict[str, Any]] = []
-    for r in db.execute(select(AccessRequest).where(AccessRequest.dataset_version_id.in_(vids))).scalars():
-        base = {"dataset_version_id": r.dataset_version_id, "access_request_id": r.access_request_id,
-                "consumer_organization": names.get(r.organization_id, r.organization_id), "purpose": r.purpose}
-        items.append({**base, "kind": "REQUESTED", "at": iso(r.created_at), "detail": r.purpose_detail})
-        for d in db.execute(select(AccessDecision).where(
-                AccessDecision.access_request_id == r.access_request_id)).scalars():
-            items.append({**base, "kind": "DECIDED", "at": iso(d.decided_at),
-                          "detail": f"{d.role} {d.decision}: {d.reason}"})
-        g = db.execute(select(Grant).where(Grant.access_request_id == r.access_request_id)).scalar_one_or_none()
-        if g is None:
-            continue
-        items.append({**base, "kind": "GRANTED", "at": iso(g.created_at), "detail": f"~ {iso(g.expires_at)}"})
-        for dl in db.execute(select(Distribution).where(Distribution.grant_id == g.grant_id)).scalars():
-            items.append({**base, "kind": "DOWNLOAD_ISSUED", "at": iso(dl.created_at),
-                          "detail": f"파일 {dl.file_count}개"})
-        if g.status in ("REVOKED", "EXPIRED"):
-            items.append({**base, "kind": g.status, "at": iso(g.revoked_at or g.expires_at),
-                          "detail": g.revoke_reason or ""})
-    return {"items": sorted(items, key=lambda x: (x["at"] or "", x["kind"]))}
+    for x in rows[:limit]:
+        detail = {"GRANTED": f"~ {iso(x.until)}", "DOWNLOAD_ISSUED": f"파일 {x.files}개"}.get(x.kind, x.text or "")
+        items.append({"dataset_version_id": x.dataset_version_id, "access_request_id": x.access_request_id,
+                      "consumer_organization": names.get(x.organization_id, x.organization_id),
+                      "purpose": x.purpose, "kind": x.kind, "at": iso(x.at), "detail": detail})
+    last = rows[limit - 1] if len(rows) > limit else None
+    nxt = encode_cursor(json.dumps([iso(last.at), last.kind, last.event_id])) if last is not None else None
+    return {"items": items, "next_cursor": nxt}
 
 
 @router.get("/v1/catalog/dcat")

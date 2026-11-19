@@ -50,6 +50,22 @@ export interface Page<T> {
   next_cursor: string | null
 }
 
+// 쪽으로 나뉜 목록을 next_cursor로 끝까지 이어 읽는다 (한 번에 limit=500, maxPages쪽까지).
+// 다 읽지 못하고 멈추면 next_cursor가 남는다
+export async function apiAll<T>(path: string, maxPages = 20): Promise<Page<T>> {
+  const items: T[] = []
+  let cursor: string | null = null
+  for (let i = 0; i < maxPages; i++) {
+    const q = new URLSearchParams({ limit: '500' })
+    if (cursor) q.set('cursor', cursor)
+    const page: Page<T> = await api<Page<T>>(`${path}?${q.toString()}`)
+    items.push(...page.items)
+    cursor = page.next_cursor ?? null
+    if (!cursor) break
+  }
+  return { items, next_cursor: cursor }
+}
+
 export interface Me {
   principal_kind: string
   organization_id: string

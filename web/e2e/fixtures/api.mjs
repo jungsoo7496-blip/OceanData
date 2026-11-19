@@ -502,13 +502,13 @@ const GET = {
     assets: [{ asset_id: AST_CLIP, variant: 'CLIP', ingest_status: 'READY_PRIVATE', originals: [AST_VIDEO] }], hidden_count: 1 }),
   '/v1/report-templates': () => ({ items: TEMPLATES }),
   '/v1/access-requests': ({ role }) => ({ items: role === 'PLATFORM_OPERATOR' ? ACCESS_REQUESTS.filter((r) => r.status === 'PROVIDER_APPROVED')
-    : role === 'CONSUMER' ? ACCESS_REQUESTS.slice(1) : ACCESS_REQUESTS }),
-  '/v1/grants': () => ({ items: GRANTS }),
+    : role === 'CONSUMER' ? ACCESS_REQUESTS.slice(1) : ACCESS_REQUESTS, next_cursor: null }),
+  '/v1/grants': () => ({ items: GRANTS, next_cursor: null }),
   '/v1/usage-history': () => ({ items: [
     { kind: 'REQUESTED', at: '2026-10-27T00:00:00Z', dataset_version_id: DSV1, access_request_id: ACR3, consumer_organization: '이용기관 C (합성)', purpose: 'MODEL_IMPROVEMENT' },
     { kind: 'GRANTED', at: '2026-11-01T00:00:00Z', dataset_version_id: DSV1, access_request_id: ACR3, consumer_organization: '이용기관 C (합성)', purpose: 'MODEL_IMPROVEMENT' },
     { kind: 'DOWNLOAD_ISSUED', at: '2026-11-02T00:00:00Z', dataset_version_id: DSV1, access_request_id: ACR3, consumer_organization: '이용기관 C (합성)', detail: '파일 3개' },
-  ] }),
+  ], next_cursor: null }),
   '/v1/datasets': (ctx) => ({ items: datasets(ctx), next_cursor: null }),
   '/v1/datasets/{dataset_id}/versions/{dataset_version_id}/lineage': ({ params }) => ({ dataset_id: params.dataset_id,
     dataset_version_id: params.dataset_version_id, version: '1.0.0', manifest_sha256: sha(10), hidden_item_count: 1,
