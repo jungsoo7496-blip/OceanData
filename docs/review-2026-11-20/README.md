@@ -64,7 +64,7 @@
 - **CLIPS-2 runbook이 worker만 다시 시작함** — runbook 03 5번·06 2·5번·07 1·2·5번이 이제 worker-clips도 함께 다시 만들거나 다시 시작한다. 11 2번에는 다시 만들 필요가 없다고 적었다. ADR-0069 감수할 점에 두 워커가 각자 환경으로 정비 주기를 돈다는 것을 적었다. 전용 워커가 주기 작업을 건너뛰는 설정은 두지 않았다(까닭은 ADR)(`test_clip_worker_ops_docs.py`).
 - **CLIPS-3 CLIP_TIMEOUT_FACTOR inf로 클립마다 OverflowError** — 이제 inf·nan이면 `ConfigError(CLIP_TIMEOUT_FACTOR)`로 기동하지 않는다. 곱이 넘치는 큰 배수는 `FFMPEG_TIMEOUT_S`로 자른다(`test_clip_timeout_factor.py`).
 - **CLIPS-4 CLIP_TIMEOUT_FACTOR inf·큰 값 (CLIPS-3과 같은 지적)** — CLIPS-3과 같은 수정으로 고쳤다.
-- **CLIPS-5 긴 구간의 최악 점유 시간을 낮게 적음** — ADR-0069에 인코딩 + ffprobe 다시 읽기 = 한도의 두 배(기본 2시간) + 원본 받기·올리기라고 적었다. 코드는 그대로다. HANDOFF -1bb·검토 README C7 행의 '최대 한 시간'은 통합 때 고친다.
+- **CLIPS-5 긴 구간의 최악 점유 시간을 낮게 적음** — ADR-0069에 인코딩 + ffprobe 다시 읽기 = 한도의 두 배(기본 2시간) + 원본 받기·올리기라고 적었다. 코드는 그대로다. HANDOFF -1bb와 `docs/review-2026-11-12/README.md` C7 행의 '최대 한 시간'도 이 PR의 문서 커밋에서 같은 문장으로 고쳤다.
 
 ## 공유
 
@@ -181,7 +181,7 @@
 - **REPORTS-O1 PDF 렌더 한도.** 기관마다 몫을 나눌지, 프로세스 하나의 풀을 ADR-0066 감수할 점에 적고 둘지.
 - **좌표 수 상한(VALIDATE-1 뒤).** 계약 좌표 배열에 maxItems를 둘지, 서버 상한을 둘지, 값을 얼마로 할지. 좌표 하나에 약 0.1ms라 20MiB 항적이면 요청 하나가 1~2분이다.
 - **사전 검증의 배치 항목 수 한도.** 사전 검증도 `OBSERVATION_BATCH_MAX`(운영 413)를 볼지.
-- **만료 업로드 정리의 시간 한도.** 지금 함수 기본값 60초인 `budget_s`를 설정으로 둘지.
+- **만료 업로드 정리의 시간 한도.** 지금 함수 기본값 60초인 `budget_s`를 설정으로 둘지. 정상 저장소에서 100건이 60초 안에 끝나는지는 운영 저장소에서 재지 않았다(확인 필요).
 - **영상·센서 밖 유형의 FAILED(failed_from=VALIDATING) 복구.** 재처리가 409를 주는 유형에 복구 경로를 둘지.
 - **저장소 안에서 완료와 중단이 겹칠 때 SeaweedFS 동작.** 확인 필요.
 - **범람 웹훅 구독 쉬게 하기.** 구독 단위로 시도를 묶을지(실패 뒤 쉬기, 연속 실패로 끄기)를 W5(비활성 의미)와 함께 정할지.
