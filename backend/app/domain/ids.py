@@ -37,6 +37,11 @@ def is_ulid(value: str | None) -> bool:
     return bool(value) and bool(ULID_RE.match(value or ""))
 
 
+def id_pattern(kind: str) -> str:
+    """요청 본문 검사용 정규식 — 계약 common.schema.json의 <kind>_id 형식(접두사 + ULID)과 같다."""
+    return f"^{PREFIXES[kind]}_[0-9A-HJKMNP-TV-Z]{{26}}$"
+
+
 def has_prefix(value: str, kind: str) -> bool:
     prefix = PREFIXES[kind] + "_"
     return value.startswith(prefix) and is_ulid(value[len(prefix):])

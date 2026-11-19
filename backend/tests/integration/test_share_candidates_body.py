@@ -58,3 +58,19 @@ def test_valid_bodies_still_work(ctx: Ctx) -> None:
     aid = _byproduct(ctx)
     r = _post(ctx, {"asset_ids": [aid]})
     assert r.status_code == 200 and r.json()["candidates"] == [aid]
+
+
+@pytest.mark.parametrize(("name", "body", "pointer"), [
+    ("asset_id", {"asset_ids": ["OK", "not-an-asset-id"]}, "/asset_ids/1"),
+    ("session_id", {"asset_ids": ["OK"], "session_id": "ses_bad"}, "/session_id"),
+])
+def test_malformed_ids_are_validation_errors(ctx: Ctx, name: str, body: dict, pointer: str) -> None:
+    """계약의 asset_id·session_id 형식이 아니면 없는 자산의 404가 아니라 400이다 (통합 검토 SHARING-4, 데이터셋 버전
+    item_asset_ids와 같은 규칙). 맞는 ID가 함께 있어도 아무 자산도 후보가 되지 않는다."""
+    aid = _byproduct(ctx)
+    r = _post(ctx, {**body, "asset_ids": [aid if x == "OK" else x for x in body["asset_ids"]]})
+    assert r.status_code == 400, f"{name}: {r.status_code} {r.text}"
+    check(r, "POST", "/v1/share-candidates")
+    assert r.json()["code"] == "VALIDATION_ERROR"
+    assert [e["pointer"] for e in r.json()["errors"]] == [pointer]
+    assert _status(ctx, aid) == "NONE"

@@ -24,7 +24,7 @@ from app.db.models import (
     Grant,
     Organization,
 )
-from app.domain.ids import new_id
+from app.domain.ids import id_pattern, new_id
 from app.domain.normalize import parse_rfc3339
 from app.domain.principal import Principal
 from app.errors import ProblemError
@@ -160,7 +160,7 @@ def get_dataset(dataset_id: str, db: Session = DB, c: Container = Depends(contai
     return _view(db, c, p, _load_dataset(db, p, dataset_id))
 
 
-ASSET_ID = r"^ast_[0-9A-HJKMNP-TV-Z]{26}$"  # common.schema.json#/$defs/asset_id
+ASSET_ID = id_pattern("asset")  # common.schema.json#/$defs/asset_id
 MAX_ITEM_ERRORS = 100
 
 

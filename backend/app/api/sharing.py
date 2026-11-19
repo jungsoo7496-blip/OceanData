@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import JSONResponse
@@ -15,6 +15,7 @@ from app.container import Container
 from app.db.models import Asset, Grant, ShareRequest, ShareReviewEvent, TrialSession
 from app.domain import sharing_rules as rules
 from app.domain import states
+from app.domain.ids import id_pattern
 from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services import sharing
@@ -87,9 +88,13 @@ def decide_share_request(share_request_id: str, body: Decision, request: Request
 
 
 class Candidates(BaseModel):
+    """계약 형식(asset_id·session_id)이 아닌 ID는 없는 자산의 404가 아니라 400이다 — 데이터셋 버전 item_asset_ids와
+    같은 규칙 (통합 검토 SHARING-4)."""
+
     model_config = ConfigDict(extra="forbid")
-    asset_ids: list[str] | None = Field(None, min_length=1, max_length=1000)
-    session_id: str | None = None
+    asset_ids: list[Annotated[str, Field(pattern=id_pattern("asset"))]] | None = Field(None, min_length=1,
+                                                                                      max_length=1000)
+    session_id: str | None = Field(None, pattern=id_pattern("session"))
 
 
 @router.post("/v1/share-candidates")
