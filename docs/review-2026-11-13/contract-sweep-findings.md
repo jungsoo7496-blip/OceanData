@@ -44,11 +44,11 @@
 | S31 | low | `POST /v1/reports` | wrong-status | 구현 | 고침 (ADR-0079) — 회차 시각이 9999-12-31T15:00:00Z 이후인 회차 보고서의 500은 고치지 않음 |
 | S32 | low | `PUT /v1/report-templates/{template_code}/versions/{version}/hwpx` | wrong-status | 구현 | 고침 (ADR-0079) |
 | S33 | low | `PUT /v1/report-templates/{template_code}/versions/{version}/hwpx` | wrong-status | 계약 문구 | 계약 문구 고침 (ADR-0079) |
-| S34 | medium | `POST /v1/reports/{report_id}/versions` | data-semantics | 구현 | 미처리 |
-| S35 | medium | `GET /v1/reports/{report_id}/export` | missing-behavior | 구현 | 미처리 |
-| S36 | low | `GET /v1/reports/{report_id}/export` | wrong-status | 구현 | 미처리 |
-| S37 | low | `GET /v1/reports/{report_id}/export` | wrong-status | 구현 | 미처리 |
-| S38 | low | `GET /v1/reports/{report_id}` | scope-or-permission | 구현 | 미처리 |
+| S34 | medium | `POST /v1/reports/{report_id}/versions` | data-semantics | 구현 | 고침 (ADR-0080) |
+| S35 | medium | `GET /v1/reports/{report_id}/export` | missing-behavior | 구현 | 고침 (ADR-0080) |
+| S36 | low | `GET /v1/reports/{report_id}/export` | wrong-status | 구현 | 고침 (ADR-0080) |
+| S37 | low | `GET /v1/reports/{report_id}/export` | wrong-status | 구현 | 고침 (ADR-0080) |
+| S38 | low | `GET /v1/reports/{report_id}` | scope-or-permission | 구현 | 고침 (ADR-0080) |
 | S39 | medium | `PATCH /v1/records/{record_id}` | wrong-status | 구현 | 고침 |
 | S40 | medium | `POST /v1/sessions/{session_id}/records (same code path: PATCH /v1/records/{record_id})` | wrong-status | 구현 | 고침 |
 | S41 | medium | `POST /v1/sessions/{session_id}/records (same code path: PATCH /v1/records/{record_id})` | missing-audit | 구현 | 고침 (ADR-0078) |
@@ -96,6 +96,11 @@
 - **S31 9999년 끝 기간 보고서** — `from`·`to`가 9999-12-31T15:00:00Z 이후(한국 시각으로 쓸 수 없는 시각)이면 500이 아니라 400 `VALIDATION_ERROR`를 반환하고, 넘는 값마다 `/from`·`/to` 오류를 단다. 보고서와 생성 감사는 남기지 않는다. 고치지 않은 것: 회차 시각이 9999-12-31T15:00:00Z 이후인 회차(회차 등록이 그 시각을 받는다)의 회차 보고서는 아직 500이다(ADR-0079 감수할 점).
 - **S32 HWPX 양식 버전 0** — 경로의 `version`이 0이나 음수이면 400 `VALIDATION_ERROR`(`/path/version`)를 반환한다. 어느 버전에도 파일을 붙이지 않고 감사도 남기지 않는다. 전에는 0이 최신 버전에 붙었고 음수는 404였다.
 - **S33 HWPX 양식 크기 초과** — 10MiB를 넘는 본문의 413 `PAYLOAD_TOO_LARGE`를 계약에 적었다. 구현은 그대로다.
+- **S34 새 버전이 앞 버전의 기간을 바꿈** — 보고서 데이터 기간(`period_from`·`period_to`)을 버전마다 저장한다(마이그레이션 0025). 새 버전(`POST …/versions`)은 자기 기간만 갖는다. 승인·제출된 앞 버전은 `?version=` 조회와 관리기관 열람자 조회에서 승인 스냅숏과 같은 기간을 보여 준다. 기존 버전은 보고서 행의 기간으로 채웠다(ADR-0080).
+- **S35 초안 HWPX의 '초안' 표시** — 초안(DRAFT) 버전은 양식의 XML 항목에 `{{report.status}}` 자리가 없으면(조각으로 나뉜 경우 포함) 표시 없는 파일을 만들지 않는다. 대신 409 `CONFLICT`(양식을 고쳐 다시 올리라는 안내)를 반환하고 내보내기 감사를 남기지 않는다. 승인·제출·대체된 버전과 양식 올리기는 그대로다. 생성 시각·데이터 기준 시각 자리는 요구하지 않는다(사람 결정, ADR-0080).
+- **S36 내보내기 확인 순서** — 보고서·버전을 먼저 불러온다. 그래서 형식이 꺼져 있어도 다른 기관 보고서는 404와 `CROSS_ORG_ACCESS_ATTEMPT` 감사, 없는 보고서·버전은 404를 반환한다. 형식 409는 볼 수 있는 보고서에만 적용된다.
+- **S37 기능 상태의 PDF** — `/v1/system/capabilities`의 `report_formats`를 내보내기와 같은 기준(`enabled_formats`)으로 만든다. 그래서 PDF 렌더러를 불러올 수 없으면 PDF를 알리지 않고, PDF 내보내기 409 안내는 렌더러를 이유로 든다. 렌더러를 불러올 수 있는지는 프로세스마다 한 번만 확인한다. 조회마다 실패한 import를 다시 하지 않으므로 WeasyPrint 안내도 한 번만 찍힌다.
+- **S38 열람자의 latest_version** — 관리기관 열람자의 보고서 조회·목록에서 `latest_version`은 제출된 적 있는 버전 중 최신이다. 제출되지 않은 초안의 존재와 수를 드러내지 않는다. 소유 기관·운영자는 그대로다.
 
 ## datasets (버전·배포·카탈로그) — 발견 5건
 
