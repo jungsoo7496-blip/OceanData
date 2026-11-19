@@ -27,7 +27,7 @@ from app.db.models import (
 from app.domain.ids import id_pattern, new_id
 from app.domain.normalize import parse_rfc3339
 from app.domain.principal import Principal
-from app.errors import ProblemError
+from app.errors import ProblemError, duplicate_items
 from app.services import contracts, datasets
 from app.services.idempotency import run_idempotent
 from app.timefmt import iso
@@ -161,7 +161,6 @@ def get_dataset(dataset_id: str, db: Session = DB, c: Container = Depends(contai
 
 
 ASSET_ID = id_pattern("asset")  # common.schema.json#/$defs/asset_id
-MAX_ITEM_ERRORS = 100
 
 
 class VersionCreate(BaseModel):
@@ -171,24 +170,11 @@ class VersionCreate(BaseModel):
     data_card: dict[str, Any]
 
 
-def _duplicate_items(ids: list[str]) -> list[dict[str, str]]:
-    """계약의 uniqueItems: 앞에서 이미 나온 ID 자리마다 오류 하나 (앞의 MAX_ITEM_ERRORS개까지)."""
-    seen: set[str] = set()
-    out: list[dict[str, str]] = []
-    for i, x in enumerate(ids):
-        if x in seen:
-            out.append({"pointer": f"/item_asset_ids/{i}", "code": "unique", "message": "자산 ID가 중복됐습니다"})
-            if len(out) == MAX_ITEM_ERRORS:
-                break
-        seen.add(x)
-    return out
-
-
 @router.post("/v1/datasets/{dataset_id}/versions", status_code=201)
 def create_version(dataset_id: str, body: VersionCreate, request: Request, db: Session = DB,
                    c: Container = Depends(container), p: Principal = Depends(require("dataset:write")),
                    idempotency_key: str | None = Header(default=None)) -> JSONResponse:
-    dup = _duplicate_items(body.item_asset_ids)
+    dup = duplicate_items("item_asset_ids", body.item_asset_ids, "자산 ID")
     if dup:  # 조용히 합치지 않는다. 멱등 기록을 남기기 전에 거부한다
         raise ProblemError("VALIDATION_ERROR", errors=dup)
 

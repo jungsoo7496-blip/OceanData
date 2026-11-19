@@ -32,9 +32,11 @@
 3. **S04**: 동작은 그대로 두고 계약만 고친다. `getDatasetVersionLineage`에 `'409': Conflict`를 넣고 설명에 "READY만, BUILDING·FAILED는 409,
    볼 수 없는 버전은 상태와 관계없이 404"를 적는다(범위 검사 404가 상태 검사보다 먼저라 상태가 새지 않는다).
 4. **S05**: 항목마다 `asset_id` 패턴(common.schema.json과 같은 식)을 모델에서 검사해 400과 `/item_asset_ids/<i>` 포인터를 준다. 중복은
-   `run_idempotent` 전에 400 VALIDATION_ERROR(`code: unique`, 다시 나온 자리마다, 최대 100개)로 거부한다 — 웹훅 `event_types`·재처리 `steps`와 같은 방식.
+   `run_idempotent` 전에 400 VALIDATION_ERROR(`code: unique`)로 거부한다.
    형식이 맞는데 없는 자산은 지금처럼 422 RULE_VIOLATION.
-   버린 대안: pydantic `field_validator`로 중복 거부 — 포인터가 `/item_asset_ids` 하나로만 나와 어느 자리인지 알 수 없다.
+   (처음에는 다시 나온 자리마다 `/item_asset_ids/<i>` 오류를 주고 웹훅 `event_types`·재처리 `steps`와 같은 방식이라고 적었으나, 그 둘은 배열
+   자리 하나(`/event_types`·`/steps`)였다. 통합 검토 SHARING-5에서 공유 후보 `asset_ids`·JSON Schema 검사와 같이 배열 자리 `/item_asset_ids`
+   하나로 바꾸고, 다시 나온 ID를 메시지에 적게 했다 — ADR-0088.)
 5. 바꾸지 않은 것: `dataset_view`의 `data_card`는 지금처럼 운영자에게 가장 최근 버전(BUILDING·FAILED 포함)의 카드다. 최신 READY 버전의 카드로 바꾸는 것은
    운영자가 보는 내용이 바뀌는 일이라 이번 범위 밖이다. 1번 뒤로는 새로 받는 카드가 모두 계약을 통과한다.
 

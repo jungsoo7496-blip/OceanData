@@ -141,7 +141,10 @@ def test_version_item_ids_follow_contract_format(ictx) -> None:
                                                  "item_asset_ids": [a["deid"], b["deid"], a["deid"]]})
     check(r, "POST", VERSIONS)
     assert r.status_code == 400 and r.json()["code"] == "VALIDATION_ERROR", r.text
-    assert [(e["pointer"], e["code"]) for e in r.json()["errors"]] == [("/item_asset_ids/2", "unique")]
+    # 중복은 공유 후보 asset_ids·웹훅 event_types·재처리 steps와 같이 배열 자리 하나, 다시 나온 ID는 메시지에
+    # (통합 검토 SHARING-5, ADR-0088)
+    assert [(e["pointer"], e["code"]) for e in r.json()["errors"]] == [("/item_asset_ids", "unique")]
+    assert a["deid"] in r.json()["errors"][0]["message"]
 
     r = ctx.client.post(path, headers=ctx.as_user(OP), json={"version": "1.0.0", "data_card": CARD,
                                                              "item_asset_ids": [a["deid"], "not-an-asset-id"]})
@@ -152,7 +155,7 @@ def test_version_item_ids_follow_contract_format(ictx) -> None:
     # 큰 버전(작업 큐) 경로도 같은 검사
     r = _post_queued(ctx, path, {"version": "1.0.0", "data_card": CARD,
                                  "item_asset_ids": [a["deid"], b["deid"], b["deid"]]})
-    assert r.status_code == 400 and r.json()["errors"][0]["pointer"] == "/item_asset_ids/2", r.text
+    assert r.status_code == 400 and r.json()["errors"][0]["pointer"] == "/item_asset_ids", r.text
     assert ctx.c.queue.claim(["dataset_build"], "t", ("CPU",)) is None
 
     # 형식은 맞는데 없는 자산은 지금처럼 422 RULE_VIOLATION (공유 조건 미충족)

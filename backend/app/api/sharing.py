@@ -17,7 +17,7 @@ from app.domain import sharing_rules as rules
 from app.domain import states
 from app.domain.ids import id_pattern
 from app.domain.principal import Principal
-from app.errors import ProblemError
+from app.errors import ProblemError, duplicate_items
 from app.services import sharing
 from app.services.idempotency import run_idempotent
 from app.timefmt import iso
@@ -103,9 +103,8 @@ def mark_candidates(body: Candidates, request: Request, db: Session = DB,
     if not body.asset_ids and not body.session_id:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "", "code": "minProperties",
                                                         "message": "asset_ids나 session_id가 필요합니다"}])
-    if body.asset_ids and len(set(body.asset_ids)) != len(body.asset_ids):  # 계약 uniqueItems
-        raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/asset_ids", "code": "unique",
-                                                        "message": "자산 ID가 중복되었습니다"}])
+    if dup := duplicate_items("asset_ids", body.asset_ids or [], "자산 ID"):  # 계약 uniqueItems
+        raise ProblemError("VALIDATION_ERROR", errors=dup)
     assets = [load_scoped(db, c, request, Asset, x, p) for x in sorted(body.asset_ids or [])]
     if body.session_id:
         s = load_scoped(db, c, request, TrialSession, body.session_id, p)

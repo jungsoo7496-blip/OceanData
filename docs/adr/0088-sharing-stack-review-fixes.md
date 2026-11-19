@@ -1,10 +1,10 @@
-# ADR-0088: 공유 묶음 통합 검토 보완 — 재검수 잠금 순서, 제공기관의 데이터셋 보기, 이용 목록 쪽 나눔, 공유 후보 ID 형식
+# ADR-0088: 공유 묶음 통합 검토 보완 — 재검수 잠금 순서, 제공기관의 데이터셋 보기, 이용 목록 쪽 나눔, ID 목록 검사
 
 - 상태: accepted
 - 날짜: 2026-11-20
 - 관련: 13번 요구사항 4.6(분류 지정)·7.1(카탈로그·샘플)·8·9(신청·권한)·11.1(이용 이력), 14번 요구사항 4.4(같은 회차 재검수),
   domain.md 2장(Tenant_Guard 표), api-conventions.md(목록 커서), ADR-0053(교착·직렬화 실패의 409), ADR-0072(데이터셋 목록),
-  ADR-0074(분류 지정의 계보 잠금), ADR-0075(같은 회차 재검수 표시), ADR-0077(클립 목록 커서), 2026-11-20 통합 검토 SHARING-1~4
+  ADR-0074(분류 지정의 계보 잠금), ADR-0075(같은 회차 재검수 표시), ADR-0077(클립 목록 커서), 2026-11-20 통합 검토 SHARING-1~5
 
 ## 맥락
 
@@ -26,6 +26,10 @@
 4. **SHARING-4 공유 후보 지정의 ID 형식**: 계약 `markShareCandidates`는 `asset_ids` 항목과 `session_id`를 common.schema.json의 ID 형식으로 적었는데,
    모델은 `list[str]`·`str`이라 형식이 틀린 ID가 `load_scoped`까지 가서 404 NOT_FOUND였다. 같은 묶음의 데이터셋 버전 `item_asset_ids`는 S05에서
    이미 400이 됐다.
+5. **SHARING-5 중복 ID 오류의 두 모양**: 같은 `uniqueItems` 위반에 데이터셋 버전(S05)은 다시 나온 자리마다 `/item_asset_ids/<i>`를, 공유 후보(S16)는
+   배열 자리 `/asset_ids` 하나를 줬다. ADR-0072는 S05가 웹훅 `event_types`·재처리 `steps`와 같은 방식이라고 적었지만, 그 둘(main에 이미 있던 것)은
+   배열 자리 하나(`/event_types`·`/steps`)다. 매니페스트·장비 정책 같은 문서를 검사하는 JSON Schema 검사기(`contracts.schema_problems`)도
+   `uniqueItems`를 배열 자리에 적는다.
 
 ## 결정
 
@@ -58,12 +62,18 @@
 4. **공유 후보 지정도 ID 형식을 모델에서 검사한다.** `asset_ids` 항목과 `session_id`에 계약과 같은 정규식을 걸어 400 VALIDATION_ERROR
    (`/asset_ids/<i>`·`/session_id`)를 준다. 정규식은 `domain.ids.id_pattern(kind)` 한 곳에서 만들고, 데이터셋 버전의 `ASSET_ID`도 이것을 쓴다.
    형식은 맞는데 없거나 다른 기관인 ID는 지금처럼 404(다른 기관이면 교차 기관 감사)다. 계약은 이미 이 형식이라 바꾸지 않았다.
+5. **`uniqueItems` 위반은 배열 자리 하나로 답한다.** `errors.duplicate_items(field, values, what)`이 `{"pointer": "/<field>", "code": "unique"}`
+   하나를 만들고, 다시 나온 값을 처음 나온 순서로 다섯 개까지 메시지에 적는다("자산 ID가 중복됐습니다: ast_…, ast_… 외 N개"). 공유 후보와 데이터셋
+   버전이 이것을 쓴다. 웹훅·재처리는 이미 같은 포인터·코드라 손대지 않았다. S05의 자리별 포인터는 main에 나가기 전 이번 묶음에서 생긴 것이라
+   이것만 바꾸면 이미 나간 동작은 그대로다. ADR-0072 결정 4의 틀린 문장을 바로잡았다.
+   버린 대안: 네 곳 모두 자리마다(`/<field>/<i>`) — 어느 자리인지 포인터로 바로 보이지만, 이미 나간 웹훅·재처리의 포인터가 바뀌고 JSON Schema
+   검사기의 모양과도 달라진다. 자리를 찾는 데 필요한 값은 메시지에 있다.
 
 ## 결과
 
 좋아지는 점: 같은 회차의 미탐 결정과 다른 원본의 분류 지정이 겹쳐도 하나가 다른 하나를 기다렸다가 둘 다 끝난다. 두 기관이 함께 든 데이터셋에서
 제공기관이 다른 기관 버전의 메타데이터·카드·썸네일을 받지 않는다. 이용 목록 세 개의 응답 크기와 문 수가 쪽 크기에 묶인다. 같은 계약 형식의
-ID 목록 두 개(공유 후보·데이터셋 버전)가 형식 오류에 같은 400으로 답한다.
+ID 목록 두 개(공유 후보·데이터셋 버전)가 형식 오류에 같은 400으로 답하고, 중복 ID 오류는 API 전체에서 한 모양이다.
 
 감수할 점:
 - 형제 원본 행도 결정이 끝날 때까지 잠긴다. 그동안 그 원본의 공유 심사·분류 지정·삭제가 기다린다(결정은 짧다).
@@ -75,11 +85,12 @@ ID 목록 두 개(공유 후보·데이터셋 버전)가 형식 오류에 같은
 - 이용 신청 목록은 항목마다 권한·버전·승인 수를 읽는 문(`request_view`)이 그대로라, 쪽 크기 500이면 문이 1,500개쯤이다. 전에는 전체 행 수만큼이었다.
 - 이용 이력 질의는 그 제공기관의 사건 전체를 모아 정렬한 뒤 자른다(색인으로 건너뛰지 못한다). 응답 크기와 메모리는 쪽 크기로 묶인다.
 - `limit`을 주지 않는 클라이언트는 이제 첫 50개만 받는다. 웹은 끝까지 따라가고, 20쪽(1만 개)을 넘으면 그 뒤는 화면에 나오지 않는다.
+- 중복 ID 오류의 포인터는 배열을 가리키므로 몇 번째 자리인지는 메시지의 ID로 찾아야 한다.
 
 되돌리는 방법: (1) `_recheck_session`의 원본 잠금 줄을 `db.get(Asset, 원본)`으로 되돌리고 정렬을 비식별본 ID 순으로 돌린다. (2) `_visible`이
 `visible_versions` 결과를 그대로 돌려주게 하고 계약 두 작업의 설명을 지운다. (3) 세 목록의 `page_params`·`paginate`·이력 질의를 지우고 계약의
 매개변수·400·`next_cursor`를 되돌린 뒤 웹 `apiAll`을 `api`로 돌리고 생성 클라이언트를 다시 만든다. (4) `Candidates`의 두 `pattern`을 지운다.
-마이그레이션 없음.
+(5) `duplicate_items` 대신 S05의 자리별 오류 함수를 되살린다. 마이그레이션 없음.
 
 ## 시험
 
@@ -99,4 +110,10 @@ B가 두 버전·'A 전용 카드'·샘플 1개를 받아 실패하는 것을 �
 
 `tests/integration/test_share_candidates_body.py::test_malformed_ids_are_validation_errors` — 맞는 ID와 함께 보낸 `not-an-asset-id`는 400
 (`/asset_ids/1`), 틀린 `session_id`는 400(`/session_id`)이고 아무 자산도 후보가 되지 않는다. 수정 전 코드에서 두 경우 모두 `assert 404 == 400`으로
+실패하는 것을 확인했다.
+
+중복 ID: `test_dataset_contract_checks.py::test_version_item_ids_follow_contract_format`(요청 안·작업 큐 경로 모두 `[("/item_asset_ids", "unique")]`,
+메시지에 다시 나온 ID), `test_share_candidates_body.py::test_asset_ids_must_be_non_empty_and_unique`(메시지에 다시 나온 ID),
+`tests/unit/test_duplicate_items.py`(오류 없음, 처음 나온 순서, 다섯 개 넘으면 '외 N개'). 수정 전 코드에서 데이터셋 버전은
+`('/item_asset_ids/2', 'unique') != ('/item_asset_ids', 'unique')`로, 공유 후보는 메시지에 ID가 없어(`assert 'ast_…' in '자산 ID가 중복되었습니다'`)
 실패하는 것을 확인했다.

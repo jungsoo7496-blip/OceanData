@@ -49,6 +49,8 @@ def test_asset_ids_must_be_non_empty_and_unique(ctx: Ctx, name: str, body: dict,
     check(r, "POST", "/v1/share-candidates")
     assert r.json()["code"] == "VALIDATION_ERROR"
     assert [(e["pointer"], e["code"]) for e in r.json()["errors"]] == [("/asset_ids", code)]
+    if code == "unique":  # 데이터셋 버전 item_asset_ids와 같은 모양: 배열 자리 하나, 다시 나온 ID는 메시지에 (SHARING-5)
+        assert aid in r.json()["errors"][0]["message"]
     assert _status(ctx, aid) == "NONE"  # 회차의 자산도 후보가 되지 않았다
 
 

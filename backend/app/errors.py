@@ -63,6 +63,24 @@ class ProblemError(Exception):
         self.extra = extra or {}
 
 
+def duplicate_items(field: str, values: list[str], what: str) -> list[dict[str, str]]:
+    """계약 uniqueItems 위반을 오류 하나로: 배열 자리(/<field>), code unique, 다시 나온 값은 앞의 다섯 개까지 메시지에.
+
+    JSON Schema 검사(contracts.schema_problems)·웹훅 event_types·재처리 steps와 같은 모양이다
+    (통합 검토 SHARING-5, ADR-0088). 중복이 없으면 빈 목록."""
+    seen: set[str] = set()
+    dups: dict[str, None] = {}
+    for v in values:
+        if v in seen:
+            dups.setdefault(v)
+        seen.add(v)
+    if not dups:
+        return []
+    shown = list(dups)[:5]
+    more = f" 외 {len(dups) - len(shown)}개" if len(dups) > len(shown) else ""
+    return [{"pointer": f"/{field}", "code": "unique", "message": f"{what}가 중복됐습니다: {', '.join(shown)}{more}"}]
+
+
 class RequestBodyTooLarge(StarletteHTTPException):
     """요청 본문이 앱 전체 한도(`MAX_REQUEST_BODY_BYTES`)를 넘었다 (ADR-0068). 413 PAYLOAD_TOO_LARGE.
 
