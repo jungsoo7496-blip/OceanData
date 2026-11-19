@@ -53,8 +53,8 @@
 | S40 | medium | `POST /v1/sessions/{session_id}/records (same code path: PATCH /v1/records/{record_id})` | wrong-status | 구현 | 고침 |
 | S41 | medium | `POST /v1/sessions/{session_id}/records (same code path: PATCH /v1/records/{record_id})` | missing-audit | 구현 | 고침 (ADR-0078) |
 | S42 | low | `PATCH /v1/records/{record_id}` | data-semantics | 구현 | 고침 |
-| S43 | medium | `POST /v1/contracts/validate` | missing-behavior | 구현 | 미처리 |
-| S44 | medium | `POST /v1/contracts/validate` | missing-behavior | 구현 | 미처리 |
+| S43 | medium | `POST /v1/contracts/validate` | missing-behavior | 구현 | 고침 (ADR-0081) |
+| S44 | medium | `POST /v1/contracts/validate` | missing-behavior | 구현 | 고침 (ADR-0081) |
 | S45 | low | `GET /v1/uploads/{upload_id}/parts` | wrong-status | 계약 문구 | 미처리 |
 | S46 | low | `POST /v1/uploads/{upload_id}/complete` | wrong-status | 구현 | 미처리 |
 | S47 | low | `POST /v1/uploads` | data-semantics | 계약 문구 | 미처리 |
@@ -101,6 +101,8 @@
 - **S36 내보내기 확인 순서** — 보고서·버전을 먼저 불러온다. 그래서 형식이 꺼져 있어도 다른 기관 보고서는 404와 `CROSS_ORG_ACCESS_ATTEMPT` 감사, 없는 보고서·버전은 404를 반환한다. 형식 409는 볼 수 있는 보고서에만 적용된다.
 - **S37 기능 상태의 PDF** — `/v1/system/capabilities`의 `report_formats`를 내보내기와 같은 기준(`enabled_formats`)으로 만든다. 그래서 PDF 렌더러를 불러올 수 없으면 PDF를 알리지 않고, PDF 내보내기 409 안내는 렌더러를 이유로 든다. 렌더러를 불러올 수 있는지는 프로세스마다 한 번만 확인한다. 조회마다 실패한 import를 다시 하지 않으므로 WeasyPrint 안내도 한 번만 찍힌다.
 - **S38 열람자의 latest_version** — 관리기관 열람자의 보고서 조회·목록에서 `latest_version`은 제출된 적 있는 버전 중 최신이다. 제출되지 않은 초안의 존재와 수를 드러내지 않는다. 소유 기관·운영자는 그대로다.
+- **S43 사전 검증의 코드표 검사** — 사전 검증이 운영 경로와 같은 함수로 세 가지를 검사한다: 이벤트 코드의 공통 상위분류, 호출자 기관의 하위코드 등록, 관측 항목 코드. 상위분류에 없는 코드는 `/event_code`의 `unknown_event_category`, 등록하지 않은 하위코드는 `unregistered_event_subcode`로 `valid:false`를 답한다. 이벤트 등록은 같은 함수로 지금과 같은 422 `RULE_VIOLATION`을 낸다. 코드표에 없는 관측 항목은 `/observations/{i}/metric`의 `unknown_metric`이고, 관측값 API는 항목별 `UNKNOWN_METRIC`이다. 규칙 문제는 스키마·항목 문제 뒤에 붙고 100개 상한과 안내 하나를 지킨다. 판정은 목록에서 잘린 문제까지 본다. 공개 예시 `event.manual-safety.json`은 `SAFETY_INCIDENT.near_miss`를 등록한 기관에서만 유효하다(ADR-0081).
+- **S44 사전 검증의 시각 순서 검사** — 이벤트 `ended_at`이 `started_at`보다 이르면 `/ended_at` `before_start`를 답한다. 근거 출처 매니페스트의 `capture_end_at`이 `capture_start_at`보다 이르면 `/capture_start_at` `time_rule`을 답한다. 둘 다 운영 경로의 400과 같은 문제다. 두 시각이 모두 읽힐 때만 UTC 값으로 비교하고, 출처가 `UNKNOWN`이면 오류가 아니다. 운영 경로의 응답과 검사 순서는 그대로다(ADR-0081).
 
 ## datasets (버전·배포·카탈로그) — 발견 5건
 
