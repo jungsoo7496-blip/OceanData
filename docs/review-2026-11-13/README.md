@@ -1,8 +1,8 @@
 # 2026-11-13 밤 작업 정리
 
-병합을 정하기 전에 읽을 문서다. 2026-11-12~13 밤에 한 일, 사람이 정할 것, 남은 일을 모았다.
-항목별 자세한 기록은 `HANDOFF.md` 0장(-1au~-1bm)과 각 ADR에 있다. 2026-11-20에 이 세 PR을 합친 줄기를 다시 검토했다
-(아래 '2026-11-20 통합 검토', 기록은 HANDOFF 0장 -1bn~-1bt). 근거 자료는 두 가지다.
+병합을 정하기 전에 읽을 문서다. 2026-11-12\~13 밤에 한 일, 사람이 정할 것, 남은 일을 모았다.
+항목별 자세한 기록은 `HANDOFF.md` 0장(-1au\~-1bm)과 각 ADR에 있다. 2026-11-20에 이 세 PR을 합친 줄기를 다시 검토했다
+(아래 '2026-11-20 통합 검토', 기록은 HANDOFF 0장 -1bn\~-1bt). 근거 자료는 두 가지다.
 검토 2026-11-12는 `docs/review-2026-11-12/README.md`(아래 '검토 README'), 계약 점검은 같은 폴더의 `contract-sweep-findings.md`(아래 '발견 문서')다.
 
 ## 한눈에
@@ -10,10 +10,10 @@
 - **검토 2026-11-12에서 남은 9건**(W1·W4·V5·C2·C4·V7·V8·V9·C7)을 항목 8개로 처리했다.
   고친 것 6건(W1·W4·V5·C4·V7·V9), 완화한 것 3건(C2·V8·C7)이다.
   V9의 관측 항목 위치 검사, C2의 상태 전이, W5는 사람 결정으로 남았다. C9(부모 업로드 만료 뒤 계보)는 오늘 밤 범위 밖이라 미완 그대로다.
-- **계약 점검 발견 47건**(S01~S47)을 항목 11개로 처리했다.
+- **계약 점검 발견 47건**(S01\~S47)을 항목 11개로 처리했다.
   고친 것 38건, 계약 문구를 고친 것 6건(S04·S09·S15·S26·S33·S47), 고치지 않은 것 3건(S08·S13·S18)이다.
   고친 것 가운데 S45는 검토 C4(ADR-0065)가 이미 고친 것을 시험으로 고정했다.
-- 새 ADR 19개(0064~0082), 새 마이그레이션 1개(0025, 보고서 버전의 데이터 기간), 새 설정 6개다.
+- 새 ADR 19개(0064\~0082), 새 마이그레이션 1개(0025, 보고서 버전의 데이터 기간), 새 설정 6개다.
   새 설정은 `MAX_REQUEST_BODY_BYTES`·`REPORT_PDF_MAX_CONCURRENT`·`CLIP_TIMEOUT_FACTOR`·`CLIP_TIMEOUT_MIN_S`·`WORKER_JOB_TYPES`·`WORKER_EXCLUDE_JOB_TYPES`이고,
   모두 `config.py`·`.env.example`·Compose에 넣었다.
 - 계약이 바뀐 항목이 있어 웹 `api.gen.ts`와 에이전트 `client.gen.go`를 다시 만들었다.
@@ -29,10 +29,10 @@
 
 | 순서 | 브랜치 | 담은 항목 | ADR |
 |---|---|---|---|
-| 1 | `fix/review-2026-11-12-rest` | 검토 2026-11-12의 W4·W1·V5·C4·C2·V9·V7·V8·C7(항목 8개). 루트 `CLAUDE.md`(`@AGENTS.md` 한 줄) | 0064~0071 |
-| 2 | `fix/contract-sweep-2026-11-13` | 계약 점검 S01~S29·S39~S42(항목 7개: dsa·dsb·shr·deid·asa·asb·rec) | 0072~0078 |
-| 3 | `fix/contract-sweep-2026-11-13-2` | 계약 점검 S30~S38·S43~S47(항목 4개: rpa·rpb·ctr·upl), 계약 생성물 재생성, 이 문서 | 0079~0082 |
-| 4 | `fix/stack-review-2026-11-20` | 2026-11-20 통합 검토에서 확인된 지적 33건(항목 7개: rv-webhooks·rv-clips·rv-sharing·rv-assets·rv-uploads·rv-reports·rv-validate), 계약 생성물 재생성, 검토 기록 `docs/review-2026-11-20/README.md`, 이 문서의 '2026-11-20 통합 검토' 절 | 0084·0086·0088·0089 새로. 0064~0067·0069·0071·0072·0074~0076·0081 갱신 |
+| 1 | `fix/review-2026-11-12-rest` | 검토 2026-11-12의 W4·W1·V5·C4·C2·V9·V7·V8·C7(항목 8개). 루트 `CLAUDE.md`(`@AGENTS.md` 한 줄) | 0064\~0071 |
+| 2 | `fix/contract-sweep-2026-11-13` | 계약 점검 S01\~S29·S39\~S42(항목 7개: dsa·dsb·shr·deid·asa·asb·rec) | 0072\~0078 |
+| 3 | `fix/contract-sweep-2026-11-13-2` | 계약 점검 S30\~S38·S43\~S47(항목 4개: rpa·rpb·ctr·upl), 계약 생성물 재생성, 이 문서 | 0079\~0082 |
+| 4 | `fix/stack-review-2026-11-20` | 2026-11-20 통합 검토에서 확인된 지적 33건(항목 7개: rv-webhooks·rv-clips·rv-sharing·rv-assets·rv-uploads·rv-reports·rv-validate), 계약 생성물 재생성, 검토 기록 `docs/review-2026-11-20/README.md`, 이 문서의 '2026-11-20 통합 검토' 절 | 0084·0086·0088·0089 새로. 0064\~0067·0069·0071·0072·0074\~0076·0081 갱신 |
 
 병합하는 법:
 
@@ -60,13 +60,13 @@
 | dsb (S02·S06·S07·S09·S10) | 다른 기관 이용 권한·신청에 404와 교차 기관 감사를 남기고, 없는 날짜와 기한 지난 승인을 거부한다 | 0073 | `integration/test_grant_access_request_tenant_audit.py`, `integration/test_access_request_period_dates.py`, `integration/test_access_decision_below_l3.py`, `integration/test_access_decision_deadline.py` |
 | shr (S11·S12·S14·S15·S16) | 분류 변경 뒤 공유 등급을 자동으로 내리고 권한을 철회하며, 재신청·403 감사·409·빈·중복 `asset_ids`를 바로잡았다 | 0074 | `unit/test_scope_after_change.py`, `integration/test_classification_lowers_scope.py`, `integration/test_classification_family_locks.py`, `integration/test_share_resubmit_rules.py`, `integration/test_share_review_denial_audit.py`, `integration/test_share_request_conflict_contract.py`, `integration/test_share_candidates_body.py` |
 | deid (S17·S19·S20·S21) | 원본 프레임 거부를 감사하고, 운영자는 심사 중일 때만 비식별본 프레임을 보며, 재검수 중복과 사람 태그를 바로잡았다 | 0075 | `integration/test_deid_frame_scope.py`, `integration/test_deid_recheck.py`, `integration/test_tag_human_edit.py` |
-| asa (S22~S26) | 검증에서 실패한 자산의 재처리가 검증부터 다시 하고, data_role 변경의 감사 세 가지를 맞췄다 | 0076 | `integration/test_asset_patch_audit.py`, `integration/test_verify_resume.py`(추가) |
-| asb (S27~S29) | 삭제 증명·다운로드 URL 거부를 감사하고, 클립 작업 목록에 `limit`·`cursor`를 더했다 | 0077 | `integration/test_deletion_certificate_cross_org_audit.py`, `integration/test_download_url_denial_audit.py`, `integration/test_clip_list_pagination.py` |
-| rec (S39~S42) | 회차 기록 수정의 null 항목은 그 항목 위치의 400으로(S39·S42), 근거의 없는 시각은 500 대신 400으로(S40) 답하고, 다른 기관 근거를 감사한다 | 0078 | `integration/test_record_contract_errors.py` |
-| rpa (S30~S33) | 기간 보고서가 그 사업의 관측값만 세고, 9999년 끝 기간과 양식 버전 0을 400으로 답한다 | 0079 | `integration/test_period_report_scope.py`, `integration/test_report_template_hwpx_put.py` |
-| rpb (S34~S38) | 보고서 버전마다 데이터 기간을 저장하고, 표시 없는 초안 HWPX를 막고, 내보내기 범위와 열람자 최신 버전을 맞췄다 | 0080 | `integration/test_report_contract_sweep.py` |
+| asa (S22\~S26) | 검증에서 실패한 자산의 재처리가 검증부터 다시 하고, data_role 변경의 감사 세 가지를 맞췄다 | 0076 | `integration/test_asset_patch_audit.py`, `integration/test_verify_resume.py`(추가) |
+| asb (S27\~S29) | 삭제 증명·다운로드 URL 거부를 감사하고, 클립 작업 목록에 `limit`·`cursor`를 더했다 | 0077 | `integration/test_deletion_certificate_cross_org_audit.py`, `integration/test_download_url_denial_audit.py`, `integration/test_clip_list_pagination.py` |
+| rec (S39\~S42) | 회차 기록 수정의 null 항목은 그 항목 위치의 400으로(S39·S42), 근거의 없는 시각은 500 대신 400으로(S40) 답하고, 다른 기관 근거를 감사한다 | 0078 | `integration/test_record_contract_errors.py` |
+| rpa (S30\~S33) | 기간 보고서가 그 사업의 관측값만 세고, 9999년 끝 기간과 양식 버전 0을 400으로 답한다 | 0079 | `integration/test_period_report_scope.py`, `integration/test_report_template_hwpx_put.py` |
+| rpb (S34\~S38) | 보고서 버전마다 데이터 기간을 저장하고, 표시 없는 초안 HWPX를 막고, 내보내기 범위와 열람자 최신 버전을 맞췄다 | 0080 | `integration/test_report_contract_sweep.py` |
 | ctr (S43·S44) | 사전 검증이 운영 경로와 같은 코드표·시각 순서 규칙도 본다 | 0081 | `unit/test_contract_prevalidate_rules.py`, `integration/test_contract_validator_rules.py` |
-| upl (S45~S47) | 완료 호출의 저장소 장애를 409 대신 503으로 답하고, 파트 URL 한도를 계약에 적었다 | 0082 | `integration/test_upload_parts_complete_contract.py` |
+| upl (S45\~S47) | 완료 호출의 저장소 장애를 409 대신 503으로 답하고, 파트 URL 한도를 계약에 적었다 | 0082 | `integration/test_upload_parts_complete_contract.py` |
 
 ## 2026-11-20 통합 검토
 
@@ -78,13 +78,13 @@
 - **어떻게 확인했나.** 지적마다 읽는 검증자가 코드를 다시 읽고 판정했다. 심각도가 중간·높음이면 돌려 보는 검증자가 합성 데이터로 따로 재현했다.
 - **판정.** 지적 55건 가운데 확인 38건(이 PR에서 고친 것 33, 사람이 정할 것 5), 판정 갈림 3건, 반박 14건이다.
 - **고친 곳.** 확인된 지적 33건은 네 번째 PR(브랜치 `fix/stack-review-2026-11-20`, 3번 PR 위)에서 항목 7개로 고쳤다.
-  새 ADR은 0084·0086·0088·0089다. 0083~0090을 이 검토에 잡아 두었고, 나머지 번호는 기존 ADR을 갱신하는 것으로 대신해 비워 두었다.
+  새 ADR은 0084·0086·0088·0089다. 0083\~0090을 이 검토에 잡아 두었고, 나머지 번호는 기존 ADR을 갱신하는 것으로 대신해 비워 두었다.
 - **눈에 띄는 동작 변화.** 이용 신청·이용 권한·이용 이력·비식별 검수 목록이 쪽으로 나뉘어, `limit`을 보내지 않으면 50개만 준다
   (포털은 이용 쪽 목록을 끝까지 모아 읽고, 검수 대기열은 500개까지 읽는다). 중복 항목 ID의 400은 오류 위치가 배열 자리 하나로 맞춰졌다.
   링크 항목이 든, 이미 저장된 HWPX 양식은 이제 내보내기가 409라 다시 올려야 한다. 원본 프레임 거부 감사의 사유 값은 `no_active_break_glass`로 바뀌었다.
   공유 후보 지정에서 형식이 틀린 자산 ID·회차 ID는 404 대신 400이고, 제공기관은 데이터셋에서 자기 기관 자산이 든 버전만 본다.
   `CLIP_TIMEOUT_FACTOR`가 inf·nan이면 기동하지 않는다.
-- **사람이 정할 것.** 아래 '사람이 정할 것'의 23~33번이 새로 생겼고, 5·11·20번에 합친 것이 있다.
+- **사람이 정할 것.** 아래 '사람이 정할 것'의 23\~33번이 새로 생겼고, 5·11·20번에 합친 것이 있다.
 
 | 영역 | 지적 | 고침 | 사람이 정할 것 | 판정 갈림 | 반박 |
 |---|---|---|---|---|---|
@@ -135,7 +135,7 @@
 |---|---|---|---|---|
 | 18 | 삭제를 2단계(outbox)로 할지 (C1) | 바뀌지 않았다. 객체 삭제를 확인한 뒤에야 증명을 발급한다(실패하면 503) | (가) 그대로 둔다. (나) 2단계로 하고 증명을 '삭제 요청됨'·'삭제 확인됨'으로 나눈다(증명의 법적 의미가 바뀐다) | ADR-0055, 검토 README '사람이 정할 것' 1 |
 | 19 | `RECEIVED`에서 실패로 가는 길 (C2) | 좁혀졌다. 운영자 명령 `python -m app.cli requeue-verify`로 검증 작업을 다시 넣을 수 있다(-1ay). 검사기가 계속 없으면 예약은 묶인 채다. 실제 악성코드 검사기 제품도 아직 결정 대기다(ADR-0031) | `RECEIVED → FAILED(예약 해제)` 전이를 domain.md 5장에 더할지, 'RECEIVED 장기 체류' 감시 규칙 코드를 둘지 정한다 | ADR-0058·0071, 검토 README '사람이 정할 것' 2 |
-| 20 | 웹훅 구독 비활성화의 의미 (W5) | 좁혀졌다. 라운드 장벽(W1)은 고쳤다(-1av). 독살 이벤트 하나가 건강한 구독을 끄고 다른 대기 이벤트를 취소하는 것은 그대로다. 2026-11-20 통합 검토(WEBHOOKS-1~3)에서, 백오프가 전송마다라 범람하는 구독의 쌓인 건이 실패 직후 연달아 다시 시도된다는 것도 확인했다(문서만 고쳤다) | 연속 실패 N회 같은 규칙으로 바꿀지 정한다(ADR-0030·0041 개정). 범람하는 구독을 구독 단위로 쉬게 할지(실패 뒤 쉬기, `consecutive_failures`로 끄기)도 함께 정한다. 바꾸면 시험 `test_interim_flood_backlog_is_attempted_back_to_back`과 ADR-0064 문장도 고친다 | ADR-0070, ADR-0064 갱신, 검토 README '사람이 정할 것' 3 |
+| 20 | 웹훅 구독 비활성화의 의미 (W5) | 좁혀졌다. 라운드 장벽(W1)은 고쳤다(-1av). 독살 이벤트 하나가 건강한 구독을 끄고 다른 대기 이벤트를 취소하는 것은 그대로다. 2026-11-20 통합 검토(WEBHOOKS-1\~3)에서, 백오프가 전송마다라 범람하는 구독의 쌓인 건이 실패 직후 연달아 다시 시도된다는 것도 확인했다(문서만 고쳤다) | 연속 실패 N회 같은 규칙으로 바꿀지 정한다(ADR-0030·0041 개정). 범람하는 구독을 구독 단위로 쉬게 할지(실패 뒤 쉬기, `consecutive_failures`로 끄기)도 함께 정한다. 바꾸면 시험 `test_interim_flood_backlog_is_attempted_back_to_back`과 ADR-0064 문장도 고친다 | ADR-0070, ADR-0064 갱신, 검토 README '사람이 정할 것' 3 |
 | 21 | 미완성 멀티파트 청소 (C4) | 좁혀졌다. 정리가 실패하면 세션·예약을 남겨 다시 한다(-1ax) | 저장소 수명주기 규칙(`AbortIncompleteMultipartUpload`)을 쓸지(SeaweedFS 지원은 확인 필요), 수정 전에 남은 것을 한 번 대조 점검할지 정한다 | ADR-0065, 검토 README '사람이 정할 것' 4 |
 | 22 | 요청 본문 크기 한도 (V5) | 임시로 정했다. 프록시 한도는 그대로 두고 앱에도 같은 20MiB를 두었다(-1aw) | (가) 그대로 둔다. (나) 앱 한도를 프록시보다 줄인다. (다) 앱 한도를 뺀다(되돌리는 법은 ADR) | ADR-0068, 검토 README '사람이 정할 것' 5 |
 
@@ -151,7 +151,7 @@
 | 25 | 되돌려진 CORE 변경의 철회 메일 (FOLLOWUPS-D1) | data_role과 session_id를 함께 보낸 `PATCH /v1/assets/{id}`에서 회차 검사가 실패해 CORE 변경이 되돌려져도 이용기관 철회 메일은 이미 나간다(전부터). 판정이 갈렸다 | (가) 회차 검사를 data_role 처리보다 먼저 한다. (나) 알림을 커밋 뒤로 미룬다(outbox) | ADR-0076, 검토 2026-11-20 FOLLOWUPS-D1 |
 | 26 | 같은 회차 재검수와 L2 이상 비식별본 (ASSETS-O1) | 같은 회차 재검수가 L2 이상으로 공유된 비식별본의 review_result를 지우고 공유 등급·이용 권한은 그대로 둬, `GET /v1/assets/{id}`가 계약을 어긴다 | (가) 공유 등급을 내린다. (나) 그런 비식별본은 재검수에서 건너뛴다. (다) 재검수 표시를 다른 곳에 둔다. domain.md 4장과 14번 요구사항 4.4 사이의 결정이다 | ADR-0075, 검토 2026-11-20 ASSETS-O1 |
 | 27 | PDF 렌더 한도의 몫 (REPORTS-O1) | 동시 렌더 한도(`REPORT_PDF_MAX_CONCURRENT`)가 프로세스 하나에 풀 하나라, 한 기관이 다른 모든 기관을 429에 묶어 둘 수 있다 | (가) 기관마다 몫을 나눈다. (나) 프로세스 하나의 풀을 ADR-0066 감수할 점에 적고 둔다 | ADR-0066, 검토 2026-11-20 REPORTS-O1 |
-| 28 | 계약 검증기의 좌표 수 상한 (VALIDATE-1 뒤) | 메모리 폭증은 고쳤지만 좌표 수에는 상한이 없다. 좌표 하나에 약 0.1ms라 본문이 20MiB에 가까운 항적이면 요청 하나가 1~2분을 쓴다(전부터 있던 비용) | 계약 좌표 배열에 `maxItems`를 둘지, 서버 상한을 둘지, 값을 얼마로 할지 정한다. 22번(본문 한도)과 함께 본다 | ADR-0086 |
+| 28 | 계약 검증기의 좌표 수 상한 (VALIDATE-1 뒤) | 메모리 폭증은 고쳤지만 좌표 수에는 상한이 없다. 좌표 하나에 약 0.1ms라 본문이 20MiB에 가까운 항적이면 요청 하나가 1\~2분을 쓴다(전부터 있던 비용) | 계약 좌표 배열에 `maxItems`를 둘지, 서버 상한을 둘지, 값을 얼마로 할지 정한다. 22번(본문 한도)과 함께 본다 | ADR-0086 |
 | 29 | 사전 검증의 배치 항목 수 한도 | 사전 검증은 관측값 배치의 항목 수 한도 `OBSERVATION_BATCH_MAX`(운영 경로는 413)를 보지 않아, 한도를 넘는 배치는 운영 경로와 판정이 다를 수 있다(전부터) | 사전 검증도 그 한도를 볼지 정한다. 설정에 기대는 규칙이라 ADR-0081 결정 6과 같은 성격이다 | ADR-0086, ADR-0081 |
 | 30 | 만료 업로드 정리의 시간 한도 (UPLOADS-3) | 한 주기의 한도는 `sweep_expired`의 함수 인자 기본값 60초다(후보 수 100과 같은 방식). 한도는 후보 사이에서만 봐서 최악은 60초에 후보 하나의 저장소 호출 시간(약 90초)을 더한 것이다. 정상 저장소에서 100건이 60초 안에 끝나는지는 운영 저장소에서 재지 않았다(아래 '운영에서 확인할 것' 11번) | 운영에서 바꿀 수 있게 설정으로 둘지 정한다. 두면 `config.py`·`.env.example`·Compose에 넣는다. 13번과 같은 성격이다 | ADR-0084 |
 | 31 | 영상·센서 밖 유형의 검증 실패 복구 | 스토리지 읽기 실패로 재시도를 다 쓴 자산은 FAILED(failed_from=VALIDATING)가 되고 예약이 풀리지 않는다. 영상·센서는 재처리로 검증부터 다시 하지만(S22), 그 밖의 유형은 재처리가 409다 | 그 유형들에도 복구 경로를 둘지 정한다 | ADR-0071·0076, Runbook 11, 검토 2026-11-20 UPLOADS-2·5·ASSETS-6 |
