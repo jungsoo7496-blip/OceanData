@@ -244,6 +244,8 @@ def reprocess_asset(asset_id: str, body: ReprocessRequest, request: Request, db:
     # 겹친 재처리·검증이 끝난 뒤의 상태로 판단한다. 읽어 둔 FAILED로 판단하면 그사이 등록된 자산을 VALIDATING으로
     # 덮어쓰고 검증을 또 넣는다 — 그 검증은 무결성 로그 고유키에 걸려 FAILED로 끝난다 (ADR-0076)
     db.refresh(a, with_for_update=True)
+    if a.deleted_at is not None:  # 잠금을 기다리는 사이 삭제가 확정됐다 (삭제된 자산은 load_scoped처럼 404)
+        raise ProblemError("NOT_FOUND")
     sensor = body.steps == ["SENSOR_PARSE"]
     if "SENSOR_PARSE" in body.steps and not sensor:
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/steps", "code": "mixed",

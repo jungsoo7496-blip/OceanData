@@ -100,3 +100,7 @@ test_overlapping_reprocess_decides_on_the_locked_current_state` 2개 — 늦은 
   판단하기 위해서다. 거부되면 요청 트랜잭션이 되돌아가며 바로 놓는다. 잠그는 행은 분류 지정과 같다(등급과 상관없이 모든 파생본).
   시험 `tests/integration/test_core_change_family_locks.py` 2개는 수정 전 코드에서 실패했다 — CORE 변경이 파생본 행을 쥔 채
   원 자산을 기다렸고, 겹친 상향 뒤 끝 상태가 `('CORE', 'SANDBOX_PARTNERS')`였다.
+- **재처리와 겹친 삭제 (통합 검토 ASSETS-4)**: 재처리는 행을 잠그고 다시 읽은 뒤 `deleted_at`부터 본다. 잠그기 전에 삭제가
+  확정됐으면(삭제도 같은 행을 잠근다) `load_scoped`와 같은 404 NOT_FOUND다. 전에는 다시 읽은 행의 삭제 표시를 보지 않아 지워진
+  자산에 202·처리 작업·REPROCESS_REQUESTED SUCCESS 감사가 남고, 지워진 자산과 파생본에 재처리 시각이 찍혔다. 404는 계약
+  reprocessAsset에 이미 있는 응답이다. 시험 `tests/integration/test_reprocess_deleted_asset.py`는 수정 전 코드에서 202로 실패했다.
