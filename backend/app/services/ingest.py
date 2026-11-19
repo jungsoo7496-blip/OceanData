@@ -36,7 +36,7 @@ from app.domain.normalize import TimeRuleError, check_location, resolve_capture_
 from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.ports.notifier import Notification
-from app.ports.storage import CompletedPart, PartsRejected
+from app.ports.storage import CompletedPart, ObjectInfo, PartsRejected
 from app.services import contracts
 from app.services.quality import apply_rules, load_rules
 from app.services.tenant import NotFoundInScope, get_scoped
@@ -412,22 +412,29 @@ class IngestService:
 
         완성 객체 확인은 멀티파트 중단보다 먼저 한다. 확인이 실패하면 저장소도 그대로라, 크기 불일치 취소(완료 요청
         안)의 503 뒤에 다시 보낸 완료가 살아 있는 멀티파트를 보고 이 정리에 다시 닿는다. 중단 뒤에 확인하면 다시 보낸
-        완료는 이미 중단된 멀티파트의 파트 목록만 보게 된다. 확인과 중단 사이에 이 업로드를 완료하는 요청은 없다 —
-        완료는 이 행 잠금을 쥐고 저장소 완료부터 DB 확정까지 한다.
+        완료는 이미 중단된 멀티파트의 파트 목록만 보게 된다.
+        완료 요청은 이 행 잠금을 쥐고 저장소 완료부터 DB 확정까지 한다. 그러나 저장소 완료 호출이 시간 초과·연결 오류로
+        503이 되면(ADR-0082) 잠금은 풀리고 저장소는 그 완료를 뒤늦게 마칠 수 있다. 그 완료가 확인과 중단 사이에 끝나면
+        중단은 NoSuchUpload(성공으로 본다)나 성공(SeaweedFS)이라 알아챌 수 없으므로, 처음 확인에서 객체가 없었으면
+        중단 뒤에 한 번 더 확인한다 (ADR-0084).
         """
         self.db.refresh(up, with_for_update=True)
         if up.status != "UPLOADING":
             return False
-        try:
-            stored = self.c.storage.head_object(up.bucket, up.object_key)
-        except Exception as exc:  # noqa: BLE001 - 완성 객체가 있는지 모르면 세션을 끝내지 않는다
-            raise self._cleanup_failed(up, "head_object", exc) from None
+        kept = "저장소에 완료 객체가 있어 업로드 중단을 확인할 수 없습니다"
+        stored = self._stored_object(up, "head_object")
         if stored is not None and preserve_asset:
-            raise ProblemError("CONFLICT", detail="저장소에 완료 객체가 있어 업로드 중단을 확인할 수 없습니다")
+            raise ProblemError("CONFLICT", detail=kept)
         try:
             self.c.storage.abort_multipart_upload(up.bucket, up.object_key, up.s3_upload_id)
         except Exception as exc:  # noqa: BLE001 - 정리됐는지 확인하지 못했다. 세션을 끝내지 않는다
             raise self._cleanup_failed(up, "abort_multipart", exc) from None
+        if stored is None:
+            # 확인한 뒤 늦게 끝난 완료가 남긴 객체 — 확인하지 못하면(503) 세션을 끝내지 않는다. 멀티파트는 이미 없으므로
+            # 다시 보낸 정리는 중단의 NoSuchUpload를 지나 여기로 다시 온다
+            stored = self._stored_object(up, "head_object_after_abort")
+            if stored is not None and preserve_asset:
+                raise ProblemError("CONFLICT", detail=kept)
         if stored is not None:
             self._remove_completed_object(up)
         self.quota.settle(up.organization_id, up.reserved_bytes, to=None)
@@ -477,6 +484,13 @@ class IngestService:
             if not gone:
                 raise self._cleanup_failed(up, "delete_object", exc) from None
         log.info("upload_completed_object_removed", extra={"upload_id": up.upload_id})
+
+    def _stored_object(self, up: Upload, step: str) -> ObjectInfo | None:
+        """정리 중 이 키의 완성 객체 확인. 저장소가 답하지 않으면 UploadCleanupFailed(503) — 모르면 끝내지 않는다."""
+        try:
+            return self.c.storage.head_object(up.bucket, up.object_key)
+        except Exception as exc:  # noqa: BLE001
+            raise self._cleanup_failed(up, step, exc) from None
 
     @staticmethod
     def _cleanup_failed(up: Upload, step: str, exc: Exception) -> UploadCleanupFailed:
