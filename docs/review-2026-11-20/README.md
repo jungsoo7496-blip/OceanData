@@ -101,6 +101,14 @@
 | ASSETS-6 | Runbook 11(과 C2 HANDOFF 항목·ADR-0071)이 스토리지 장애로 실패한 자산(failed_from=VALIDATING)은 복구할 수 없다고 하지만, S22부터 재처리로 복구된다 | 낮음 | 확인 | 고침 (이 PR) |
 | ASSETS-7 | 같은 '유효한 긴급 열람 승인 없음' 거부를 오늘 밤 더한 두 항목이 다른 사유 코드로 감사한다(ASSETS-2와 같은 지적) | 낮음 | 확인 | 고침 (이 PR) |
 
+- **ASSETS-1 CORE 변경의 잠금 순서** — 고침(ADR-0076 보완, `test_core_change_family_locks.py`). data_role CORE 변경은 판단 전에 `sharing.lock_family`로 원 자산 → 파생본 순으로 잠그고 다시 읽는다. 분류 지정·삭제·검수 결정과 같은 순서가 되어, 파생본을 쥔 채 원 자산을 기다리다 교착해 한쪽이 409를 받던 일이 없다.
+- **ASSETS-2 긴급 열람 거부 사유 코드** — 고침(ADR-0075 결정 1 수정, `test_deid_frame_scope.py`). 검수 원본 프레임 거부 감사도 다운로드 URL(S28)과 같은 `reason: no_active_break_glass`를 쓴다. action은 그대로 다르다(`deid_review:read`·`asset:download`).
+- **ASSETS-3 CORE 변경과 겹친 상향** — 고침(ASSETS-1과 같은 잠금, `test_core_change_family_locks.py`). 겹친 L1→L2 상향 신청은 CORE 변경의 확정을 기다린 뒤 CORE 원본의 파생본이라 422가 되고, 파생본은 L1에 남는다(전: CORE 원본 + L2 파생본).
+- **ASSETS-4 재처리와 겹친 삭제** — 고침(ADR-0076 보완, `test_reprocess_deleted_asset.py`). 재처리가 잠그고 다시 읽은 자산이 그사이 삭제됐으면 404이고, 처리 작업·REPROCESS_REQUESTED 감사·재처리 시각을 남기지 않는다.
+- **ASSETS-5 비식별 검수 목록 페이지** — 고침(ADR-0089, `test_deid_review_list_pages.py`, 계약 변경). listDeidReviews에 `cursor`·`limit`(기본 50·최대 500)·필수 `next_cursor`·400을 더했다. 만든 시각·검수 ID 키셋으로 넘기고, 커서는 마지막 검수 ID다(볼 수 없는 검수면 400). 비식별본은 한 문으로 읽고, 포털은 `limit=500`으로 부른다.
+- **ASSETS-6 Runbook 11의 복구 절차** — 고침(문서). 스토리지 장애로 검증이 FAILED(failed_from=VALIDATING)가 된 원 영상·센서 자산은 스토리지 복구 뒤 재처리로 등록·예약 정산까지 끝난다고 적었다. 그 밖의 유형은 여전히 409라 절차가 없다. ADR-0071 감수할 점에 이후 ADR-0076을 표시했다.
+- **ASSETS-7 긴급 열람 거부 사유 코드(중복)** — ASSETS-2와 같은 지적이라 같은 커밋으로 고쳤다.
+
 ## 업로드
 
 | id | 지적 | 심각도 | 판정 | 처리 |
