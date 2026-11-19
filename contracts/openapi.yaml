@@ -2206,12 +2206,18 @@ paths:
       tags: [deid]
       operationId: listDeidReviews
       summary: 비식별 검수 (검수자는 배정된 것만, 운영자는 전체)
+      description: |
+        만든 시각(created_at) 순, 같으면 검수 ID 순이다. 한 페이지는 limit건(기본 50, 최대 500)이고, 다음 페이지는 next_cursor를
+        cursor로 전달한다(마지막 페이지는 null). status로 거른 목록도 같은 커서로 이어 본다.
+        형식이 틀렸거나 볼 수 없는 검수를 가리키는 cursor, 범위 밖 limit은 400 (ADR-0089).
       x-freeze: G4
       x-status: draft
       parameters:
         - name: status
           in: query
           schema: {enum: [ASSIGNED, PASSED, MISSED, REJECTED]}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {$ref: '#/components/parameters/Limit'}
       responses:
         '200':
           description: 검수 목록
@@ -2219,9 +2225,10 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items]
+                required: [items, next_cursor]
                 properties:
                   items: {type: array, items: {$ref: '#/components/schemas/DeidReview'}}
+                  next_cursor: {type: [string, 'null'], description: 다음 페이지 커서. 마지막 페이지는 null}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}

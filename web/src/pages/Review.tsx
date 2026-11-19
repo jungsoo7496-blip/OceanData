@@ -32,7 +32,7 @@ export function ReviewQueue({ me }: { me: Me }) {
   const { message } = App.useApp()
   const qc = useQueryClient()
   const isOp = me.roles.includes('PLATFORM_OPERATOR')
-  const list = useQuery({ queryKey: ['deid-reviews'], queryFn: () => api<{ items: ReviewT[] }>('/v1/deid-reviews?status=ASSIGNED') })
+  const list = useQuery({ queryKey: ['deid-reviews'], queryFn: () => api<{ items: ReviewT[]; next_cursor: string | null }>('/v1/deid-reviews?status=ASSIGNED&limit=500') })
   const quality = useQuery({ queryKey: ['deid-quality'], queryFn: () => api<{ reviews: number; reprocess_ratio: number; classes: { class: string; detected: number; missed: number; miss_rate: number }[]; note: string }>('/v1/deid-quality'), enabled: isOp })
   const [open, setOpen] = useState<ReviewT | null>(null)
   const [idx, setIdx] = useState(0)
