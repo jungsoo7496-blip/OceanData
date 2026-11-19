@@ -23,8 +23,10 @@ S17·S21은 문서에 적힌 동작으로 되돌리는 일이다. S19는 '심사
 ## 결정
 
 1. **원본 프레임 거부 감사 (S17).** 승인이 없어 403을 낼 때 `PERMISSION_DENIED`(result=DENIED, 대상 자산, `details={"action": "deid_review:read", "which": "ORIGINAL",
-   "reason": "no_break_glass_grant", "review_id": ...}`)를 남긴다. `connection`을 넘기지 않아 요청 트랜잭션과 따로 확정되고, 요청이 실패해도 남는다 (ADR-0053).
+   "reason": "no_active_break_glass", "review_id": ...}`)를 남긴다. `connection`을 넘기지 않아 요청 트랜잭션과 따로 확정되고, 요청이 실패해도 남는다 (ADR-0053).
    긴급 열람 결정·장비 등록 거부(계약 점검 #15·#25)와 같은 모양이다.
+   사유 코드는 같은 조건(유효한 긴급 열람 승인 없음: 없음·승인 전·만료·남의 승인)을 거부하는 다운로드 URL(S28)과 같다.
+   처음에는 `no_break_glass_grant`였는데, 같은 묶음의 S28이 `no_active_break_glass`를 써 통합 검토(ASSETS-2)에서 하나로 맞췄다.
 2. **비식별본 프레임의 '심사 중' (S19).** 배정 검수자가 아닌 운영자가 다른 기관의 비식별본 프레임을 요청하면, 그 검수의 원본 `share_status`가
    **PROCESSING·QUALITY_REVIEW·REPROCESS**일 때만 준다. 아니면 403과 `PERMISSION_DENIED`(`which: "DEID"`, `reason: "not_under_review"`)를 남긴다.
    - 공유 심사는 원본 단위로 진행한다(domain.md 4장). 검수가 끝나도(PASSED) 원본이 QUALITY_REVIEW면 운영자가 APPROVED를 판단하는 데 프레임이 필요하므로 그대로 준다.

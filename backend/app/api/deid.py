@@ -83,7 +83,7 @@ def review_frame(review_id: str, request: Request, t: float = Query(ge=0), which
 
         grant = active_grant_for(db, a, p.principal_id, c.clock.now())
         if grant is None:
-            _frame_denied(c, request, p, rv, a, which, "no_break_glass_grant")
+            _frame_denied(c, request, p, rv, a, which, "no_active_break_glass")  # 다운로드 URL 거부와 같은 코드
             raise ProblemError("FORBIDDEN", detail="운영자의 원본 프레임 열람은 유효한 긴급 열람 승인이 있어야 합니다")
         grant_id, grant_expires = grant.grant_id, grant.expires_at
     elif which == "DEID" and rv.reviewer_id != p.user_id and a.organization_id != p.organization_id:

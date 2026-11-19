@@ -70,14 +70,15 @@ def _frame(ctx: Any, rid: str, user: int, which: str = "DEID") -> Any:
 
 
 def test_operator_original_frame_without_grant_is_audited(ctx) -> None:
-    """S17: 승인 없는 운영자의 원본 프레임 403에도 PERMISSION_DENIED가 남는다 (요청은 실패해도)."""
+    """S17: 승인 없는 운영자의 원본 프레임 403에도 PERMISSION_DENIED가 남는다 (요청은 실패해도).
+    사유 코드는 다운로드 URL 거부(S28)와 같다 — 같은 조건(유효한 긴급 열람 승인 없음)이다 (통합 검토 ASSETS-2)."""
     with ctx.c.sessionmaker.begin() as db:
         oid, _, rid = _pair(db, "QUALITY_REVIEW")
     r = _frame(ctx, rid, OP, "ORIGINAL")
     assert r.status_code == 403 and r.json()["code"] == "FORBIDDEN"
     rows = _audit(ctx, r)
     assert [(a, res, t) for a, res, t, _ in rows] == [("PERMISSION_DENIED", "DENIED", oid)]
-    assert rows[0][3] == {"action": "deid_review:read", "which": "ORIGINAL", "reason": "no_break_glass_grant",
+    assert rows[0][3] == {"action": "deid_review:read", "which": "ORIGINAL", "reason": "no_active_break_glass",
                           "review_id": rid}
 
 
