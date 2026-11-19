@@ -157,18 +157,17 @@ def _unevaluated_properties(validator: Any, unevaluated: Any, instance: Any,
     표준은 allOf 항목 하나가 실패하면 그 항목이 평가한 속성을 버린다(실패한 하위 스키마의 주석은 남지 않는다).
     그래서 이벤트 문서의 시각 하나가 틀려도 루트에 '알려진 속성이 모두 평가되지 않음' 오류가 붙었다.
     실패한 항목은 자기 오류로 이미 보고되므로, 그 항목이 평가하는 속성은 평가된 것으로 보고 나머지(계약에 없는
-    속성)만 보고한다. allOf가 실패하면 이 스키마는 어차피 무효라 어떤 문서의 유효성도 바뀌지 않는다."""
-    errors = list(_STANDARD_UNEVALUATED(validator, unevaluated, instance, schema))
+    속성)만 보고한다. allOf가 실패하면 이 스키마는 어차피 무효라 어떤 문서의 유효성도 바뀌지 않는다.
+
+    통과한 항목이 평가하는 속성은 표준도 같은 함수로 이미 센다. 그래서 항목마다 통과 여부를 다시 검사하지 않고
+    모든 항목의 속성을 밝힌 항목을 더해 표준을 한 번만 돌린다 (ADR-0086). 항목의 속성은 문서를 그 항목에 비춰
+    보지 않고 정한다(하위 allOf·if의 조건만 본다)."""
     members = schema.get("allOf")
-    if not errors or not isinstance(members, list) or _evaluated_keys is None:
-        yield from errors
+    if not isinstance(members, list) or _evaluated_keys is None or not validator.is_type(instance, "object"):
+        yield from _STANDARD_UNEVALUATED(validator, unevaluated, instance, schema)
         return
-    failing = [m for m in members if next(validator.descend(instance, m), None) is not None]
-    if not failing:
-        yield from errors
-        return
-    declared = sorted({str(k) for m in failing for k in _evaluated_keys(validator, instance, m)})
-    stub = {"properties": dict.fromkeys(declared, True)}  # 실패한 항목이 평가하는 속성만 밝히는 항상 통과하는 항목
+    declared = sorted({str(k) for m in members for k in _evaluated_keys(validator, instance, m)})
+    stub = {"properties": dict.fromkeys(declared, True)}  # 항목들이 평가하는 속성만 밝히는 항상 통과하는 항목
     yield from _STANDARD_UNEVALUATED(validator, unevaluated, instance, {**schema, "allOf": [*members, stub]})
 
 
@@ -327,11 +326,13 @@ _SAMPLE_COORDINATES: dict[str, Any] = {"Point": [1, 1], "LineString": [[1, 1], [
 def _repaired_location(loc: dict[str, Any], problems: list[Problem]) -> dict[str, Any] | None:
     """위치 오류가 가리키는 좌표 자리만 계약에 맞는 값으로 바꾼 사본. 좌표 하나의 셋째 값부터는 원래 값을 둔다.
 
+    바꾸는 자리까지의 배열만 새로 만들고 나머지 좌표는 원래 객체를 함께 쓴다(원래 문서는 바꾸지 않는다, ADR-0086).
     형상 종류가 틀렸거나(무엇에 비춰 볼지 모른다) 자리를 따라갈 수 없으면 None."""
     kind = loc.get("type")
     if not isinstance(kind, str) or kind not in _SAMPLE_COORDINATES:
         return None
-    out = copy.deepcopy(loc)
+    out = dict(loc)
+    fresh: dict[int, list[Any]] = {}  # 이 사본에서 새로 만든 배열 (id → 객체, 살아 있는 동안 id가 겹치지 않는다)
     for p in problems:
         segs = _segments(p.pointer)
         if segs[:2] != ["location", "coordinates"] or not all(s.isdigit() for s in segs[2:]):
@@ -340,10 +341,14 @@ def _repaired_location(loc: dict[str, Any], problems: list[Problem]) -> dict[str
         key: Any = "coordinates"
         sample: Any = _SAMPLE_COORDINATES[kind]
         for s in segs[2:]:
-            parent = parent.get(key) if isinstance(parent, dict) else parent[key]
-            if not isinstance(parent, list) or int(s) >= len(parent) or not isinstance(sample[0], list):
+            child = parent.get(key) if isinstance(parent, dict) else parent[key]
+            if not isinstance(child, list) or int(s) >= len(child) or not isinstance(sample[0], list):
                 return None
-            key, sample = int(s), sample[0]
+            if id(child) not in fresh:  # 원래 문서의 배열은 바꾸지 않고 얕게 복사해 바꾼다
+                child = list(child)
+                fresh[id(child)] = child
+                parent[key] = child
+            parent, key, sample = child, int(s), sample[0]
         current = parent.get(key) if isinstance(parent, dict) else parent[key]
         if all(isinstance(x, int) for x in sample):  # 좌표 하나
             parent[key] = [*sample, *(current[2:] if isinstance(current, list) else [])]
@@ -358,18 +363,31 @@ def _location_explains_schema(contract: str, doc: dict[str, Any], location: list
 
     좌표 오류는 geometry 전체의 oneOf 불일치(/location)로도 나온다. 위치 오류가 가리키는 자리만 고친 사본이
     계약을 통과하면 그 불일치는 위치 오류 때문이다. 통과하지 못하면 다른 결함(계약에 없는 속성, 모자란 좌표 수,
-    셋째 값 등)이 있으므로 스키마 오류도 남긴다. 계약의 위치 규칙은 다른 필드에 기대지 않으므로 위치만 검사한다."""
+    셋째 값 등)이 있으므로 스키마 오류도 남긴다. 계약의 위치 규칙은 다른 필드에 기대지 않으므로 그 계약의 location
+    속성 스키마로만 검사한다(문서 전체 스키마로 검사하면 이벤트의 allOf·unevaluatedProperties를 다시 돈다, ADR-0086)."""
     errors = [p for p in location if p.severity == "ERROR"]
     if not errors or not any(_within(p.pointer, "/location") for p in schema):
         return False  # 가릴 스키마 오류가 없다
+    if contract not in _LOCATION_SCHEMA:
+        return False  # 문서에 location 속성이 없는 계약 (/location 아래 스키마 오류가 생기지 않는다)
     if len(errors) >= LOCATION_PROBLEM_LIMIT and \
             len(check_location(doc["location"], limit=LOCATION_PROBLEM_LIMIT + 1)) > LOCATION_PROBLEM_LIMIT:
         return False  # 좌표 오류가 수집 상한보다 많다: 모으지 못한 자리를 고칠 수 없으니 스키마 오류도 남긴다
     repaired = _repaired_location(doc["location"], errors)
     if repaired is None:
         return True
-    validator = contract_validator({"$ref": BASE + f"{SCHEMA_FOR_CONTRACT[contract]}.schema.json"})
-    return not any(_within(_ptr(e.absolute_path), "/location") for e in validator.iter_errors({"location": repaired}))
+    return _location_validator(contract).is_valid(repaired)
+
+
+# 계약마다 문서 location 속성의 스키마 (위치 재검사가 쓴다). location 속성이 있는 계약은 모두 여기 있어야 한다
+_LOCATION_SCHEMA = {"event": "event.schema.json#/$defs/event_body/properties/location",
+                    "upload-manifest": "upload-manifest.schema.json#/properties/location",
+                    "asset-metadata": "asset-metadata.schema.json#/properties/location"}
+
+
+@lru_cache(maxsize=4)
+def _location_validator(contract: str) -> Draft202012Validator:
+    return contract_validator({"$ref": BASE + _LOCATION_SCHEMA[contract]})
 
 
 @lru_cache(maxsize=1)

@@ -137,3 +137,73 @@ def test_one_of_reports_the_standard_error_without_collecting_branch_errors() ->
     assert [e.message for e in ours.iter_errors(5)] == [
         "5 is valid under each of {'minimum': 0}, {'type': 'number'}"]
 
+
+# ---------------------------------------------------------------- VALIDATE-2 이벤트 문서의 되풀이 검사
+
+def _position_checks(monkeypatch: pytest.MonkeyPatch, contract: str, doc: dict[str, Any]) -> int:
+    """검증 한 번 동안 좌표 스키마(position의 prefixItems)를 적용한 횟수. 스키마를 몇 번 다시 훑는지의 척도다."""
+    seen = [0]
+    standard = contracts._ContractValidator.VALIDATORS["prefixItems"]
+
+    def counting(validator: Any, prefix_items: Any, instance: Any, schema: Any) -> Any:
+        seen[0] += 1
+        return standard(validator, prefix_items, instance, schema)
+
+    with monkeypatch.context() as patch:
+        patch.setitem(contracts._ContractValidator.VALIDATORS, "prefixItems", counting)
+        validate_document(contract, doc)
+    return seen[0]
+
+
+@pytest.mark.parametrize("unknown_field", [False, True], ids=["좌표 하나만", "계약에 없는 속성도"])
+def test_event_with_one_bad_coordinate_rechecks_its_track_at_most_twice_as_often_as_a_correct_one(
+        monkeypatch: pytest.MonkeyPatch, unknown_field: bool) -> None:
+    """좌표 하나가 틀린 이벤트 항적을 훑는 횟수는 좌표가 모두 맞는 같은 크기 문서의 두 배 이하다.
+    수정 전에는 6.5배였다(보정 전 판은 3배): unevaluatedProperties 보정이 표준 키워드를 두 번 돌리고 실패한
+    allOf 항목을 다시 내려가 검사했고, 위치 재검사는 고친 사본을 이벤트 계약 전체로 다시 검사했다."""
+    extra = {"zzz_unknown": 1} if unknown_field else {}
+    good = _position_checks(monkeypatch, "event", _parsed({**_in_event(_track(2000, bad=False)), **extra}))
+    bad = _position_checks(monkeypatch, "event", _parsed({**_in_event(_track(2000, bad=True)), **extra}))
+    assert good >= 2000, good  # 세는 방법이 맞는지 (좌표마다 적어도 한 번)
+    assert bad <= 2 * good, f"올바른 항적 {good}번, 좌표 하나가 틀린 항적 {bad}번"
+
+
+def test_repaired_copy_replaces_only_the_flagged_positions_and_leaves_the_document_alone() -> None:
+    """위치 오류가 가리키는 자리만 바꾼 사본은 그 자리까지의 배열만 새로 만든다. 나머지 좌표는 원래 객체를 함께 쓰고
+    (location 전체를 깊은 복사하지 않는다) 원래 문서는 바뀌지 않는다 (같은 좌표 객체를 여러 자리가 공유해도)."""
+    track = _parsed(_track(1000, bad=True))
+    problems = contracts._location_problems({"location": track})
+    repaired = contracts._repaired_location(track, problems)
+    assert repaired is not None
+    assert repaired["coordinates"][-1] == [1, 1] and track["coordinates"][-1] == SWAPPED
+    assert all(a is b for a, b in zip(repaired["coordinates"][:-1], track["coordinates"][:-1], strict=True))
+
+    shared = [10, 200]  # 같은 좌표 객체를 두 자리가 쓰는 링 (JSON을 거치지 않은 호출)
+    ring = [[126, 35], shared, shared, [127, 36], [126, 35]]
+    area = {"type": "Polygon", "coordinates": [ring, [[1, 2], [3, 4], [5, 6], [1, 2]]]}
+    problems = contracts._location_problems({"location": area})
+    assert [p.pointer for p in problems] == ["/location/coordinates/0/1", "/location/coordinates/0/2"]
+    repaired = contracts._repaired_location(area, problems)
+    assert repaired is not None
+    assert repaired["coordinates"][0] == [[126, 35], [1, 1], [1, 1], [127, 36], [126, 35]]
+    assert repaired["coordinates"][1] is area["coordinates"][1]  # 손대지 않은 링은 그대로 함께 쓴다
+    assert area["coordinates"][0] is ring and ring == [[126, 35], [10, 200], [10, 200], [127, 36], [126, 35]]
+    assert shared == [10, 200]
+
+
+def test_location_recheck_uses_the_location_schema_of_every_contract_that_has_one() -> None:
+    """고친 사본은 그 계약의 location 속성 스키마로만 다시 검사한다. 계약 전체로 검사한 /location 아래 오류와
+    같은 판정인지 계약마다 여러 위치 값으로 본다. location 속성이 있는 계약은 모두 표에 있어야 한다."""
+    samples: list[Any] = [_track(3, bad=False), _track(3, bad=True), {"type": "Point", "coordinates": [1, 2], "bbox": 1},
+                          {"type": "Polygon", "coordinates": [[[1, 2], [3, 4], [1, 2]]]}, None, "x"]
+    for contract, name in contracts.SCHEMA_FOR_CONTRACT.items():
+        whole = contracts.contract_validator({"$ref": contracts.BASE + f"{name}.schema.json"})
+        reaches = any(list(e.absolute_path)[:1] == ["location"] for s in samples
+                      for e in whole.iter_errors({"location": s}))
+        assert reaches == (contract in contracts._LOCATION_SCHEMA), contract
+        if not reaches:
+            continue
+        own = contracts.contract_validator({"$ref": contracts.BASE + contracts._LOCATION_SCHEMA[contract]})
+        for s in samples:
+            under = any(list(e.absolute_path)[:1] == ["location"] for e in whole.iter_errors({"location": s}))
+            assert under == (not own.is_valid(s)), (contract, s)
