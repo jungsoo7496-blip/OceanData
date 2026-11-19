@@ -22,7 +22,7 @@ from app.workers import main as worker
 from tests.acceptance.test_t08_t15_sharing import CARD, access, approved_pair, decide, share, to_l3
 from tests.contract.openapi_contract import assert_matches_contract as check
 from tests.integration.test_ingest import drain, manifest, upload_all
-from tests.unit.test_webhook_send import SyntheticReceiver, silent
+from tests.unit.test_webhook_send import SyntheticReceiver, interim_flood, self_signed, silent
 
 pytestmark = pytest.mark.integration
 ADMIN_A, MEMBER_A, ADMIN_B, OP = 101, 102, 103, 106
@@ -309,6 +309,34 @@ def test_real_send_is_bounded_and_holds_no_row_locks(ctx) -> None:
         assert (d.status, d.attempts, d.last_error, d.last_status_code) == ("PENDING", 1, "TimeoutError", None)
     finally:
         rx.close()
+
+
+def test_interim_response_flood_is_an_ordinary_failed_attempt(ctx, monkeypatch, tmp_path) -> None:
+    """검토 W4(ADR-0064), 실제 전송 경로(TLS): 중간 응답(1xx)을 끝없이 보내는 수신 서버는 기한(기본 5초)까지 붙잡지
+    못하고, 그 시도는 다른 실패와 같이 기록된다(재시도·백오프 그대로, 한 번 실패로 구독을 끄지 않는다)."""
+    server, trusted = self_signed(tmp_path, "hooks.example.test")
+    rx = SyntheticReceiver(interim_flood, tls=server)
+    monkeypatch.setattr(webhooks, "_lookup", lambda _host, _port: ["127.0.0.1"])  # 이름 → 합성 서버
+    monkeypatch.setattr(webhooks, "_tls_context", lambda: trusted)  # 시험 안에서 만든 인증서만 믿는다
+    try:
+        c = _with(ctx, webhook_allow_private_targets=True)  # 127.0.0.1 합성 서버 (개발용 설정)
+        assert c.settings.webhook_timeout_s == 5.0
+        wid = _subscribe(c, ORG_A, f"https://hooks.example.test:{rx.port}/hook")
+        _emit(c, ORG_A)
+        now = c.clock.now()
+        t0 = time.monotonic()
+        stats = webhooks.deliver_due(c, now=now)
+        took = time.monotonic() - t0
+    finally:
+        rx.close()
+    assert took < 2.0, f"1xx 범람 수신 서버가 전송을 {took:.1f}초 붙잡았다"  # 기한 5초보다 훨씬 짧게 (DB 기록 여유 포함)
+    assert stats == {"delivered": 0, "retry": 1, "failed": 0, "cancelled": 0}
+    d = _deliveries(ctx, webhook_id=wid)[0]
+    assert (d.status, d.attempts, d.last_error, d.last_status_code) == ("PENDING", 1, "RemoteProtocolError", None)
+    assert abs((d.next_attempt_at - now) - webhooks.backoff(c.settings, 1)) < timedelta(seconds=1)
+    with ctx.c.sessionmaker() as db:
+        sub = db.get(WebhookSubscription, wid)
+        assert (sub.active, sub.consecutive_failures) == (True, 1)
 
 
 def test_live_lease_blocks_subscription_and_expired_lease_is_resent(ctx) -> None:

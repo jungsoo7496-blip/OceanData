@@ -45,8 +45,10 @@ PATCH /v1/assets/{id} {session_id} → UNKNOWN_SESSION 격리 자산 재검증 (
   `WEBHOOK_MAX_SUBSCRIPTIONS_PER_ORG`(기본 10, 중지 포함)개까지 — 넘으면 409 CONFLICT. 다른 기관 구독 삭제는 Tenant_Guard(`load_scoped`)로
   404 + `CROSS_ORG_ACCESS_ATTEMPT` 감사.
 - 발행: `services/webhooks.py`의 `before_flush` outbox → `webhook_deliveries`(0015).
-- 전송 (ADR-0041): 워커의 전용 스레드(`start_webhook_dispatcher`)가 `deliver_due()` 라운드를 돈다 — 작업 루프와 떨어져 있어 느린 수신
-  서버가 작업 처리를 멈추지 않는다. 라운드마다 ① 가져오기: 구독당 1건, 기관당 `WEBHOOK_MAX_PER_ORG`건, 모두 `WEBHOOK_BATCH_SIZE`건을
+- 전송 (ADR-0041·0070): 워커의 전용 스레드(`start_webhook_dispatcher`)가 `deliver_due()`로 전송마다 따로 보낸다(라운드 장벽 없음) —
+  작업 루프와 떨어져 있어 느린 수신 서버가 작업 처리를 멈추지 않고, 한 건을 기록하면 그 자리와 그 구독의 다음 건을 바로 가져가 응답 없는
+  수신 서버는 자기 구독과 자기 기관 몫만 붙잡는다(시험 `test_webhook_dispatch.py`·`test_webhook_cross_tenant_isolation.py`, 지연 지표
+  `webhook_dispatch_lag_seconds`). ① 가져오기: 구독당 1건, 기관당 보내는 중인 건까지 쳐서 `WEBHOOK_MAX_PER_ORG`건, 모두 `WEBHOOK_BATCH_SIZE`건을
   구독·전송 행 모두 SKIP LOCKED로 골라 `SENDING`(임대 = `next_attempt_at`)으로 커밋 ② 트랜잭션 밖에서 동시에 보내기: 한 건 전체
   (이름 풀기~응답 헤더) `WEBHOOK_TIMEOUT_S`, 상태 코드만(본문 안 읽음), 검사한 주소로 고정 연결(이름은 Host·SNI·인증서 확인에만),
   프록시 환경변수·리디렉션 안 따름, HMAC-SHA256 `timestamp.body`·X-Event-Id ③ 건마다 짧은 트랜잭션으로 기록: 지수 백오프,

@@ -56,6 +56,9 @@ class FakeStorage:
     def head_object(self, bucket: str, key: str) -> None:
         return None
 
+    def abort_multipart_upload(self, bucket: str, key: str, upload_id: str) -> None:
+        return None  # 멀티파트도 없다 — S3의 NoSuchUpload처럼 이미 정리된 것으로 본다
+
 
 class StaticIdentity(KeycloakIdentity):
     def __init__(self) -> None:

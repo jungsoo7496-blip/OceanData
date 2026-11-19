@@ -209,6 +209,10 @@ class S3Storage:
         )
 
     def abort_multipart_upload(self, bucket: str, key: str, upload_id: str) -> None:
+        """NoSuchUpload(이미 중단·완료된 멀티파트)만 성공으로 본다. 그 밖의 오류는 그대로 올린다 (ADR-0065).
+
+        완료된 멀티파트를 중단하면 저장소에 따라 NoSuchUpload이거나 성공(SeaweedFS 3.80은 204, ADR-0046)이다 —
+        어느 쪽이든 완성 객체는 남으므로 호출자가 head_object로 확인한다."""
         try:
             self.client.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)  # type: ignore[attr-defined]
         except ClientError as exc:

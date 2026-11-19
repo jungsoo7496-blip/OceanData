@@ -63,6 +63,21 @@ class ProblemError(Exception):
         self.extra = extra or {}
 
 
+class RequestBodyTooLarge(StarletteHTTPException):
+    """요청 본문이 앱 전체 한도(`MAX_REQUEST_BODY_BYTES`)를 넘었다 (ADR-0068). 413 PAYLOAD_TOO_LARGE.
+
+    본문을 읽는 도중에 던진다. Starlette HTTPException을 이어야 FastAPI의 본문 해석이 그대로 다시 던진다
+    (다른 예외는 400 '본문 해석 오류'로 바꾼다)."""
+
+    def __init__(self, limit: int) -> None:
+        super().__init__(status_code=413, detail=body_limit_detail(limit))
+        self.limit = limit
+
+
+def body_limit_detail(limit: int) -> str:
+    return f"요청 본문은 {limit:,}바이트까지입니다. 나누어 보내세요"
+
+
 def problem_body(code: str, *, instance: str | None, title: str | None = None, detail: str | None = None,
                  errors: list | None = None, unmet_conditions: list | None = None,
                  extra: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -124,6 +139,10 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(InvalidStateTransition)
     async def _transition(request: Request, exc: InvalidStateTransition) -> JSONResponse:
         return problem_response("INVALID_STATE_TRANSITION", request, detail=str(exc))
+
+    @app.exception_handler(RequestBodyTooLarge)
+    async def _body_too_large(request: Request, exc: RequestBodyTooLarge) -> JSONResponse:
+        return problem_response("PAYLOAD_TOO_LARGE", request, detail=exc.detail)
 
     @app.exception_handler(StarletteHTTPException)
     async def _http(request: Request, exc: StarletteHTTPException) -> JSONResponse:
