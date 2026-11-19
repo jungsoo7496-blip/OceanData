@@ -124,6 +124,51 @@ def test_verdict_sees_rule_problems_cut_from_the_list() -> None:
     assert not valid
 
 
+def test_verdict_sees_item_errors_validate_document_would_cut_behind_warnings() -> None:
+    """경고 100개 뒤 항목의 ERROR(같은 자리의 스키마 오류를 대신하는 시간대 힌트)도 판정을 무효로 만든다.
+    운영 경로(POST /v1/observations)는 그 항목을 TIMEZONE_UNKNOWN으로 거부한다. 목록은 앞의 100개와 안내 하나다
+    (통합 검토 VALIDATE-4: 전에는 100개에서 자른 목록으로 판정해 valid:true였다)."""
+    doc = _batch([_item(unit="furlong_per_fortnight") for _ in range(100)] + [_item(observed_at="2027-05-10T10:00:00")])
+    valid, problems = contracts.prevalidate("observation-batch", doc, subcode_registered=_registered)
+    assert [p.code for p in problems] == ["unknown_unit"] * contracts.MAX_PROBLEMS + [contracts.TRUNCATED_CODE]
+    assert not valid
+
+
+def test_batch_production_cannot_check_item_by_item_is_invalid_even_with_warnings_only(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """운영 경로는 ITEM_PROBLEM_LIMIT까지 모은 목록도 잘리면 배치 전체를 400(too_many_problems)으로 거부한다.
+    경고만 넘쳐도 같으므로 사전 검증도 무효다 (상한을 150으로 낮춰 본다)."""
+    monkeypatch.setattr(contracts, "ITEM_PROBLEM_LIMIT", 150)
+    doc = _batch([_item(unit="furlong_per_fortnight") for _ in range(151)])
+    valid, problems = contracts.prevalidate("observation-batch", doc, subcode_registered=_registered)
+    assert [p.code for p in problems] == ["unknown_unit"] * contracts.MAX_PROBLEMS + [contracts.TRUNCATED_CODE]
+    assert not valid
+    valid, _ = contracts.prevalidate("observation-batch", _batch([_item(unit="furlong_per_fortnight")] * 150),
+                                     subcode_registered=_registered)
+    assert valid  # 상한 안의 경고는 판정을 바꾸지 않는다 (SUSPECT로 저장)
+
+
+def test_verdict_collects_the_production_list_only_when_the_cut_list_shows_no_error(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """앞 목록에 ERROR가 있으면 판정이 이미 정해져 운영 경로의 상한까지 다시 모으지 않는다 (문제가 많은 문서의 비용은
+    전과 같다). 앞 목록이 경고로만 차서 잘렸을 때만 다시 모은다."""
+    limits: list[int] = []
+    original = contracts.validate_document
+
+    def recording(contract: str, doc: Any, *, limit: int = contracts.MAX_PROBLEMS) -> Any:
+        limits.append(limit)
+        return original(contract, doc, limit=limit)
+
+    monkeypatch.setattr(contracts, "validate_document", recording)
+    many_errors = _batch([_item(quality_flag="NOPE") for _ in range(300)])
+    assert contracts.prevalidate("observation-batch", many_errors, subcode_registered=_registered)[0] is False
+    assert limits == [contracts.MAX_PROBLEMS]
+    limits.clear()
+    warnings_first = _batch([_item(unit="furlong_per_fortnight") for _ in range(120)])
+    assert contracts.prevalidate("observation-batch", warnings_first, subcode_registered=_registered)[0] is True
+    assert limits == [contracts.MAX_PROBLEMS, contracts.ITEM_PROBLEM_LIMIT]
+
+
 def test_rules_are_not_checked_where_validate_document_stops() -> None:
     """스키마 버전 거부·너무 깊은 문서는 운영 경로도 거기서 멈춘다. 그 문제 하나만 돌려준다."""
     bad = {"event_code": "NOPE_CATEGORY", "ended_at": "2000-01-01T00:00:00Z"}

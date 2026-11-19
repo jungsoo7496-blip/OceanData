@@ -118,6 +118,22 @@ def test_unknown_metric_is_invalid_as_production_rejects_the_item(ctx: Any) -> N
                                    {"index": 1, "status": "REJECTED", "reason": "UNKNOWN_METRIC"}]
 
 
+@pytest.mark.covers("T05-f")
+def test_item_error_behind_a_hundred_warnings_is_invalid_as_production_rejects_the_item(ctx: Any) -> None:
+    """통합 검토 VALIDATE-4: 경고(단위 사전에 없는 단위) 100개 뒤 항목의 시간대 오류는 문제 목록의 100개 밖이어도
+    판정을 무효로 만든다. 운영 경로는 그 항목을 TIMEZONE_UNKNOWN으로 거부한다 (전에는 사전 검증이 valid:true였다)."""
+    items = [_item(observed_at=z(T + timedelta(seconds=i)), unit="zz_synthetic_unit") for i in range(100)]
+    no_offset = (T + timedelta(seconds=100)).strftime("%Y-%m-%dT%H:%M:%S")
+    doc = _batch(*items, _item(observed_at=no_offset))
+    v = _validate(ctx, "observation-batch", doc)
+    assert v["valid"] is False
+    assert [p["code"] for p in v["problems"]] == ["unknown_unit"] * 100 + ["schema.truncated"]
+    r = ctx.client.post("/v1/observations", headers=ctx.as_user(102), json=doc)
+    assert r.status_code == 200, r.text
+    assert r.json()["results"][100] == {"index": 100, "status": "REJECTED", "reason": "TIMEZONE_UNKNOWN"}
+    assert r.json()["rejected"] == 1
+
+
 def test_values_the_schema_already_rejects_get_no_second_problem(ctx: Any) -> None:
     """모양이 계약에 맞지 않는 코드는 스키마 오류 하나로만 나온다 (코드표 문제를 겹쳐 붙이지 않는다)."""
     v = _validate(ctx, "event", _event(event_code="vessel"))

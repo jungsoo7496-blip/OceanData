@@ -548,12 +548,20 @@ def prevalidate(contract: str, doc: Any, *, subcode_registered: Callable[[str], 
 
     운영 경로와 같은 validate_document에, 운영 경로가 그 뒤에 보는 문서 규칙(rule_problems)을 더한다. 규칙 문제는
     스키마·위치·항목 문제 뒤에 붙고 목록은 앞의 limit개와 안내 하나까지다. 판정은 목록에서 잘린 문제까지 본다.
+    목록에 ERROR가 없는데 잘렸으면(관측값 배치에서 경고가 앞을 채운 경우) 운영 경로가 항목별 판정에 쓰는
+    목록(ITEM_PROBLEM_LIMIT까지)을 다시 모아 판정한다. 그 목록도 잘리면 운영 경로가 배치 전체를 거부하므로
+    무효다 (ADR-0086).
     스키마 버전 거부나 객체가 아닌·너무 깊은 문서처럼 validate_document가 바로 돌려준 경우에는
     운영 경로처럼 거기서 멈춘다."""
     problems, rejected = validate_document(contract, doc, limit=limit)
     stopped = rejected or not isinstance(doc, dict) or any(p.code == "schema.depth" for p in problems)
     extra = [] if stopped else rule_problems(contract, doc, subcode_registered=subcode_registered, limit=limit)
     valid = not any(p.severity == "ERROR" for p in (*problems, *extra))
+    if valid and is_truncated(problems):
+        # 보이는 문제가 모두 경고면, 목록 맨 앞에 오는 스키마 오류는 앞쪽 항목의 오류에 가려진 몇 개뿐이다.
+        # 그래서 다시 모으는 일은 스키마 검사 한 번과 항목 문제 목록이다 (운영 경로가 같은 문서에 하는 일과 같다)
+        full, _ = validate_document(contract, doc, limit=max(limit, ITEM_PROBLEM_LIMIT))
+        valid = not is_truncated(full) and not any(p.severity == "ERROR" for p in full)
     if extra:
         merged = [p for p in problems if p.code != TRUNCATED_CODE] + extra
         truncated = is_truncated(problems) or len(merged) > limit
