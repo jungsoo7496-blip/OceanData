@@ -470,7 +470,7 @@ const GET = {
     { job_id: id('job', 3), asset_id: AST_VIDEO, start_s: 40, end_s: 55.5, status: 'QUEUED', requested_at: at('09:40:00') },
     { job_id: id('job', 2), asset_id: AST_VIDEO, start_s: 0, end_s: 1, status: 'FAILED', requested_at: at('08:00:00'), error_code: 'CLIP_ENCODE_FAILED' },
     { job_id: id('job', 1), asset_id: AST_VIDEO, start_s: 10, end_s: 25, status: 'DONE', requested_at: at('07:00:00'), clip_asset_id: AST_CLIP },
-  ] }),
+  ], next_cursor: null }),
   '/v1/events': ({ query }) => ({ items: EVENTS.filter((e) => !query.get('session_id') || e.session_id === query.get('session_id')), next_cursor: null }),
   '/v1/events/{event_id}/overlapping-assets': ({ params, query }) => {
     const margin = Number(query.get('margin_s') ?? '0')
@@ -502,13 +502,13 @@ const GET = {
     assets: [{ asset_id: AST_CLIP, variant: 'CLIP', ingest_status: 'READY_PRIVATE', originals: [AST_VIDEO] }], hidden_count: 1 }),
   '/v1/report-templates': () => ({ items: TEMPLATES }),
   '/v1/access-requests': ({ role }) => ({ items: role === 'PLATFORM_OPERATOR' ? ACCESS_REQUESTS.filter((r) => r.status === 'PROVIDER_APPROVED')
-    : role === 'CONSUMER' ? ACCESS_REQUESTS.slice(1) : ACCESS_REQUESTS }),
-  '/v1/grants': () => ({ items: GRANTS }),
+    : role === 'CONSUMER' ? ACCESS_REQUESTS.slice(1) : ACCESS_REQUESTS, next_cursor: null }),
+  '/v1/grants': () => ({ items: GRANTS, next_cursor: null }),
   '/v1/usage-history': () => ({ items: [
     { kind: 'REQUESTED', at: '2026-10-27T00:00:00Z', dataset_version_id: DSV1, access_request_id: ACR3, consumer_organization: '이용기관 C (합성)', purpose: 'MODEL_IMPROVEMENT' },
     { kind: 'GRANTED', at: '2026-11-01T00:00:00Z', dataset_version_id: DSV1, access_request_id: ACR3, consumer_organization: '이용기관 C (합성)', purpose: 'MODEL_IMPROVEMENT' },
     { kind: 'DOWNLOAD_ISSUED', at: '2026-11-02T00:00:00Z', dataset_version_id: DSV1, access_request_id: ACR3, consumer_organization: '이용기관 C (합성)', detail: '파일 3개' },
-  ] }),
+  ], next_cursor: null }),
   '/v1/datasets': (ctx) => ({ items: datasets(ctx), next_cursor: null }),
   '/v1/datasets/{dataset_id}/versions/{dataset_version_id}/lineage': ({ params }) => ({ dataset_id: params.dataset_id,
     dataset_version_id: params.dataset_version_id, version: '1.0.0', manifest_sha256: sha(10), hidden_item_count: 1,
@@ -516,7 +516,7 @@ const GET = {
       chain: [{ asset_id: AST_DEID, relation: 'DEID', variant: 'DEID' }, { asset_id: AST_CANDIDATE, relation: 'ORIGINAL', variant: 'ORIGINAL' }],
       processing: { model: { name: 'deid-baseline', version: '0.1.0', sha256: null, license: 'Apache-2.0' }, processed_at: '2026-11-03T12:00:00Z' },
       reviews: [{ review_id: RVW1, reviewer_id: USR_REVIEWER, status: 'PASSED', decided_at: '2026-11-03T13:00:00Z' }], review_result: 'PASSED' }] }),
-  '/v1/deid-reviews': () => ({ items: DEID_REVIEWS }),
+  '/v1/deid-reviews': () => ({ items: DEID_REVIEWS, next_cursor: null }),
   '/v1/deid-quality': () => ({ reviews: 12, reprocess_ratio: 0.083, note: '검수 결과 집계입니다. 적정성 보증이 아닙니다',
     classes: [{ class: 'FACE', detected: 40, missed: 2, miss_rate: 0.05 }, { class: 'LICENSE_PLATE', detected: 9, missed: 0, miss_rate: 0 }] }),
   '/v1/integration-cards': () => ({ items: [{ integration_card_id: id('icd', 1), version: 2, organization_id: ORG_A, device_id: DEV_CAM,

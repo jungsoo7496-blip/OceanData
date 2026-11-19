@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import DB, client_ip, container, load_scoped, page_params, require
 from app.api.pagination import decode_cursor, encode_cursor, paginate
 from app.container import Container
-from app.db.models import Asset, Device, Event, EventAsset, ObservationMapping, OrgEventCode, TrialSession
+from app.db.models import Asset, Device, Event, EventAsset, ObservationMapping, TrialSession
 from app.domain.ids import has_prefix, new_id
 from app.domain.normalize import TimeRuleError, parse_rfc3339
 from app.domain.principal import Principal
@@ -32,6 +32,7 @@ from app.services.observations import (
     next_mapping_version,
     record_view,
 )
+from app.services.org_event_codes import subcode_registered
 from app.services.tenant import scoped_select
 from app.timefmt import iso
 
@@ -334,14 +335,27 @@ def event_view(db: Session, e: Event) -> dict[str, Any]:
 
 
 def _check_code(db: Session, p: Principal, code: str) -> None:
-    top = code.split(".")[0]
-    cats = {x["code"] for x in contracts.code_table("event-categories")["items"]}
-    if top not in cats:
-        raise ProblemError("RULE_VIOLATION", detail="공통 상위분류에 없는 이벤트 코드입니다",
-                           unmet_conditions=[{"condition": "event_code 상위분류 ∈ event-categories", "actual": top}])
-    if "." in code and db.get(OrgEventCode, (p.organization_id, code)) is None:  # 요구사항 7.5
-        raise ProblemError("RULE_VIOLATION", detail="기관 하위코드가 등록되어 있지 않습니다",
-                           unmet_conditions=[{"condition": "기관 하위코드 등록", "actual": code}])
+    """이벤트 코드표 규칙을 사전 검증과 같은 함수로 보고 422로 거부한다 (ADR-0081)."""
+    problem = contracts.event_code_problem(code, lambda sub: subcode_registered(db, p.organization_id, sub))
+    if problem is None:
+        return
+    unmet: dict[str, str | None]
+    if problem.code == "unknown_event_category":
+        unmet = {"condition": "event_code 상위분류 ∈ event-categories", "actual": code.split(".")[0]}
+    else:  # 요구사항 7.5
+        unmet = {"condition": "기관 하위코드 등록", "actual": code}
+    raise ProblemError("RULE_VIOLATION", detail=problem.message, unmet_conditions=[unmet])
+
+
+def _human_verified_denied(c: Container, request: Request, p: Principal, organization_id: str,
+                           event_id: str | None = None) -> ProblemError:
+    """사람이 아닌 주체의 확인 표시 거부 403 (07번 요구사항 7.3). 권한 거부로 감사한다 (security.md).
+
+    감사는 따로 확정한다(연결을 넘기지 않는다): 요청 트랜잭션은 오류로 되돌려지지만 거부 기록은 남아야 한다."""
+    c.audit.record("PERMISSION_DENIED", result="DENIED", principal=p, organization_id=organization_id,
+                   target_type="Event", target_id=event_id, source_ip=client_ip(request),
+                   details={"action": "event:write", "reason": "human_verified_requires_user"})
+    return ProblemError("FORBIDDEN", detail="사람 사용자만 확인 표시를 할 수 있습니다")
 
 
 def _link_assets(db: Session, c: Container, request: Request, p: Principal, event: Event, ids: list[str]) -> None:
@@ -358,7 +372,7 @@ def create_event(request: Request, body: Any = Body(...), db: Session = DB,
     problems, rejected = contracts.validate_document("event", body)
     _problems_to_400(problems, rejected)
     if body.get("human_verified") is True and not p.user_id:  # 사람만 확인할 수 있다 (07번 요구사항 7.3, PATCH와 같게)
-        raise ProblemError("FORBIDDEN", detail="사람 사용자만 확인 표시를 할 수 있습니다")
+        raise _human_verified_denied(c, request, p, p.organization_id)
     session = load_scoped(db, c, request, TrialSession, body["session_id"], p)
     if body.get("source_system_id"):
         _source_device(db, c, request, p, body["source_system_id"])
@@ -366,11 +380,9 @@ def create_event(request: Request, body: Any = Body(...), db: Session = DB,
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/source_system_id", "code": "required",
                                                         "message": "수집기는 원천 장비를 밝혀야 합니다"}])
     _check_code(db, p, body["event_code"])
+    _problems_to_400(contracts.time_order_problems("event", body), False)  # 사전 검증과 같은 함수 (ADR-0081)
     started = parse_rfc3339(body["started_at"])
     ended = parse_rfc3339(body["ended_at"]) if body.get("ended_at") else None
-    if ended is not None and ended < started:
-        raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/ended_at", "code": "before_start",
-                                                        "message": "종료가 시작보다 빠릅니다"}])
 
     def create() -> tuple[int, dict[str, Any]]:
         if body.get("source_event_id"):  # 원천 이벤트 ID로 중복 방지 (요구사항 7.4)
@@ -515,7 +527,7 @@ def patch_event(event_id: str, body: EventPatch, request: Request, db: Session =
             raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/human_verified", "code": "const",
                                                             "message": "확인 취소는 새 이벤트로 기록합니다"}])
         if not p.user_id:  # 사람만 확인할 수 있다 (요구사항 7.3)
-            raise ProblemError("FORBIDDEN", detail="사람 사용자만 확인 표시를 할 수 있습니다")
+            raise _human_verified_denied(c, request, p, e.organization_id, e.event_id)
         if not e.human_verified:
             e.human_verified, e.verified_by, e.verified_at = True, p.user_id, c.clock.now()
             c.audit.record("EVENT_VERIFIED", principal=p, organization_id=e.organization_id, target_type="Event",

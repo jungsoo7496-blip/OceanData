@@ -27,6 +27,17 @@ class CompletedPart:
     size: int | None = None  # 저장소가 알려 준 파트 크기 (ListParts). 완료 요청에서 만든 값은 None
 
 
+class PartsRejected(Exception):
+    """저장소가 멀티파트 완료 요청의 파트 목록을 거부했다 — 없는 파트·ETag 불일치·순서·너무 작은 파트, 없는 멀티파트.
+
+    장애가 아니라 저장소의 판정이다(다시 보내도 같다). 연결 실패·시간 초과·저장소 내부 오류는 이 예외가 아니다
+    (ADR-0082). code는 저장소가 준 오류 코드다(로그용)."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
 class StoragePort(Protocol):
     def check(self) -> bool: ...
     def buckets_ok(self, buckets: Iterable[str]) -> bool: ...
@@ -45,8 +56,11 @@ class StoragePort(Protocol):
     def presign_upload_part(self, bucket: str, key: str, upload_id: str, part_number: int,
                             expires_s: int, content_length: int | None = None) -> str: ...
     def list_parts(self, bucket: str, key: str, upload_id: str) -> list[CompletedPart]: ...
+    # 저장소가 파트 목록을 거부하면 PartsRejected, 그 밖의 실패(장애)는 다른 예외로 알린다 (ADR-0082)
     def complete_multipart_upload(self, bucket: str, key: str, upload_id: str,
                                   parts: list[CompletedPart]) -> None: ...
+    # 이미 없는 멀티파트(S3 NoSuchUpload)는 정리된 것으로 보고 성공한다. 그 밖의 실패는 예외로 알린다 —
+    # 업로드 정리는 예외가 나면 세션을 끝내지 않고 다시 시도한다 (ADR-0065)
     def abort_multipart_upload(self, bucket: str, key: str, upload_id: str) -> None: ...
     def presign_put(self, bucket: str, key: str, expires_s: int, content_type: str | None = None) -> str: ...
     def presign_get(self, bucket: str, key: str, expires_s: int) -> str: ...

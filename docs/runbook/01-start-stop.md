@@ -8,7 +8,8 @@
 **사람이 할 것**
 1. 중지 전 열린 장애 확인: 운영 콘솔 → 수집 모니터링 → 열린 장애.
 2. 중지: `make down` (볼륨 유지). 일부만: `$COMPOSE stop worker`.
-3. 기동: `make up` → 실패 서비스가 있으면 `make logs`로 원인을 보고 해당 Runbook으로.
+3. 기동: `make up` → 실패 서비스가 있으면 `make logs`로 원인을 보고 해당 Runbook으로. 클립 전용 워커를 쓰면 `.env`의
+   `COMPOSE_PROFILES=clip-worker`로 `worker-clips`도 함께 오른다 — 빠졌다는 경고가 나오면 [07](07-queue-stopped.md) 5번.
 4. 마이그레이션 확인: `$COMPOSE run --rm migrate alembic current` = 최신 리비전.
 
 **완료 확인:** `curl -fsS localhost:8000/readyz` 200, 웹 로그인, 워커 메트릭 `watch_evaluations_total` 증가(1분 안), 감사 로그 체인 `make verify-audit` 정상.

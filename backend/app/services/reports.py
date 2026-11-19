@@ -44,9 +44,20 @@ def kst(dt: datetime | None) -> str:
     return dt.astimezone(KST).strftime("%Y-%m-%d %H:%M KST") if dt else ""
 
 
+def kst_representable(dt: datetime) -> bool:
+    """한국 시각으로 바꿀 수 있는가. 9999-12-31T15:00:00Z 이후는 날짜 범위를 넘는다 (계약 점검 S31)."""
+    try:
+        dt.astimezone(KST)
+    except OverflowError:
+        return False
+    return True
+
+
 def latest_template(db: Session, code: str, version: int | None = None) -> ReportTemplate | None:
     q = select(ReportTemplate).where(ReportTemplate.code == code)
-    q = q.where(ReportTemplate.version == version) if version else q.order_by(ReportTemplate.version.desc())
+    # 0도 '최신'이 아니라 그 번호로 찾는다 — None일 때만 최신 (계약 점검 S32)
+    q = q.where(ReportTemplate.version == version) if version is not None else \
+        q.order_by(ReportTemplate.version.desc())
     return db.execute(q.limit(1)).scalar_one_or_none()
 
 
@@ -120,8 +131,10 @@ def generate(c: Container, db: Session, rep: Report, tpl: ReportTemplate, by: st
             results.append(metrics.compute(db, d, scope_of(rep), now))
     records = approved_records(db, rep)
     rep.latest_version += 1
+    # 기간은 버전에 고정한다: Report 행의 기간은 다음 버전이 바꾸지만 이 버전의 지표·변수는 이 기간으로 계산했다 (S34)
     v = ReportVersion(report_id=rep.report_id, version=rep.latest_version, status="DRAFT", generated_at=now,
-                      data_as_of=now, variables=values, fields=fields, metrics=results,
+                      data_as_of=now, period_from=rep.period_from, period_to=rep.period_to, variables=values,
+                      fields=fields, metrics=results,
                       record_refs=[{"record_id": r.record_id, "version": rv.version} for r, rv in records],
                       evidence_damaged=False, damage=[], created_by=by, created_at=now)
     db.add(v)
@@ -153,8 +166,9 @@ def edit_fields(v: ReportVersion, edits: list[dict[str, Any]], by: str, now: dat
 
 
 def report_view(rep: Report, v: ReportVersion) -> dict[str, Any]:
+    """버전 하나의 보기 (승인 스냅숏도 이것). 기간은 그 버전의 것이다 (ADR-0080)."""
     return {"report_id": rep.report_id, "organization_id": rep.organization_id, "project_id": rep.project_id,
-            "session_id": rep.session_id, "period_from": iso(rep.period_from), "period_to": iso(rep.period_to),
+            "session_id": rep.session_id, "period_from": iso(v.period_from), "period_to": iso(v.period_to),
             "title": rep.title, "template_code": rep.template_code, "template_version": rep.template_version,
             "version": v.version, "latest_version": rep.latest_version, "status": v.status,
             "generated_at": iso(v.generated_at), "data_as_of": iso(v.data_as_of), "fields": v.fields,

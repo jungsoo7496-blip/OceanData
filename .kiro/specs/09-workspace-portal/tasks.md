@@ -20,4 +20,5 @@
 - [x] 16. openapi-typescript(7.13.0, 개발 의존성, OSS-CANDIDATES 채택)로 계약 → `web/src/contract/api.gen.ts`, `npm run gen:api`·`check:api`(CI·make web-check에서 재생성 일치 검사) — tech.md 2장. 새 화면(약정·긴급 열람·백업·웹훅)은 생성 타입 사용, 기존 화면의 손 타입(`lib/api.ts`)은 점진적으로 바꾼다
 - [x] 17. 기관 설정 화면(ORG_ADMIN): 연계 카드 목록·등록·새 버전(부록 A 주요 항목, 현장 사본·희망 수준, 연결된 장비 정책), 웹훅 구독·비밀 한 번 표시·삭제·중지 경고, 약정 확인, 긴급 열람 기록 — 03번 1.4·1.5, 04번 8, 02번 8.2 (`web/src/pages/Settings.tsx`). 3번 온보딩 마법사의 '연계 카드 작성·버전' 부분
 - [x] 18. 장비 화면 '원본 백업 신청'(예상 용량·쿼터 확인 후 신청) — 08번 6.4. 운영 콘솔: 기관 약정 기록·종료, 긴급 열람 요청·승인·거절·종료, 백업 회차·복원 시험 결과·지금 백업, 사용량에 신청 백업 — 03번 1.4, 02번 8, 08번 6·7 (Playwright 렌더 확인, 콘솔 오류 없음)
+- [x] 21. 계약 점검 S27·S28·S29 (2026-11-12 KST) — 요구사항 7.2, 7.3 및 02번 2.2, 7.1 · 클립 작업 목록 커서 페이지(`limit` 기본 100·최대 500, `cursor`, `next_cursor`, 요청 시각·작업 ID 키셋, 커서 시각은 `parse_rfc3339`로 UTC 변환·범위 밖은 400, 계약 `listAssetClips` 먼저), 운영자 다운로드 URL 거부의 `PERMISSION_DENIED` 감사, 다른 기관 삭제 증명 조회의 `CROSS_ORG_ACCESS_ATTEMPT` 감사 · 시험 `test_clip_list_pagination.py`, `test_download_url_denial_audit.py`, `test_deletion_certificate_cross_org_audit.py` · ADR-0077 (포털 더 보기는 남음)
 

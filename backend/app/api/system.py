@@ -11,6 +11,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import text
 
 from app import API_VERSION
+from app.adapters import report_renderers as rr
 from app.api.deps import container, require
 from app.container import Container
 from app.metrics import REGISTRY
@@ -83,7 +84,8 @@ def capabilities(c: Container = Depends(container), _=Depends(require("system:ca
         "schema_versions": supported_schema_versions(),
         "gpu_enabled": s.gpu_enabled,
         "processing_steps": steps,
-        "report_formats": [f for f in s.report_formats if f in {"PDF", "XLSX", "HWPX"}],
+        # 내보내기가 받는 형식과 같은 기준: PDF는 렌더러(WeasyPrint)를 불러올 수 있을 때만 (ADR-0018, 계약 점검 S37)
+        "report_formats": rr.enabled_formats(s.report_formats),
         "external_sources": list(s.external_sources),
         "features": {"break_glass": True, "webhooks": True, "sharing": True},
     }

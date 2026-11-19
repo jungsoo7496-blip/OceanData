@@ -18,7 +18,7 @@ from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services import contracts, device_policy
 from app.services.idempotency import run_idempotent
-from app.services.org_event_codes import register_subcode
+from app.services.org_event_codes import register_subcode, subcode_registered
 from app.services.tenant import scope_filter
 from app.timefmt import iso
 
@@ -88,14 +88,19 @@ class ValidateRequest(BaseModel):
 
 
 @router.post("/v1/contracts/validate", tags=["contracts"])
-def validate_contract(body: ValidateRequest, _: Principal = Depends(require("contract:validate"))) -> dict:
-    """저장하지 않고 검사한다. 운영 업로드와 같은 검증 함수를 쓴다 (요구사항 13.2)."""
+def validate_contract(body: ValidateRequest, db: Session = DB,
+                      p: Principal = Depends(require("contract:validate"))) -> dict:
+    """저장하지 않고 검사한다. 운영 경로와 같은 검증 함수를 쓴다 (요구사항 13.1·13.2, ADR-0081).
+
+    스키마·위치·관측 항목 검사에 더해 운영 경로가 그 뒤에 보는 코드표·시각 순서 규칙도 본다.
+    기관 하위코드는 이벤트 제출처럼 호출자 기관에 등록된 것만 인정한다."""
     if body.contract not in ("upload-manifest", "observation-batch", "event"):
         msg = "upload-manifest, observation-batch, event 중 하나"
         raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/contract", "code": "enum", "message": msg}])
-    problems, _version_rejected = contracts.validate_document(body.contract, body.document)
-    return {"valid": not any(p.severity == "ERROR" for p in problems),
-            "problems": [p.as_dict() for p in problems]}
+    valid, problems = contracts.prevalidate(
+        body.contract, body.document,
+        subcode_registered=lambda code: subcode_registered(db, p.organization_id, code))
+    return {"valid": valid, "problems": [x.as_dict() for x in problems]}
 
 
 # ---- 장비 정책 (에이전트가 주기적으로 받는다). 기본 정책·새 버전 저장은 services/device_policy (09번 초안 적용도)

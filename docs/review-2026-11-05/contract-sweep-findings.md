@@ -296,5 +296,4 @@
 
 ## 점검하지 못한 묶음
 
-- `datasets·sharing·deid·assets`(40개 작업), `reports·records·contracts·uploads`(30개 작업): 발견 담당이 주간 한도로 중단돼 결과를 내지 못했다.
-  중간에 만든 재현 파일만 `repro/contract-sweep/` 아래에 남아 있다 — 이어서 점검할 때 참고한다.
+두 묶음(`datasets·sharing·deid·assets`, `reports·records·contracts·uploads`)은 2026-11-13에 마저 점검했다. 결과와 처리 현황은 `docs/review-2026-11-13/contract-sweep-findings.md`에 있다.

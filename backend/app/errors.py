@@ -63,6 +63,39 @@ class ProblemError(Exception):
         self.extra = extra or {}
 
 
+def duplicate_items(field: str, values: list[str], what: str) -> list[dict[str, str]]:
+    """계약 uniqueItems 위반을 오류 하나로: 배열 자리(/<field>), code unique, 다시 나온 값은 앞의 다섯 개까지 메시지에.
+
+    JSON Schema 검사(contracts.schema_problems)·웹훅 event_types·재처리 steps와 같은 모양이다
+    (통합 검토 SHARING-5, ADR-0088). 중복이 없으면 빈 목록."""
+    seen: set[str] = set()
+    dups: dict[str, None] = {}
+    for v in values:
+        if v in seen:
+            dups.setdefault(v)
+        seen.add(v)
+    if not dups:
+        return []
+    shown = list(dups)[:5]
+    more = f" 외 {len(dups) - len(shown)}개" if len(dups) > len(shown) else ""
+    return [{"pointer": f"/{field}", "code": "unique", "message": f"{what}가 중복됐습니다: {', '.join(shown)}{more}"}]
+
+
+class RequestBodyTooLarge(StarletteHTTPException):
+    """요청 본문이 앱 전체 한도(`MAX_REQUEST_BODY_BYTES`)를 넘었다 (ADR-0068). 413 PAYLOAD_TOO_LARGE.
+
+    본문을 읽는 도중에 던진다. Starlette HTTPException을 이어야 FastAPI의 본문 해석이 그대로 다시 던진다
+    (다른 예외는 400 '본문 해석 오류'로 바꾼다)."""
+
+    def __init__(self, limit: int) -> None:
+        super().__init__(status_code=413, detail=body_limit_detail(limit))
+        self.limit = limit
+
+
+def body_limit_detail(limit: int) -> str:
+    return f"요청 본문은 {limit:,}바이트까지입니다. 나누어 보내세요"
+
+
 def problem_body(code: str, *, instance: str | None, title: str | None = None, detail: str | None = None,
                  errors: list | None = None, unmet_conditions: list | None = None,
                  extra: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -124,6 +157,10 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(InvalidStateTransition)
     async def _transition(request: Request, exc: InvalidStateTransition) -> JSONResponse:
         return problem_response("INVALID_STATE_TRANSITION", request, detail=str(exc))
+
+    @app.exception_handler(RequestBodyTooLarge)
+    async def _body_too_large(request: Request, exc: RequestBodyTooLarge) -> JSONResponse:
+        return problem_response("PAYLOAD_TOO_LARGE", request, detail=exc.detail)
 
     @app.exception_handler(StarletteHTTPException)
     async def _http(request: Request, exc: StarletteHTTPException) -> JSONResponse:

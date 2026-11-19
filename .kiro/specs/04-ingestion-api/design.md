@@ -45,16 +45,19 @@ PATCH /v1/assets/{id} {session_id} → UNKNOWN_SESSION 격리 자산 재검증 (
   `WEBHOOK_MAX_SUBSCRIPTIONS_PER_ORG`(기본 10, 중지 포함)개까지 — 넘으면 409 CONFLICT. 다른 기관 구독 삭제는 Tenant_Guard(`load_scoped`)로
   404 + `CROSS_ORG_ACCESS_ATTEMPT` 감사.
 - 발행: `services/webhooks.py`의 `before_flush` outbox → `webhook_deliveries`(0015).
-- 전송 (ADR-0041): 워커의 전용 스레드(`start_webhook_dispatcher`)가 `deliver_due()` 라운드를 돈다 — 작업 루프와 떨어져 있어 느린 수신
-  서버가 작업 처리를 멈추지 않는다. 라운드마다 ① 가져오기: 구독당 1건, 기관당 `WEBHOOK_MAX_PER_ORG`건, 모두 `WEBHOOK_BATCH_SIZE`건을
+- 전송 (ADR-0041·0064·0070): 워커의 전용 스레드(`start_webhook_dispatcher`)가 `deliver_due()`로 전송마다 따로 보낸다(라운드 장벽 없음) —
+  작업 루프와 떨어져 있어 느린 수신 서버가 작업 처리를 멈추지 않고, 한 건을 기록하면 그 자리와 그 구독의 다음 건을 바로 가져가 응답 없는
+  수신 서버는 자기 구독과 자기 기관 몫만 붙잡는다(시험 `test_webhook_dispatch.py`·`test_webhook_cross_tenant_isolation.py`, 지연 지표
+  `webhook_dispatch_lag_seconds`). ① 가져오기: 구독당 1건, 기관당 보내는 중인 건까지 쳐서 `WEBHOOK_MAX_PER_ORG`건, 모두 `WEBHOOK_BATCH_SIZE`건을
   구독·전송 행 모두 SKIP LOCKED로 골라 `SENDING`(임대 = `next_attempt_at`)으로 커밋 ② 트랜잭션 밖에서 동시에 보내기: 한 건 전체
-  (이름 풀기~응답 헤더) `WEBHOOK_TIMEOUT_S`, 상태 코드만(본문 안 읽음), 검사한 주소로 고정 연결(이름은 Host·SNI·인증서 확인에만),
-  프록시 환경변수·리디렉션 안 따름, HMAC-SHA256 `timestamp.body`·X-Event-Id ③ 건마다 짧은 트랜잭션으로 기록: 지수 백오프,
-  `WEBHOOK_MAX_ATTEMPTS`번 실패 시 구독 끔 + 남은 전송 취소 + (커밋 뒤) 기관 ORG_ADMIN 메일. 임대가 끝난 `SENDING`은 다시 보낸다
+  (이름 풀기~응답 헤더) `WEBHOOK_TIMEOUT_S`, 상태 코드만(본문 안 읽음), 최종 응답 헤더까지(중간 응답 1xx 포함) 읽는 바이트는
+  `RESPONSE_HEAD_MAX_BYTES`(128KiB)까지 — 넘으면 `RemoteProtocolError`로 그 시도는 실패(ADR-0064), 검사한 주소로 고정 연결(이름은 Host·SNI·인증서 확인에만),
+  프록시 환경변수·리디렉션 안 따름, HMAC-SHA256 `timestamp.body`·X-Event-Id ③ 건마다 짧은 트랜잭션으로 기록: 지수 백오프(실패한 그 건만
+  미룸 — 같은 구독의 다른 건은 그대로 나간다), `WEBHOOK_MAX_ATTEMPTS`번 실패 시 구독 끔 + 남은 전송 취소 + (커밋 뒤) 기관 ORG_ADMIN 메일. 임대가 끝난 `SENDING`은 다시 보낸다
   (최소 한 번). 거부 이유(이름 못 풂·공인 아닌 주소)는 기관에 같은 문구, 자세한 건 서버 로그.
-- 시험: `tests/integration/test_webhooks.py`(두 워커 동시·보내는 동안 행 잠금 없음·실제 전송 기한·임대·경합 재확인·공정성·구독 상한·
-  교차 기관 감사·전용 스레드), `tests/unit/test_webhook_send.py`(헤더·본문 흘리기, 이름 풀기 기한, 주소 고정·프록시 무시, TLS SNI·인증서,
-  공인 주소 판정).
+- 시험: `tests/integration/test_webhooks.py`(두 워커 동시·보내는 동안 행 잠금 없음·실제 전송 기한·1xx 범람은 다른 실패와 같이 기록·범람
+  구독에 쌓인 건은 차례로 시도·임대·경합 재확인·공정성·구독 상한·교차 기관 감사·전용 스레드), `tests/unit/test_webhook_send.py`(헤더·본문 흘리기, 1xx 범람
+  http·https는 상한에서 끝남, 100·103 뒤 204와 상한 아래 큰 헤더는 성공, 이름 풀기 기한, 주소 고정·프록시 무시, TLS SNI·인증서, 공인 주소 판정).
 
 ## 악성코드 검사 (요구사항 4.7, ADR-0031)
 - `ports/malware.py` 스트리밍 포트, `adapters/malware_scanners.py`(`MALWARE_SCANNER=none | mock-eicar`). 기관 정책 `organizations.malware_scan_required`(0016),

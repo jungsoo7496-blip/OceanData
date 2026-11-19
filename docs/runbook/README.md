@@ -16,6 +16,7 @@
 | [08-disk-threshold.md](08-disk-threshold.md) | 디스크·쿼터 용량 임계 |
 | [09-token-leak.md](09-token-leak.md) | 토큰·비밀값 유출 의심 |
 | [10-dataset-revoke.md](10-dataset-revoke.md) | 데이터셋·이용 권한 철회 |
+| [11-verify-stuck-received.md](11-verify-stuck-received.md) | 검증 작업이 끝났는데 자산이 RECEIVED에 남음 (검사기 부재 등, 검증 재투입) |
 
 **수행 기록 (T14):** 스테이징에서 절차를 실제로 해 본 뒤 `records/YYYY-MM-DD-<문서번호>.md`에 수행자·시각·결과·이상 사항을 남긴다
 (양식: [records/TEMPLATE.md](records/TEMPLATE.md)).

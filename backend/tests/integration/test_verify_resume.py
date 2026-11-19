@@ -14,11 +14,13 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 
-from app.db.models import Asset, IntegrityLogEntry, OrgQuota, Upload
+from app.api import assets as assets_api
+from app.db.models import Asset, IntegrityLogEntry, JobRow, OrgQuota, Upload
 from app.seed import DEV_A_SENSOR, ORG_A, SES_A
 from app.services import ingest as ingest_mod
 from app.services.ingest import IntegrityVerifier
 from app.workers import main as worker
+from tests.contract.openapi_contract import assert_matches_contract
 from tests.integration.test_ingest import drain, manifest, mp4_bytes, upload_all
 
 pytestmark = pytest.mark.integration
@@ -160,3 +162,92 @@ def test_revalidation_takes_the_integrity_lock_before_the_quota_row(ictx, monkey
     assert IntegrityVerifier(ictx.c).verify(aid) in ("REGISTERED", "READY_PRIVATE")
 
     assert seen == {"quota_row_was_free": True}, "무결성 로그 잠금을 잡을 때 이미 쿼터 행을 쥐고 있다 (잠금 순서 뒤집힘)"
+
+
+def _exhausted(ictx, monkeypatch, seed: int) -> tuple[dict, str, int]:
+    """올린 자산의 무결성 검증이 저장소 오류로 재시도를 모두 써 FAILED(failed_from=VALIDATING)가 된 상태를 만든다."""
+    created, aid, size = _uploaded(ictx, seed)
+    real = ictx.c.storage.iter_object
+
+    def broken(*_a, **_k):
+        raise TimeoutError("synthetic stream error")
+        yield b""  # pragma: no cover
+
+    monkeypatch.setattr(ictx.c.storage, "iter_object", broken)
+    for _ in range(20):  # 검증 작업이 재시도를 모두 쓸 때까지 (백오프 대기는 건너뛴다)
+        with ictx.c.engine.begin() as conn:
+            conn.execute(text("UPDATE jobs SET run_after = now() - interval '1 second' WHERE status = 'QUEUED'"))
+        if not worker.run_once(ictx.c, "t"):
+            break
+    monkeypatch.setattr(ictx.c.storage, "iter_object", real)  # 저장소가 돌아왔다
+    with ictx.c.sessionmaker() as db:
+        asset = db.get(Asset, aid)
+        assert (asset.ingest_status, asset.ingest_context["failed_from"]) == ("FAILED", "VALIDATING")
+    assert _quota(ictx) == {"used": 0, "reserved": size}
+    return created, aid, size
+
+
+def test_reprocess_after_exhausted_verification_restarts_verification(ictx, monkeypatch) -> None:
+    """검증이 재시도를 다 써 FAILED(failed_from=VALIDATING)가 된 자산을 운영자가 재처리하면 검증부터 다시 해 등록한다
+    (계약 점검 S22, ADR-0076). 전에는 VALIDATING으로 돌려 놓고 요청한 처리 단계만 넣었다 — 처리 단계는 REGISTERED가
+    아니면 건너뛰므로 자산이 VALIDATING에 영구히 남고(다음 재처리·삭제 409) 업로드 예약도 풀리지 않았다."""
+    created, aid, size = _exhausted(ictx, monkeypatch, 4242)
+
+    r = ictx.client.post(f"/v1/assets/{aid}/reprocess", json={"steps": ["META"], "reason": "저장소 복구 뒤 재처리"},
+                         headers=ictx.as_user(106, mfa=True))
+    assert r.status_code == 202, r.text
+    drain(ictx)  # 검증 작업만 처리한다
+
+    _assert_registered_once(ictx, created, size)
+    with ictx.c.sessionmaker() as db:
+        assert db.get(JobRow, r.json()["job_ids"][0]).job_type == "integrity_verify"
+        probes = db.scalars(select(JobRow).where(JobRow.asset_id == aid, JobRow.job_type == "media_probe")).all()
+    # 등록 뒤에는 보통 처리 순서(메타 추출 → 프록시 → 썸네일 …)가 한 번 등록된다. 요청한 단계를 따로 넣지 않는다
+    assert [(j.status, j.payload["chain"][:2]) for j in probes] == [("QUEUED", ["make_proxy", "make_thumbnail"])]
+
+
+@pytest.mark.parametrize("earlier", ["registered", "validating"])
+def test_overlapping_reprocess_decides_on_the_locked_current_state(ictx, monkeypatch, earlier) -> None:
+    """검증 실패 자산의 재처리가 겹치면 늦은 요청은 자산 행을 잠그고 다시 읽은 상태로 판단한다 (ADR-0076, 검토 지적).
+
+    늦은 요청이 FAILED를 읽은 뒤, 앞선 재처리가 FAILED→VALIDATING과 검증 작업을 확정했다(registered면 그 검증까지 끝나
+    등록됐다). 읽어 둔 FAILED로 판단하면 등록된 자산을 VALIDATING으로 덮어쓰고 검증을 또 넣는다 — 그 검증은 무결성 로그
+    고유키에 걸려 재시도를 다 쓰고 FAILED가 되어, 정상 등록된 원본이 API로는 나갈 수 없게 갇힌다. 앞선 검증이 아직이면
+    검증 작업이 둘이 된다. 늦은 요청은 등록된 자산이면 보통 재처리, 검증 중인 자산이면 409여야 한다."""
+    created, aid, size = _exhausted(ictx, monkeypatch, 4343 if earlier == "registered" else 4344)
+    real_load, overlapped = assets_api.load_scoped, []
+
+    def load_then_overlap(db, c, request, model, ident, principal, **kw):
+        row = real_load(db, c, request, model, ident, principal, **kw)  # 늦은 요청이 잠그지 않고 FAILED를 읽었다
+        if model is Asset and not overlapped:
+            overlapped.append(ident)
+            with ictx.c.sessionmaker.begin() as other:  # 앞선 재처리가 다른 연결에서 확정됐다
+                other.get(Asset, aid).ingest_status = "VALIDATING"
+                ictx.c.queue.enqueue("integrity_verify", {"asset_id": aid, "run": "earlier", "reprocess": True},
+                                     organization_id=ORG_A, dedupe_key=f"integrity_verify:{aid}:earlier",
+                                     connection=other.connection())
+            if earlier == "registered":
+                drain(ictx)  # 그 검증까지 끝나 등록됐다 (무결성 로그 한 줄, 예약 정산)
+        return row
+
+    monkeypatch.setattr(assets_api, "load_scoped", load_then_overlap)
+    r = ictx.client.post(f"/v1/assets/{aid}/reprocess", json={"steps": ["META"], "reason": "겹친 재처리 요청"},
+                         headers=ictx.as_user(106, mfa=True))
+    assert overlapped == [aid]
+    with ictx.c.sessionmaker() as db:
+        state = db.get(Asset, aid).ingest_status
+    if earlier == "registered":  # 등록된 자산의 보통 재처리가 된다
+        assert (r.status_code, state) == (202, "REGISTERED"), (r.text, state)
+        with ictx.c.sessionmaker() as db:
+            assert db.get(JobRow, r.json()["job_ids"][0]).job_type == "media_probe"
+    else:  # 앞선 재처리의 검증이 아직이다 — VALIDATING은 재처리할 수 없다
+        assert (r.status_code, state) == (409, "VALIDATING"), (r.text, state)
+        assert r.json()["code"] == "CONFLICT"
+        assert_matches_contract(r, "POST", "/v1/assets/{asset_id}/reprocess")
+        drain(ictx)
+
+    _assert_registered_once(ictx, created, size)
+    with ictx.c.sessionmaker() as db:
+        verifies = db.scalars(select(JobRow).where(JobRow.asset_id == aid, JobRow.job_type == "integrity_verify",
+                                                   JobRow.status != "FAILED")).all()
+    assert [j.payload.get("run") for j in verifies] == ["earlier"], "늦은 요청이 검증 작업을 하나 더 넣었다"

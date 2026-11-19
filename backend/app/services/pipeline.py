@@ -18,19 +18,22 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.container import Container
-from app.db.models import Asset, AssetLineage, Upload
+from app.db.models import Asset, AssetLineage, JobRow, Upload
 from app.domain import states
 from app.domain.ids import new_id
 from app.domain.normalize import check_location
 from app.metrics import PIPELINE_FRAMES, PIPELINE_SECONDS
 from app.services.ingest import Quota, append_integrity, object_key, zone_for
 from app.services.quality import apply_rules, load_rules
+
+if TYPE_CHECKING:
+    from app.ports.queue import Job
 
 log = logging.getLogger(__name__)
 VIDEO_STEPS = ("media_probe", "make_proxy", "make_thumbnail")
@@ -444,10 +447,27 @@ def next_step(c: Container, payload: dict[str, Any], org: str | None) -> None:
                         organization_id=org, dedupe_key=f"{nxt}:{payload['asset_id']}:{payload.get('run', '')}")
 
 
-def mark_failed(c: Container, asset_id: str, error_code: str) -> None:
-    """재시도를 다 쓴 처리 단계 → FAILED (domain.md 5장 '처리 단계 → FAILED')."""
+def mark_failed(c: Container, asset_id: str, error_code: str, *, job: Job | None = None) -> None:
+    """재시도를 다 쓴 처리 단계 → FAILED (domain.md 5장 '처리 단계 → FAILED').
+
+    job(재시도를 다 쓴 작업)을 주면, 자산 행을 잠근 뒤 이 자산에 같은 유형의 다른 작업이 대기·실행 중이거나
+    이 작업보다 나중에 들어왔는지 본다. 그렇다면 이 작업은 낡은 것이고 자산은 새 작업이 맡으므로 바꾸지 않는다.
+    큐가 이 작업의 FAILED를 확정한 뒤 여기 오기 전에, 운영자가 다시 넣은 검증 작업이 RECEIVED → VALIDATING
+    (또는 등록)까지 확정했을 수 있다(ADR-0071). 새 작업은 자산 행 잠금 아래에서 넣고 확정한 뒤에야 실행되므로,
+    잠근 뒤 보면 놓치지 않는다."""
     with c.sessionmaker.begin() as db:
         a = db.execute(select(Asset).where(Asset.asset_id == asset_id).with_for_update()).scalar_one_or_none()
+        if a is not None and job is not None:
+            newer = (JobRow.status.in_(("QUEUED", "RUNNING")) if job.created_at is None
+                     else or_(JobRow.status.in_(("QUEUED", "RUNNING")), JobRow.created_at > job.created_at))
+            other = db.scalars(select(JobRow.job_id).where(JobRow.job_type == job.job_type,
+                                                           JobRow.asset_id == asset_id,
+                                                           JobRow.job_id != job.job_id, newer).limit(1)).first()
+            if other is not None:
+                log.info("asset_failed_skipped_newer_job", extra={"asset_id": asset_id, "job_id": job.job_id,
+                                                                  "newer_job_id": other,
+                                                                  "ingest_status": a.ingest_status})
+                return
         if a is not None and states.can_transition("ingest_status", a.ingest_status, "FAILED", {"SERVICE"}):
             a.ingest_context = {**(a.ingest_context or {}), "failed_from": a.ingest_status, "error_code": error_code}
             a.ingest_status = "FAILED"

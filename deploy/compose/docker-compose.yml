@@ -45,6 +45,7 @@ x-app-env: &app-env
   GPU_ENABLED: ${GPU_ENABLED}
   PROCESSING_STEPS: ${PROCESSING_STEPS}
   REPORT_FORMATS: ${REPORT_FORMATS}
+  REPORT_PDF_MAX_CONCURRENT: ${REPORT_PDF_MAX_CONCURRENT:-2}
   EXTERNAL_SOURCES: ${EXTERNAL_SOURCES}
   PRESIGN_UPLOAD_TTL_S: ${PRESIGN_UPLOAD_TTL_S}
   PRESIGN_DOWNLOAD_TTL_S: ${PRESIGN_DOWNLOAD_TTL_S}
@@ -53,6 +54,8 @@ x-app-env: &app-env
   UPLOAD_SESSION_TTL_S: ${UPLOAD_SESSION_TTL_S}
   DEFAULT_ORG_QUOTA_BYTES: ${DEFAULT_ORG_QUOTA_BYTES}
   RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE}
+  # 요청 본문 한도 (ADR-0068). 기본은 web/nginx.conf의 client_max_body_size 20m과 같다 — 바꿀 때 함께 바꾼다
+  MAX_REQUEST_BODY_BYTES: ${MAX_REQUEST_BODY_BYTES:-20971520}
   CLIP_MAX_PENDING_PER_ORG: ${CLIP_MAX_PENDING_PER_ORG:-3}
   SMTP_HOST: ${SMTP_HOST:-}
   SMTP_PORT: ${SMTP_PORT:-1025}
@@ -163,7 +166,7 @@ services:
 
   worker:
     image: marine-api:dev
-    environment:
+    environment: &worker-env
       <<: *app-env
       BACKUP_DATABASE_URL: ${BACKUP_DATABASE_URL:-${MIGRATION_DATABASE_URL}}
       # 웹훅 전송·운영자 알림은 워커만 한다 (ADR-0041·0050). 서명 비밀과 전송 간격은 API 컨테이너에 넘기지 않는다
@@ -171,6 +174,32 @@ services:
       WEBHOOK_DISPATCH_INTERVAL_S: ${WEBHOOK_DISPATCH_INTERVAL_S:-10}
       WEBHOOK_BACKOFF_BASE_S: ${WEBHOOK_BACKOFF_BASE_S:-30}
       WEBHOOK_BACKOFF_MAX_S: ${WEBHOOK_BACKOFF_MAX_S:-21600}
+      # 클립 인코딩 시간 한도·가져갈 작업 유형 (ADR-0069). 비우면 모든 유형 (클립 전용 워커를 띄우면 clip_export를 뺀다)
+      CLIP_TIMEOUT_FACTOR: ${CLIP_TIMEOUT_FACTOR:-4}
+      CLIP_TIMEOUT_MIN_S: ${CLIP_TIMEOUT_MIN_S:-120}
+      WORKER_JOB_TYPES: ${WORKER_JOB_TYPES:-}
+      WORKER_EXCLUDE_JOB_TYPES: ${WORKER_EXCLUDE_JOB_TYPES:-}
+    command: ["python", "-m", "app.workers.main"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9101/metrics', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # --- 선택: 구간 클립 전용 워커 (ADR-0069). 긴 재인코딩이 수집 처리(무결성 검증·프록시 등)를 막지 않게 따로 돌린다.
+  #     .env에 WORKER_EXCLUDE_JOB_TYPES=clip_export(기본 워커가 클립을 빼게)와 COMPOSE_PROFILES=clip-worker를 함께 두고
+  #     make up. 프로필도 .env에 둬야 make up·make down(재부팅 뒤 기동 포함)에서 함께 오르내린다(명령줄 --profile만으로는 다음 make up에서
+  #     빠진다). 프로필 없이 띄우면 이 서비스는 없고 기본 워커가 클립도 처리한다(기본 동작). 환경은 기본 워커와 같고 유형만 다르다.
+  #     정비 주기(정기 백업·보존 자동 실행·계층 이동)도 이 컨테이너의 환경으로 돌므로 .env를 바꾸면 worker와 함께 다시 만든다
+  worker-clips:
+    profiles: [clip-worker]
+    image: marine-api:dev
+    environment:
+      <<: *worker-env
+      WORKER_JOB_TYPES: clip_export
+      WORKER_EXCLUDE_JOB_TYPES: ""
     command: ["python", "-m", "app.workers.main"]
     depends_on:
       migrate: {condition: service_completed_successfully}

@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import os
 import tempfile
-from typing import Literal
+from datetime import datetime
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import cast, column, literal, select, table
+from sqlalchemy import cast, column, literal, select, table, tuple_
 from sqlalchemy.orm import Session
 
-from app.api.deps import DB, client_ip, container, load_scoped, require
+from app.api.deps import DB, client_ip, container, load_scoped, page_params, require
+from app.api.pagination import decode_cursor, encode_cursor
 from app.container import Container
 from app.db.models import Asset, AssetTag, AssetTagEdit, DeidReview
 from app.db.types import Vector
+from app.domain.ids import has_prefix
 from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services import deid, tagging
@@ -23,10 +26,21 @@ from app.timefmt import iso
 
 router = APIRouter()
 SE = table("scene_embeddings", column("asset_id"), column("t_offset"), column("model"), column("embedding"))
+# 운영자가 비식별본 프레임을 보는 '심사 중'(domain.md 2장): 원본 공유 심사가 처리·품질 검수·재처리 단계 (ADR-0075)
+UNDER_REVIEW = frozenset({"PROCESSING", "QUALITY_REVIEW", "REPROCESS"})
 
 
 def _operator(p: Principal) -> bool:
     return not p.is_machine and p.has_role("PLATFORM_OPERATOR")
+
+
+def _frame_denied(c: Container, request: Request, p: Principal, rv: DeidReview, a: Asset, which: str,
+                  reason: str) -> None:
+    """운영자 프레임 거부도 권한 거부로 감사한다 (security.md). 요청과 따로 확정돼 403 뒤에도 남는다 (ADR-0053)."""
+    c.audit.record("PERMISSION_DENIED", result="DENIED", principal=p, organization_id=a.organization_id,
+                   target_type="Asset", target_id=a.asset_id, source_ip=client_ip(request),
+                   details={"action": "deid_review:read", "which": which, "reason": reason,
+                            "review_id": rv.review_id})
 
 
 def _review(db: Session, p: Principal, review_id: str, lock: bool = False) -> DeidReview:
@@ -36,15 +50,49 @@ def _review(db: Session, p: Principal, review_id: str, lock: bool = False) -> De
     return rv
 
 
+def _review_cursor(db: Session, p: Principal, cursor: str) -> tuple[datetime, str]:
+    """검수 목록 커서 = 앞 페이지 마지막 검수 ID (ADR-0089). 그 검수의 (만든 시각, ID) 다음부터 준다.
+
+    상태로 거른 목록에서 그 검수의 상태가 그사이 바뀌어도 이어진다(상태는 보지 않는다). 형식이 틀렸거나, 없거나,
+    이 사용자가 볼 수 없는 검수면 모두 같은 400이다 — 다른 검수자의 검수가 있는지 알려 주지 않는다."""
+    rid = decode_cursor(cursor)
+    created = None
+    if has_prefix(rid, "review"):
+        stmt = select(DeidReview.created_at).where(DeidReview.review_id == rid)
+        if not _operator(p):
+            stmt = stmt.where(DeidReview.reviewer_id == p.user_id)
+        created = db.execute(stmt).scalar_one_or_none()
+    if created is None:
+        raise ProblemError("VALIDATION_ERROR", errors=[{"pointer": "/query/cursor", "code": "invalid",
+                                                        "message": "커서 형식이 올바르지 않습니다"}])
+    return created, rid
+
+
 @router.get("/v1/deid-reviews", tags=["deid"])
 def list_reviews(status: Literal["ASSIGNED", "PASSED", "MISSED", "REJECTED"] | None = None,
-                 db: Session = DB, p: Principal = Depends(require("deid_review:read"))) -> dict:
-    stmt = select(DeidReview).order_by(DeidReview.created_at, DeidReview.review_id)
+                 db: Session = DB, p: Principal = Depends(require("deid_review:read")),
+                 page: dict[str, Any] = Depends(page_params)) -> dict:
+    """검수 목록 (요구사항 4.5: 검수자는 배정된 것만). 만든 시각·검수 ID 순으로 limit건씩 주고, 다음 쪽은
+    next_cursor로 잇는다 (api-conventions.md 목록, ADR-0089).
+
+    운영자는 모든 기관의 검수를 보므로 쪽 없이 주면 플랫폼 이력 전체가 한 응답이 됐다. 비식별본은 한 문으로 읽는다."""
+    stmt = select(DeidReview)
     if not _operator(p):
         stmt = stmt.where(DeidReview.reviewer_id == p.user_id)
     if status:
         stmt = stmt.where(DeidReview.status == status)
-    return {"items": [deid.review_view(r, db.get(Asset, r.deid_asset_id)) for r in db.execute(stmt).scalars()]}
+    if page["cursor"]:
+        created, rid = _review_cursor(db, p, page["cursor"])
+        stmt = stmt.where(tuple_(DeidReview.created_at, DeidReview.review_id) > tuple_(literal(created), literal(rid)))
+    limit = page["limit"]
+    rows = list(db.execute(stmt.order_by(DeidReview.created_at, DeidReview.review_id).limit(limit + 1)).scalars())
+    nxt = encode_cursor(rows[limit - 1].review_id) if len(rows) > limit else None
+    rows = rows[:limit]
+    ids = {r.deid_asset_id for r in rows}
+    children: dict[str, Asset] = {}
+    if ids:
+        children = {a.asset_id: a for a in db.execute(select(Asset).where(Asset.asset_id.in_(ids))).scalars()}
+    return {"items": [deid.review_view(r, children.get(r.deid_asset_id)) for r in rows], "next_cursor": nxt}
 
 
 @router.get("/v1/deid-reviews/{review_id}", tags=["deid"])
@@ -72,8 +120,15 @@ def review_frame(review_id: str, request: Request, t: float = Query(ge=0), which
 
         grant = active_grant_for(db, a, p.principal_id, c.clock.now())
         if grant is None:
+            _frame_denied(c, request, p, rv, a, which, "no_active_break_glass")  # 다운로드 URL 거부와 같은 코드
             raise ProblemError("FORBIDDEN", detail="운영자의 원본 프레임 열람은 유효한 긴급 열람 승인이 있어야 합니다")
         grant_id, grant_expires = grant.grant_id, grant.expires_at
+    elif which == "DEID" and rv.reviewer_id != p.user_id and a.organization_id != p.organization_id:
+        # 배정 검수자가 아닌 운영자: 파생본은 심사 중인 대상만 (domain.md 2장). 공유 철회·반려·승인 뒤에는 보지 않는다
+        orig = db.get(Asset, rv.original_asset_id)
+        if orig is None or orig.share_status not in UNDER_REVIEW:
+            _frame_denied(c, request, p, rv, a, which, "not_under_review")
+            raise ProblemError("FORBIDDEN", detail="운영자는 공유 심사 중인 원본의 비식별본 프레임만 볼 수 있습니다")
     db.expunge(a)
     with local_copy(c, a) as src, tempfile.TemporaryDirectory(prefix="marine-frame-", dir=work_dir(c)) as tmp:
         out = os.path.join(tmp, "f.jpg")

@@ -8,8 +8,10 @@
   (variant=CLIP, PRIVATE, 계보 relation=CLIP)이 되고 provenance.clip_range_s와 옮긴 촬영 시각·video_ext를 남긴다.
   객체는 잠그지 않고 먼저 올린 뒤, 원 영상 행을 잠근(FOR UPDATE) 트랜잭션에서 살아 있는지·쿼터 여유를 다시 확인하고
   기록한다. 삭제도 원 자산 행을 잠근 뒤 파생본을 찾으므로 클립은 삭제 증명에 함께 오르거나 만들어지지 않는다.
-- 다시 해도 같은 실패(원 영상이 격리·삭제됨, 인코딩 실패, 쿼터 초과)는 재시도하지 않고 바로 FAILED (PermanentJobError).
-  기록하지 못한 클립 객체는 지운다.
+- 다시 해도 같은 실패(원 영상이 격리·삭제됨, 인코딩 실패, 시간 한도 초과, 쿼터 초과)는 재시도하지 않고 바로 FAILED
+  (PermanentJobError). 기록하지 못한 클립 객체는 지운다.
+- ffmpeg 시간 한도는 구간 길이에 비례한다(`clip_timeout_s`, ADR-0069) — 짧은 클립이 전체 한도
+  (FFMPEG_TIMEOUT_S, 기본 1시간) 동안 워커를 쥐지 않게. 작업이 도는 동안 워커가 임대를 늘린다(`renew_lease=True`).
 - 잠금 순서: 원 영상 행 → (무결성 로그) → 기관 쿼터 행 → 감사 로그 (삭제·다른 파생 작업과 같다).
 """
 
@@ -17,11 +19,13 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
+import subprocess  # nosec B404 - 실행하지 않는다. 시간 초과 예외 형식만 쓴다
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -104,8 +108,18 @@ def request_clip(c: Container, db: Session, a: Asset, requested_by: str, start_s
             "requested_at": iso(now)}, True
 
 
-def list_clips(c: Container, db: Session, a: Asset) -> list[dict[str, Any]]:
-    """이 영상의 클립 작업 (최근 요청부터). DONE이면 결과 자산을 붙인다 (지워졌으면 없음)."""
+def list_clips(c: Container, db: Session, a: Asset, *, limit: int,
+               before: tuple[datetime, str] | None = None) -> tuple[list[dict[str, Any]], tuple[datetime, str] | None]:
+    """이 영상의 클립 작업 한 페이지 (최근 요청부터, 같은 시각이면 작업 ID 역순).
+
+    DONE이면 결과 자산을 붙인다 (지워졌으면 없음). before는 앞 페이지 마지막 작업의 (요청 시각, 작업 ID)다.
+    다음 페이지가 있으면 이 페이지 마지막 작업의 그 값을 함께 돌려준다 (ADR-0077).
+    전에는 최근 100건에서 말없이 잘렸다."""
+    jobs = c.queue.jobs_for_asset(JOB_TYPE, a.asset_id, limit + 1, before=before)
+    nxt: tuple[datetime, str] | None = None
+    if len(jobs) > limit:
+        jobs = jobs[:limit]
+        nxt = (jobs[-1].created_at, jobs[-1].job_id)
     rows = db.execute(select(Asset.asset_id, Asset.provenance)
                       .join(AssetLineage, AssetLineage.child_asset_id == Asset.asset_id)
                       .where(AssetLineage.parent_asset_id == a.asset_id, AssetLineage.relation == "CLIP",
@@ -120,7 +134,7 @@ def list_clips(c: Container, db: Session, a: Asset) -> list[dict[str, Any]]:
         if rng and len(rng) == 2:
             by_range.setdefault((_sec(rng[0]), _sec(rng[1])), aid)
     out: list[dict[str, Any]] = []
-    for j in c.queue.jobs_for_asset(JOB_TYPE, a.asset_id):
+    for j in jobs:
         start, end = _sec(j.payload["start_s"]), _sec(j.payload["end_s"])
         item: dict[str, Any] = {"job_id": j.job_id, "asset_id": a.asset_id, "start_s": start, "end_s": end,
                                 "status": j.status, "requested_at": iso(j.created_at)}
@@ -132,7 +146,7 @@ def list_clips(c: Container, db: Session, a: Asset) -> list[dict[str, Any]]:
         elif j.status == "FAILED" and j.last_error_code:
             item["error_code"] = j.last_error_code
         out.append(item)
-    return out
+    return out, nxt
 
 
 def clip_args(s: Any, src: str, out: str, start_s: float, end_s: float) -> list[str]:
@@ -141,6 +155,18 @@ def clip_args(s: Any, src: str, out: str, start_s: float, end_s: float) -> list[
             "-t", f"{end_s - start_s:.3f}", "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast",
             "-crf", str(int(s.clip_crf)), "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-map_metadata", "-1",
             "-movflags", "+faststart", out]
+
+
+def clip_timeout_s(s: Any, length_s: float) -> int:
+    """클립 ffmpeg·ffprobe 시간 한도(초) = 구간 길이 × CLIP_TIMEOUT_FACTOR.
+
+    CLIP_TIMEOUT_MIN_S보다 짧게 하지 않고(프로세스 시작·키프레임부터 디코딩) FFMPEG_TIMEOUT_S를 넘지 않는다.
+    곱이 전체 한도 이상이면 올림 전에 자른다 — 아주 큰 배수는 곱이 inf로 넘쳐 math.ceil이 OverflowError를 낸다."""
+    cap = int(s.ffmpeg_timeout_s)
+    scaled = float(length_s) * float(s.clip_timeout_factor)
+    if not math.isfinite(scaled) or scaled >= cap:
+        return max(1, cap)
+    return max(1, min(cap, max(int(s.clip_timeout_min_s), math.ceil(scaled))))
 
 
 def _usable(a: Asset | None) -> bool:
@@ -158,15 +184,24 @@ def make_clip(c: Container, job_id: str, payload: dict[str, Any]) -> str:
             raise PermanentJobError("SOURCE_UNAVAILABLE")
         assert parent is not None
         db.expunge(parent)
+    limit = clip_timeout_s(s, end - start)
     with local_copy(c, parent) as src, tempfile.TemporaryDirectory(prefix="marine-clip-", dir=work_dir(c)) as tmp:
         out = os.path.join(tmp, "clip.mp4")
-        r = _run(clip_args(s, src, out, start, end), s.ffmpeg_timeout_s)
+        try:
+            r = _run(clip_args(s, src, out, start, end), limit)
+        except subprocess.TimeoutExpired:  # subprocess.run이 ffmpeg를 끝낸다. 같은 구간은 다시 해도 같은 시간이 걸린다
+            log.warning("clip_encode_timeout", extra={"job_id": job_id, "timeout_s": limit,
+                                                      "clip_s": round(end - start, 3)})
+            raise PermanentJobError("CLIP_TIMEOUT") from None
         if r.returncode != 0 or not os.path.exists(out) or os.path.getsize(out) == 0:
             raise PermanentJobError("CLIP_ENCODE_FAILED")
         video_ext: dict[str, Any] = {}
-        pr = _run([s.ffprobe_path, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", out],
-                  s.ffmpeg_timeout_s)
-        if pr.returncode == 0:
+        try:
+            pr: subprocess.CompletedProcess[bytes] | None = _run(
+                [s.ffprobe_path, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", out], limit)
+        except subprocess.TimeoutExpired:  # 다시 읽기 실패와 같다 — 길이 정보가 없어도 클립 자체는 유효하다
+            pr = None
+        if pr is not None and pr.returncode == 0:
             try:
                 video_ext = parse_probe(json.loads(pr.stdout or b"{}"))["video_ext"]
             except Exception:  # noqa: BLE001 - 길이 정보가 없어도 클립 자체는 유효하다

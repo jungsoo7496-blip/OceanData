@@ -3,7 +3,8 @@
 - 경고(WARNING, 예: 단위 사전에 없는 단위)는 아무 스키마 오류도 가리지 않는다
 - 포인터는 조각 단위로 비교한다 (/observations/10/... 이 /observations/1 의 오류를 가리지 않는다)
 - 관측 항목의 도메인 오류는 같은 포인터의 스키마 오류만 가리고, 문서 루트(필수 필드 누락)는 가리지 않는다
-- 위치 좌표 오류는 /location 아래 스키마 오류(geometry oneOf)를 계속 가린다
+- 위치 좌표 오류는 자기가 설명하는 /location 아래 스키마 오류(geometry oneOf)를 계속 가린다
+  (다른 결함이 함께 있으면 남긴다 — `test_contract_problem_list_accuracy.py`, ADR-0067)
 시험 데이터는 합성 값이다.
 """
 

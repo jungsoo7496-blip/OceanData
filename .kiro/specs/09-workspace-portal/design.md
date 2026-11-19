@@ -31,6 +31,8 @@ React 18 + TS + Vite, Ant Design 5(ko_KR, 대비 강화 테마), TanStack Query,
 `CLIP_MAX_PENDING_PER_ORG` 미만이어야 한다(429 RATE_LIMITED + Retry-After). 작업 행과 감사(CLIP_EXPORT_REQUESTED)는 요청 트랜잭션
 하나로 202 전에 커밋한다. 작업은 클립을 올린 뒤 원 영상 행을 잠그고 살아 있는지·쿼터를 다시 확인해 기록하고(아니면 FAILED
 `SOURCE_UNAVAILABLE`·`QUOTA_EXCEEDED`, 올린 객체 삭제), 삭제는 원 자산 행을 잠근 뒤 파생본을 찾는다(ADR-0033 갱신).
+ffmpeg 시간 한도는 구간 길이 × `CLIP_TIMEOUT_FACTOR`(최소 `CLIP_TIMEOUT_MIN_S`, 최대 `FFMPEG_TIMEOUT_S`)이고 넘으면 재시도 없이
+FAILED(`CLIP_TIMEOUT`). 클립은 전용 워커(`WORKER_JOB_TYPES=clip_export`)로 뗄 수 있고, 도는 동안 워커가 임대를 다시 건다(ADR-0069).
 
 장비 정책 초안(계약 추가, ADR-0037, 요구사항 3.2~3.4): 표 `policy_drafts`(마이그레이션 0022, ID `pdr_`, 장비마다 DRAFT 하나 —
 부분 고유 색인), 상태 DRAFT → APPLIED | REJECTED, 항목 일곱 개(collection_mode, allowed_data_roles, local_copy_policy,

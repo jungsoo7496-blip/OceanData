@@ -382,7 +382,21 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** 양식 버전에 HWPX 원본 파일 첨부 (운영자). 본문의 {{변수}} 자리를 내보낼 때 치환한다 */
+        /**
+         * 양식 버전에 HWPX 원본 파일 첨부 (운영자). 본문의 {{변수}} 자리를 내보낼 때 치환한다
+         * @description 내보낼 때 쓸 수 없는 양식은 올릴 때 400 VALIDATION_ERROR로 거부한다 (ADR-0066):
+         *     - zip 항목 이름은 '/'로 나눈 상대 경로여야 한다. '/'로 시작하는 이름, '..' 단계, 역슬래시, ':'(드라이브 문자·스트림),
+         *       제어 문자(C0·C1), 보이지 않는 서식 문자(방향 제어·폭 없는 문자·BOM 등, 유니코드 범주 Cf)와 줄/문단 구분 문자
+         *       (U+2028·U+2029)가 든 이름은 거부한다.
+         *     - 항목은 일반 파일·폴더여야 한다. zip 외부 속성의 유닉스 파일 종류가 심볼릭 링크·장치·FIFO·소켓인 항목은 만든 OS 표시와
+         *       상관없이 거부한다 (종류를 적지 않은 항목은 받는다).
+         *     - 모든 항목을 읽을 수 있어야 한다 (손상·암호화·지원하지 않는 압축 방식은 거부).
+         *     - XML 항목(.xml)은 UTF-8이어야 하고, XML 선언에 인코딩이 있으면 UTF-8이어야 한다 (내보내기는 UTF-8로 쓴다).
+         *     - XML 항목이 하나 이상 있어야 하고, 압축을 푼 크기(zip 헤더에 적힌 항목 크기의 합)는 100MiB 이하다.
+         *       항목은 헤더에 적힌 크기까지만 읽는다.
+         *     초안을 HWPX로 내보내려면 XML 항목에 {{report.status}} 자리표시자가 있어야 한다("초안" 표시 자리, exportReport).
+         *     올릴 때는 이것을 요구하지 않는다(승인·제출본만 내보내는 양식).
+         */
         put: operations["putReportTemplateHwpx"];
         post?: never;
         delete?: never;
@@ -439,7 +453,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 최신 데이터로 새 초안 버전을 만든다 (이전 버전은 보존) */
+        /**
+         * 최신 데이터로 새 초안 버전을 만든다 (이전 버전은 보존)
+         * @description 데이터 기간(period_from·period_to)은 버전마다 저장한다. 회차 보고서의 새 버전은 회차 끝 시각(진행 중이면 지금)까지를
+         *     쓰고, 이전 버전(승인·제출본 포함)의 기간은 바뀌지 않는다 (ADR-0080).
+         */
         post: operations["createReportVersion"];
         delete?: never;
         options?: never;
@@ -514,8 +532,17 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * 보고서 내보내기 (켜진 형식만, /v1/capabilities의 report_formats). 초안은 "초안" 표시
-         * @description PDF·XLSX의 근거 손상 안내는 보고서 조회와 같은 범위의 손상 자산 ID를 표시한다.
+         * 보고서 내보내기 (켜진 형식만, /v1/system/capabilities의 report_formats). 초안은 "초안" 표시
+         * @description 보고서·버전을 먼저 확인한다: 없거나 다른 기관 보고서면 형식과 관계없이 404다. 볼 수 있는 보고서의 형식이 꺼져 있으면 409 CONFLICT다
+         *     (켜진 형식은 /v1/system/capabilities의 report_formats와 같다. PDF는 렌더러를 불러올 수 없으면 꺼진 것이다).
+         *     PDF·XLSX의 근거 손상 안내는 보고서 조회와 같은 범위의 손상 자산 ID를 표시한다.
+         *     HWPX: 저장된 양식을 쓸 수 없으면(양식 검사가 생기기 전에 올린 양식 등) 409 CONFLICT다. 양식을 다시 올린 뒤 내보낸다.
+         *     HWPX 파일의 zip 항목에는 양식 항목의 이름·순서·시각·압축 방식만 옮긴다. 외부 속성(파일 종류·권한)은 일반 파일·폴더로 새로
+         *     쓰고 추가 필드는 옮기지 않는다 (ADR-0066).
+         *     HWPX의 "초안" 표시는 양식의 {{report.status}} 자리로만 들어간다. 초안(DRAFT) 버전은 양식의 XML 항목에 이 자리표시자가
+         *     없으면(여러 텍스트 조각으로 나뉜 경우 포함) 표시 없는 파일을 만들지 않고 409 CONFLICT다 (ADR-0080). 다른 상태의 버전은 상관없다.
+         *     PDF: 외부 주소(이미지·글꼴·스타일, http·file 모두)를 가져오지 않는다. 서버 프로세스마다 동시에 만드는 PDF 수에
+         *     설정 한도(REPORT_PDF_MAX_CONCURRENT)가 있어, 차면 기다리지 않고 429 RATE_LIMITED와 Retry-After를 준다 (ADR-0066).
          */
         get: operations["exportReport"];
         put?: never;
@@ -995,6 +1022,8 @@ export interface paths {
         /**
          * 매니페스트 신고 → 업로드 세션과 파트 URL 발급
          * @description - 수집기 범위·원천 장비 정책·쿼터 검사 후 파트 URL(기본 15분)을 준다. 신고 크기만큼 쿼터를 예약한다.
+         *     - 파트 URL(parts)은 응답 하나에 서버 한도(기본 1000개)까지만 1번 파트부터 번호 순으로 담는다. parts가 part_count보다
+         *       적으면 받은 파트를 올린 뒤 GET /v1/uploads/{upload_id}/parts로 남은 파트의 URL을 받는다(잘렸다는 표시는 따로 없다).
          *     - location 없이 source_location이 있으면 EPSG:4326으로 변환하고 원본과 변환 이력을 보존한다. 변환 결과는 location과 같은 GeoJSON 형식·좌표 규칙을 따른다. 규칙을 위반하면 400 VALIDATION_ERROR를 반환한다.
          *     - variant가 원천 장비의 collection_mode에서 허용되지 않으면 422 RULE_VIOLATION (domain.md 3장).
          *     - 같은 파일의 진행 중 세션이 유효하면 그 세션을 돌려준다. 만료된 세션은 정리하고 정책이 허용하면 201로 새 세션을 연다.
@@ -1025,7 +1054,16 @@ export interface paths {
         get: operations["getUpload"];
         put?: never;
         post?: never;
-        /** 업로드 취소 (미완료 파트 정리, 쿼터 예약 해제) */
+        /**
+         * 업로드 취소 (미완료 파트 정리, 쿼터 예약 해제)
+         * @description 진행 중인 세션만 취소한다(완료·취소·만료로 끝난 세션은 409 CONFLICT). 같은 세션을 다른 요청(완료 등)이 처리하고
+         *     있으면 그 요청이 끝날 때까지 기다린 뒤 판단한다 — 그 요청이 세션을 끝냈으면 409 CONFLICT, 되돌려졌으면(예: 완료의
+         *     503) 이어서 취소하고 204.
+         *     저장소의 미완료 멀티파트를 정리하고 쿼터 예약을 해제한다. 저장소에 이 업로드의 완성 객체가 남아 있으면(완료 직후
+         *     확정 전에 중단된 요청, 또는 503으로 끝난 완료를 저장소가 뒤늦게 마친 경우) 함께 지운다.
+         *     저장소 정리를 확인하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다 —
+         *     다시 요청하면 이어서 정리한다.
+         */
         delete: operations["abortUpload"];
         options?: never;
         head?: never;
@@ -1041,7 +1079,13 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** 완료된 파트와 남은 파트의 새 URL (재개용) */
+        /**
+         * 완료된 파트와 남은 파트의 새 URL (재개용)
+         * @description 이미 완료된 세션은 409 CONFLICT, 취소·만료된 세션은 410 GONE. 유효 기간이 지난 세션은 저장소의 미완료 멀티파트(완료
+         *     직후 확정 전에 중단된 요청이 남긴 완성 객체 포함)를 정리하고 쿼터 예약을 해제한 뒤 410 GONE을 반환한다.
+         *     저장소에서 파트 목록을 조회하지 못하거나 만료 세션을 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며
+         *     세션과 쿼터 예약을 유지한다.
+         */
         get: operations["listUploadParts"];
         put?: never;
         post?: never;
@@ -1074,6 +1118,11 @@ export interface paths {
          *     본문은 저장소가 먼저 거부할 수 있다.
          *     저장소에서 크기를 확인할 수 없거나 크기가 다른 멀티파트를 정리하지 못하면 503 STORAGE_UNAVAILABLE과
          *     Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
+         *     저장소의 멀티파트 완료 호출이 파트 목록 거부가 아닌 이유(연결 실패·시간 초과·저장소 내부 오류)로 실패해도 503
+         *     STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다 — 같은 요청을 다시 보낸다(저장소에서 이미
+         *     완료됐으면 그 객체로 마친다).
+         *     유효 기간이 지난 세션은 저장소를 정리(남은 완성 객체 포함)하고 쿼터 예약을 해제한 뒤 410 GONE이다. 만료 세션을
+         *     저장소에서 정리하지 못하면 503 STORAGE_UNAVAILABLE과 Retry-After를 반환하며 세션과 쿼터 예약을 유지한다.
          */
         post: operations["completeUpload"];
         delete?: never;
@@ -1118,6 +1167,8 @@ export interface paths {
         /**
          * 회차 지정·data_role 변경(ORG_ADMIN, 사유 필수)·위치 공개 정밀도
          * @description sharing_scope는 여기서 바꿀 수 없다 (share-requests 사용).
+         *     session_id는 자산과 같은 실증사업의 회차여야 한다. 다른 실증사업의 회차면 422 RULE_VIOLATION
+         *     (unmet_conditions의 condition `session.project_id=asset.project_id`).
          */
         patch: operations["patchAsset"];
         trace?: never;
@@ -1174,6 +1225,8 @@ export interface paths {
         /**
          * 처리 단계 재실행 (PLATFORM_OPERATOR, 다중 인증). 새 파생 자산을 계보에 연결한다
          * @description 05번 요구사항 7.2. 원본 자산에만 요청한다. FAILED 자산은 실패 직전 단계부터 다시 시작한다.
+         *     무결성 검증 중에 실패한 자산(실패 직전 단계 VALIDATING)은 검증부터 다시 하고, 등록되면 보통 처리 순서를 처음부터 돈다.
+         *     이때 job_ids는 검증 작업이다.
          */
         post: operations["reprocessAsset"];
         delete?: never;
@@ -1196,7 +1249,7 @@ export interface paths {
         put?: never;
         /**
          * 공유 등급 변경 신청 — 상향은 domain.md 4장 조건 검사, 하향은 언제든 (ORG_ADMIN만)
-         * @description L1 이상 결정은 ORG_ADMIN만 할 수 있다 (그 밖의 역할은 403). 원본(variant=ORIGINAL)과 CORE는 L1을 넘을 수 없다. 하향에는 existing_grant_handling이 필요하다.
+         * @description L1 이상 결정은 ORG_ADMIN만 할 수 있다 (그 밖의 역할은 403). 원본(variant=ORIGINAL)과 CORE는 L1을 넘을 수 없다. 하향에는 existing_grant_handling이 필요하다. 목표 등급이 지금 sharing_scope와 같으면 409 INVALID_STATE_TRANSITION. 같은 Idempotency-Key에 다른 본문이면 409 IDEMPOTENCY_CONFLICT, 같은 키의 앞선 요청이 아직 처리 중이면 409 CONFLICT와 Retry-After (IdempotencyKey 설명).
          */
         post: operations["createShareRequest"];
         delete?: never;
@@ -1276,7 +1329,10 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** 운영자의 민감도·개인정보 비해당 지정 (근거 점검 기록 참조 필수, 감사) */
+        /**
+         * 운영자의 민감도·개인정보 비해당 지정 (근거 점검 기록 참조 필수, 감사)
+         * @description 지정 뒤 이 자산이나 그 파생본(원 자산들의 가장 엄격한 sensitivity_class를 물려받는다)이 지금 sharing_scope의 분류 조건 (domain.md 4장의 sensitivity_class·privacy_status 조건, asset-metadata 불변식)을 충족하지 못하거나 이번 변경으로 다른 조건을 새로 충족하지 못하게 되면, 그 자산들의 sharing_scope를 조건을 충족하는 가장 높은 등급으로 함께 내리고 그 자산이 든 데이터셋 버전의 이용 권한을 즉시 철회한다(REVOKE_NOW). 예: L2 이상에서 SECURITY → L1, L4에서 RESTRICTED → L3 또는 L2. 분류 조건은 지정 전부터 어긋나 있었어도 맞춘다. 분류와 무관한 조건(2단 약정 만료 등)이 지정 전부터 어긋나 있던 것만으로는 내리지 않는다. 내린 자산(끊은 이용 권한 ID 포함)은 감사 기록 ASSET_CLASSIFIED에, 끊은 권한마다 GRANT_REVOKED를 이 요청과 함께 확정한다 (ADR-0074).
+         */
         patch: operations["classifyAsset"];
         trace?: never;
     };
@@ -1287,7 +1343,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 비식별 검수 (검수자는 배정된 것만, 운영자는 전체) */
+        /**
+         * 비식별 검수 (검수자는 배정된 것만, 운영자는 전체)
+         * @description 만든 시각(created_at) 순, 같으면 검수 ID 순이다. 한 페이지는 limit건(기본 50, 최대 500)이고, 다음 페이지는 next_cursor를
+         *     cursor로 전달한다(마지막 페이지는 null). status로 거른 목록도 같은 커서로 이어 본다.
+         *     형식이 틀렸거나 볼 수 없는 검수를 가리키는 cursor, 범위 밖 limit은 400 (ADR-0089).
+         */
         get: operations["listDeidReviews"];
         put?: never;
         post?: never;
@@ -2013,6 +2074,8 @@ export interface paths {
          * 이 영상에서 요청한 구간 클립 작업과 결과 (자기 기관 ORG 역할, 최근 요청부터)
          * @description 09번 요구사항 7.2. DONE이면 clip_asset_id가 결과 파생 자산이다(계보 relation=CLIP, provenance.clip_range_s).
          *     결과 자산이 그 뒤 삭제됐으면 clip_asset_id가 없다. FAILED면 error_code에 원인 코드가 있다.
+         *     요청 시각(requested_at)이 최근인 것부터, 같으면 작업 ID 역순으로 정렬한다. 한 페이지는 limit건(기본 100, 최대 500)이고,
+         *     다음 페이지는 next_cursor를 cursor로 전달한다(마지막 페이지는 null). 형식이 틀린 cursor·limit은 400 (ADR-0077).
          */
         get: operations["listAssetClips"];
         put?: never;
@@ -2031,6 +2094,8 @@ export interface paths {
          *     - 기관의 대기·실행 중 클립 작업이 설정 한도(CLIP_MAX_PENDING_PER_ORG)에 닿으면 429 RATE_LIMITED와 Retry-After.
          *     작업 등록과 감사(CLIP_EXPORT_REQUESTED)는 한 트랜잭션으로 확정된다 — 202면 둘 다 남고, 오류 응답이면 둘 다 없다.
          *     Idempotency-Key를 주면 같은 키·같은 본문은 작업이 끝난 뒤에도 처음 응답을 다시 준다(새 작업·감사 없음).
+         *     작업의 인코딩 시간 한도는 구간 길이에 비례한다(설정 배수와 최솟값, 전체 ffmpeg 한도 이하, ADR-0069). 한도를 넘으면
+         *     재시도 없이 작업이 FAILED(error_code=CLIP_TIMEOUT)가 된다.
          */
         post: operations["createAssetClip"];
         delete?: never;
@@ -2315,7 +2380,8 @@ export interface paths {
          * @description 04번 요구사항 8. https만 받고 공인(global) 주소가 아닌 곳(사설·루프백·링크로컬·공유 100.64.0.0/10 등)으로 풀리는 대상에는
          *     보내지 않는다(400 또는 전송 시 차단). 전송 때는 이름을 한 번 풀어 검사한 주소로 바로 연결하고(이름은 Host·TLS SNI·인증서 확인에만),
          *     프록시 환경변수와 리디렉션은 따르지 않는다. 수신 서버는 연결부터 응답 헤더까지 WEBHOOK_TIMEOUT_S(기본 5초) 안에 보내야 하며
-         *     상태 코드만 보고 본문은 읽지 않는다(2xx만 성공). 실패하면 지수 백오프로 재시도하고 WEBHOOK_MAX_ATTEMPTS번 실패하면 구독을 끄고
+         *     상태 코드만 보고 본문은 읽지 않는다(2xx만 성공). 최종 응답 헤더까지(중간 응답 1xx 포함) 128KiB를 넘게 보내면 그 시도는
+         *     실패로 센다(ADR-0064). 실패하면 지수 백오프로 재시도하고 WEBHOOK_MAX_ATTEMPTS번 실패하면 구독을 끄고
          *     기관 ORG_ADMIN에게 알린다. 구독 하나의 전송은 한 번에 하나씩 보낸다(ADR-0041).
          *     기관당 구독(중지된 것 포함, 지운 것 제외)은 WEBHOOK_MAX_SUBSCRIPTIONS_PER_ORG(기본 10)개까지이고, 넘으면 409 CONFLICT.
          */
@@ -2352,7 +2418,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 게시된 데이터셋 (CONSUMER에게는 승인 가능한 것만) */
+        /**
+         * 게시된 데이터셋 (CONSUMER에게는 승인 가능한 것만)
+         * @description 운영자는 모든 버전, 이용기관은 게시된 데이터셋의 L3 이상·READY 버전만 본다. 제공기관(ORG_ADMIN·ORG_MEMBER)은 자기 기관 자산이 든 버전만 보고(계보 조회와 같은 규칙), data_card와 samples도 그 버전에서 고른다.
+         */
         get: operations["listDatasets"];
         put?: never;
         /** 데이터셋 만들기 (PLATFORM_OPERATOR). 버전은 따로 추가 */
@@ -2372,7 +2441,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** 데이터셋 상세 (데이터 카드 포함) */
+        /**
+         * 데이터셋 상세 (데이터 카드 포함)
+         * @description 운영자는 모든 버전, 이용기관은 게시된 데이터셋의 L3 이상·READY 버전만 본다. 제공기관(ORG_ADMIN·ORG_MEMBER)은 자기 기관 자산이 든 버전만 보고(계보 조회와 같은 규칙), data_card와 samples도 그 버전에서 고른다.
+         */
         get: operations["getDataset"];
         put?: never;
         post?: never;
@@ -2419,6 +2491,8 @@ export interface paths {
          * 데이터셋 버전 계보 — 항목별 원본·처리 모델 버전·검수자 (PLATFORM_OPERATOR, 제공기관은 자기 항목만)
          * @description 13번 요구사항 5.3, 14번 요구사항 3.1 (T06-b). 이용기관은 볼 수 없다 (원본 ID·검수자는 내부 정보).
          *     제공기관이 보면 다른 기관 항목은 hidden_item_count로 개수만 준다.
+         *     계보는 다 만든(READY) 버전만 준다. 아직 만드는 중(BUILDING)이거나 만들지 못한(FAILED) 버전은 409 CONFLICT (13번 작업 32).
+         *     볼 수 없는 버전은 상태와 관계없이 404다.
          */
         get: operations["getDatasetVersionLineage"];
         put?: never;
@@ -2455,7 +2529,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 이용 권한 (이용기관은 자기 것, 제공기관은 자기 자산이 든 것, 운영자는 전체) */
+        /**
+         * 이용 권한 (이용기관은 자기 것, 제공기관은 자기 자산이 든 것, 운영자는 전체)
+         * @description grant_id(만든 순서) 순으로 limit개씩 나누고, 다음 쪽이 있으면 next_cursor를 준다.
+         */
         get: operations["listGrants"];
         put?: never;
         post?: never;
@@ -2510,7 +2587,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 제공기관 이용 이력 — 자기 자산이 든 데이터셋의 신청·결정·다운로드 (이용기관 이름 포함) */
+        /**
+         * 제공기관 이용 이력 — 자기 자산이 든 데이터셋의 신청·결정·다운로드 (이용기관 이름 포함)
+         * @description 사건 하나가 항목 하나다. at(초 단위)·kind 순, 같으면 사건 순으로 limit개씩 나누고, 다음 쪽이 있으면 next_cursor를 준다. 쪽을 이어 붙이면 한 번에 받는 것과 같은 순서다.
+         */
         get: operations["getUsageHistory"];
         put?: never;
         post?: never;
@@ -2527,10 +2607,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 이용 신청 (이용기관은 자기 신청, 제공기관은 결정할 신청, 운영자는 전체) */
+        /**
+         * 이용 신청 (이용기관은 자기 신청, 제공기관은 결정할 신청, 운영자는 전체)
+         * @description access_request_id(만든 순서) 순으로 limit개씩 나누고, 다음 쪽이 있으면 next_cursor를 준다.
+         */
         get: operations["listAccessRequests"];
         put?: never;
-        /** 이용 신청 (데이터셋 버전 하나) */
+        /**
+         * 이용 신청 (데이터셋 버전 하나)
+         * @description 기간의 시작·끝 날짜는 달력에 있는 날짜여야 한다(2월 30일·13월은 400). 이용 기간은 끝 날짜 다음 날 0시(UTC)에 끝나므로 끝 날짜는 9999-12-30까지이고 9999-12-31은 400이다. 끝 날짜가 시작 날짜보다 빠르면 422.
+         */
         post: operations["createAccessRequest"];
         delete?: never;
         options?: never;
@@ -2549,7 +2635,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 제공기관 ORG_ADMIN 승인·거절 → 운영자 최종 승인 */
+        /**
+         * 제공기관 ORG_ADMIN 승인·거절 → 운영자 최종 승인
+         * @description 응답 기한(deadline_at)이 지난 신청의 승인(제공기관·운영자)은 409 INVALID_STATE_TRANSITION이다. 거절은 받는다. 승인 없이 기한이 지난 신청은 정비 주기에 기본값 거부(DENIED)로 바뀐다. 운영자 승인 때 데이터셋 버전의 현재 등급이 L3(APPROVED_PARTNERS)에 못 미치면 422 RULE_VIOLATION이다 (예: 제공기관 승인 뒤 KEEP_UNTIL_EXPIRY로 자산 등급을 낮춘 경우). 이때 결정은 기록하지 않고 신청은 PROVIDER_APPROVED로 남는다.
+         */
         post: operations["decideAccessRequest"];
         delete?: never;
         options?: never;
@@ -2734,6 +2823,7 @@ export interface components {
             schema_versions: string[];
             gpu_enabled: boolean;
             processing_steps: ("META" | "PROXY" | "THUMBNAIL" | "SENSOR_PARSE" | "DEID" | "TAG" | "EMBED")[];
+            /** @description 보고서 내보내기(exportReport)가 받는 형식. REPORT_FORMATS에 켠 형식 중 PDF는 렌더러(WeasyPrint)를 불러올 수 있을 때만 포함한다 (ADR-0018). */
             report_formats: ("PDF" | "XLSX" | "HWPX")[];
             external_sources: string[];
             features?: {
@@ -3486,12 +3576,15 @@ export interface components {
             organization_id: components["schemas"]["organization_id"];
             project_id: components["schemas"]["project_id"];
             session_id?: components["schemas"]["session_id"] | null;
+            /** @description 이 버전(version)의 데이터 기간 시작. 기간은 버전마다 저장한다 */
             period_from?: components["schemas"]["utc_datetime"] | null;
+            /** @description 이 버전(version)의 데이터 기간 끝. 새 버전을 만들어도 이전 버전의 값은 바뀌지 않는다 */
             period_to?: components["schemas"]["utc_datetime"] | null;
             title: string;
             template_code: components["schemas"]["TemplateCode"];
             template_version: number;
             version: number;
+            /** @description 조회자에게 보이는 최신 버전. 관리기관 열람자(PROGRAM_VIEWER)에게는 제출된 버전 중 최신이다. */
             latest_version?: number;
             status: components["schemas"]["report_status"];
             generated_at: components["schemas"]["utc_datetime"];
@@ -3901,6 +3994,7 @@ export interface components {
             asset_id: components["schemas"]["asset_id"];
             part_size?: number;
             part_count?: number;
+            /** @description 1번 파트부터 번호 순으로 서버 한도(기본 1000개)까지의 업로드 URL. part_count보다 적으면 이 파트들을 올린 뒤 GET /v1/uploads/{upload_id}/parts로 남은 파트의 URL을 받는다(잘렸다는 표시는 따로 없다). */
             parts?: components["schemas"]["PartUrl"][];
             expires_at?: components["schemas"]["utc_datetime"];
         } & unknown;
@@ -3908,11 +4002,13 @@ export interface components {
             upload_id: components["schemas"]["upload_id"];
             part_size: number;
             part_count: number;
+            /** @description 저장소에 올라간 파트 전부 (한도로 잘리지 않는다). */
             completed_parts: {
                 part_number: number;
                 etag: string;
                 size: number;
             }[];
+            /** @description 저장소에 아직 없는 파트의 새 업로드 URL. 번호가 낮은 파트부터 서버 한도(기본 1000개)까지 담는다. completed_parts와 합쳐 part_count보다 적으면 이 파트들을 올린 뒤 GET /v1/uploads/{upload_id}/parts를 다시 불러 나머지를 받는다. */
             pending_parts: components["schemas"]["PartUrl"][];
             expires_at: components["schemas"]["utc_datetime"];
         };
@@ -3988,6 +4084,7 @@ export interface components {
             clip_asset_id?: components["schemas"]["asset_id"];
             /**
              * @description FAILED일 때 원인 코드 (예 SOURCE_UNAVAILABLE — 원 영상이 격리·삭제됨, CLIP_ENCODE_FAILED — 자르지 못함,
+             *     CLIP_TIMEOUT — 구간 길이에 비례한 인코딩 시간 한도 안에 끝내지 못함,
              *     QUOTA_EXCEEDED — 저장 직전 쿼터 확인에서 기관 쿼터를 넘음)
              */
             error_code?: string;
@@ -6102,6 +6199,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            413: components["responses"]["PayloadTooLarge"];
             429: components["responses"]["TooManyRequests"];
         };
     };
@@ -7244,6 +7342,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     listUploadParts: {
@@ -7272,6 +7371,7 @@ export interface operations {
             409: components["responses"]["Conflict"];
             410: components["responses"]["Gone"];
             429: components["responses"]["TooManyRequests"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     completeUpload: {
@@ -7410,6 +7510,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
             429: components["responses"]["TooManyRequests"];
         };
     };
@@ -7559,6 +7660,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             /** @description 조건 미충족 (RULE_VIOLATION, unmet_conditions) */
             422: {
                 headers: {
@@ -7762,6 +7864,8 @@ export interface operations {
         parameters: {
             query?: {
                 status?: "ASSIGNED" | "PASSED" | "MISSED" | "REJECTED";
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
             };
             header?: never;
             path?: never;
@@ -7777,6 +7881,8 @@ export interface operations {
                 content: {
                     "application/json": {
                         items: components["schemas"]["DeidReview"][];
+                        /** @description 다음 페이지 커서. 마지막 페이지는 null */
+                        next_cursor: string | null;
                     };
                 };
             };
@@ -9169,7 +9275,10 @@ export interface operations {
     };
     listAssetClips: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
             header?: never;
             path: {
                 asset_id: components["parameters"]["AssetId"];
@@ -9186,9 +9295,12 @@ export interface operations {
                 content: {
                     "application/json": {
                         items: components["schemas"]["ClipJob"][];
+                        /** @description 다음 페이지 커서. 마지막 페이지는 null */
+                        next_cursor: string | null;
                     };
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -10005,6 +10117,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             429: components["responses"]["TooManyRequests"];
         };
     };
@@ -10037,7 +10150,10 @@ export interface operations {
     };
     listGrants: {
         parameters: {
-            query?: never;
+            query?: {
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -10052,9 +10168,11 @@ export interface operations {
                 content: {
                     "application/json": {
                         items: components["schemas"]["Grant"][];
+                        next_cursor: string | null;
                     };
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             429: components["responses"]["TooManyRequests"];
@@ -10123,7 +10241,10 @@ export interface operations {
     };
     getUsageHistory: {
         parameters: {
-            query?: never;
+            query?: {
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -10137,6 +10258,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
+                        next_cursor: string | null;
                         items: {
                             /** @enum {unknown} */
                             kind: "REQUESTED" | "DECIDED" | "GRANTED" | "DOWNLOAD_ISSUED" | "REVOKED" | "EXPIRED";
@@ -10150,6 +10272,7 @@ export interface operations {
                     };
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             429: components["responses"]["TooManyRequests"];
@@ -10157,7 +10280,10 @@ export interface operations {
     };
     listAccessRequests: {
         parameters: {
-            query?: never;
+            query?: {
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -10172,9 +10298,11 @@ export interface operations {
                 content: {
                     "application/json": {
                         items: components["schemas"]["AccessRequest"][];
+                        next_cursor: string | null;
                     };
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             429: components["responses"]["TooManyRequests"];
@@ -10242,6 +10370,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
             429: components["responses"]["TooManyRequests"];
         };
     };

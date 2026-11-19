@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, App, Button, Card, Form, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, ApiError, post, type Asset, type Me, type Page } from '../lib/api'
+import { api, apiAll, ApiError, post, type Asset, type Me, type Page } from '../lib/api'
 import { bytes, kst, SCOPE_LABEL } from '../lib/format'
 import { explain } from '../lib/problems'
 
@@ -104,8 +104,8 @@ export function SharingConsole() {
     queryKey: ['share-queue'],
     queryFn: async () => (await Promise.all(statuses.map((s) => api<Page<Asset & { share_status: string; organization_id?: string }>>(`/v1/assets?share_status=${s}&limit=200`)))).flatMap((p) => p.items),
   })
-  const sets = useQuery({ queryKey: ['datasets'], queryFn: () => api<{ items: DatasetT[] }>('/v1/datasets') })
-  const requests = useQuery({ queryKey: ['access-requests'], queryFn: () => api<{ items: AccessReq[] }>('/v1/access-requests') })
+  const sets = useQuery({ queryKey: ['datasets'], queryFn: () => api<{ items: DatasetT[] }>('/v1/datasets?limit=500') })
+  const requests = useQuery({ queryKey: ['access-requests'], queryFn: () => apiAll<AccessReq>('/v1/access-requests') })
   const refresh = () => ['share-queue', 'datasets', 'access-requests'].forEach((k) => void qc.invalidateQueries({ queryKey: [k] }))
   const act = useMutation({
     mutationFn: ({ id, action, legal_basis_ref, reason }: { id: string; action: string; legal_basis_ref?: string; reason?: string }) =>
@@ -223,9 +223,9 @@ function LineageModal({ target, onClose }: { target: { ds: string; vid: string }
 export function Catalog() {
   const qc = useQueryClient()
   const fail = useFail()
-  const sets = useQuery({ queryKey: ['datasets'], queryFn: () => api<{ items: DatasetT[] }>('/v1/datasets') })
-  const reqs = useQuery({ queryKey: ['access-requests'], queryFn: () => api<{ items: AccessReq[] }>('/v1/access-requests') })
-  const grants = useQuery({ queryKey: ['grants'], queryFn: () => api<{ items: GrantT[] }>('/v1/grants') })
+  const sets = useQuery({ queryKey: ['datasets'], queryFn: () => api<{ items: DatasetT[] }>('/v1/datasets?limit=500') })
+  const reqs = useQuery({ queryKey: ['access-requests'], queryFn: () => apiAll<AccessReq>('/v1/access-requests') })
+  const grants = useQuery({ queryKey: ['grants'], queryFn: () => apiAll<GrantT>('/v1/grants') })
   const [target, setTarget] = useState<{ ds: DatasetT; vid: string } | null>(null)
   const [files, setFiles] = useState<{ path: string; url: string; byte_size: number }[] | null>(null)
   const refresh = () => ['access-requests', 'grants'].forEach((k) => void qc.invalidateQueries({ queryKey: [k] }))
@@ -290,9 +290,9 @@ export function ProviderAccess({ me }: { me: Me }) {
   const qc = useQueryClient()
   const fail = useFail()
   const isAdmin = me.roles.includes('ORG_ADMIN')
-  const reqs = useQuery({ queryKey: ['access-requests'], queryFn: () => api<{ items: AccessReq[] }>('/v1/access-requests') })
-  const grants = useQuery({ queryKey: ['grants'], queryFn: () => api<{ items: GrantT[] }>('/v1/grants') })
-  const history = useQuery({ queryKey: ['usage-history'], queryFn: () => api<{ items: { kind: string; at: string; consumer_organization?: string; purpose?: string; detail?: string }[] }>('/v1/usage-history') })
+  const reqs = useQuery({ queryKey: ['access-requests'], queryFn: () => apiAll<AccessReq>('/v1/access-requests') })
+  const grants = useQuery({ queryKey: ['grants'], queryFn: () => apiAll<GrantT>('/v1/grants') })
+  const history = useQuery({ queryKey: ['usage-history'], queryFn: () => apiAll<{ kind: string; at: string; consumer_organization?: string; purpose?: string; detail?: string }>('/v1/usage-history') })
   const refresh = () => ['access-requests', 'grants', 'usage-history'].forEach((k) => void qc.invalidateQueries({ queryKey: [k] }))
   const decide = useMutation({
     mutationFn: ({ id, decision }: { id: string; decision: string }) => post(`/v1/access-requests/${id}/decisions`, { decision, reason: decision === 'APPROVE' ? '제공기관 승인' : '제공기관 거절' }),

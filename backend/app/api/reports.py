@@ -5,10 +5,10 @@ from __future__ import annotations
 import re
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Body, Depends, Header, Query, Request, Response
+from fastapi import APIRouter, Body, Depends, Header, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.adapters import report_renderers as rr
@@ -26,7 +26,7 @@ from app.db.models import (
     TrialSession,
 )
 from app.domain.ids import new_id
-from app.domain.normalize import parse_rfc3339
+from app.domain.normalize import TimeRuleError, parse_rfc3339
 from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services import evidence, metrics, reports
@@ -68,6 +68,16 @@ class ObsRef(BaseModel):
     from_: str = Field(alias="from", pattern=UTC_TS.pattern)
     to: str = Field(pattern=UTC_TS.pattern)
 
+    @field_validator("from_", "to")
+    @classmethod
+    def _real_time(cls, v: str) -> str:
+        # 형식만 맞고 없는 시각(2월 30일, 25시, 윤초)도 400이다 — check_refs가 이 값을 다시 해석한다 (계약 점검 S40)
+        try:
+            parse_rfc3339(v)
+        except TimeRuleError:
+            raise ValueError("유효한 날짜와 시각을 입력하세요") from None
+        return v
+
 
 Ref = Annotated[AssetRef | EventRef | ObsRef, Field(discriminator="kind")]
 
@@ -98,10 +108,17 @@ def _refs(refs: list[Any]) -> list[dict[str, Any]]:
     return [r.model_dump(by_alias=True, exclude_none=True) for r in refs]
 
 
-def _check(db: Session, org: str, refs: list[dict[str, Any]]) -> list[str]:
+def _check(db: Session, c: Container, request: Request, p: Principal, org: str,
+           refs: list[dict[str, Any]]) -> list[str]:
     try:
         return evidence.check_refs(db, org, refs)
     except evidence.BadEvidence as exc:
+        # 다른 기관 근거는 '없음'과 같은 400으로 답하고 교차 기관 시도로 감사한다 (security.md, ADR-0078).
+        # 요청 트랜잭션은 400으로 되돌려지므로 load_scoped처럼 감사는 따로 커밋한다 (ADR-0053)
+        for target_type, ident, owner in exc.foreign:
+            c.audit.record("CROSS_ORG_ACCESS_ATTEMPT", result="DENIED", principal=p, organization_id=owner,
+                           target_type=target_type, target_id=ident, source_ip=client_ip(request),
+                           details={"path": request.url.path})
         raise ProblemError("VALIDATION_ERROR", errors=exc.errors) from None
 
 
@@ -137,7 +154,7 @@ def create_record(session_id: str, body: RecordCreate, request: Request, db: Ses
     def create() -> tuple[int, dict]:
         s = load_scoped(db, c, request, TrialSession, session_id, p)
         values = {**body.model_dump(exclude={"evidence_refs"}), "evidence_refs": _refs(body.evidence_refs)}
-        assets = _check(db, s.organization_id, values["evidence_refs"])
+        assets = _check(db, c, request, p, s.organization_id, values["evidence_refs"])
         now = c.clock.now()
         rec = SessionRecord(record_id=new_id("record"), organization_id=s.organization_id, project_id=s.project_id,
                             session_id=s.session_id, latest_version=0, created_by=p.principal_id, created_at=now,
@@ -167,15 +184,16 @@ def update_record(record_id: str, body: RecordUpdate, request: Request, db: Sess
     fields = body.model_dump(exclude_unset=True)
     if not fields:
         raise _bad("", "바꿀 값이 없습니다", "minProperties")
-    if fields.get("title", "") is None or fields.get("kind", "") is None:
-        raise _bad("/title", "제목·종류는 비울 수 없습니다")
+    for name in ("title", "kind", "evidence_refs"):  # 계약이 null을 허용하지 않는 항목 — 그 항목 위치로 답한다
+        if name in fields and fields[name] is None:
+            raise _bad(f"/{name}", "비울 수 없는 항목입니다", "not_nullable")
     rec = _record(db, c, request, record_id, p, lock=True)
     cur = _version(db, rec, None)
     values = {k: getattr(cur, k) for k in evidence.RECORD_FIELDS}
     values.update(fields)
     if body.evidence_refs is not None:
         values["evidence_refs"] = _refs(body.evidence_refs)
-    assets = _check(db, rec.organization_id, values["evidence_refs"])
+    assets = _check(db, c, request, p, rec.organization_id, values["evidence_refs"])
     v = evidence.add_version(db, rec, values, p.principal_id, c.clock.now(), assets)
     return evidence.record_view(rec, v)
 
@@ -321,7 +339,7 @@ def create_template(body: TemplateCreate, request: Request, db: Session = DB,
 
 
 @router.put("/v1/report-templates/{template_code}/versions/{version}/hwpx", tags=["reports"])
-def put_template_hwpx(template_code: str, version: int, request: Request,
+def put_template_hwpx(template_code: str, version: Annotated[int, Path(ge=1)], request: Request,
                       data: bytes = Body(..., media_type="application/octet-stream"),
                       db: Session = DB, c: Container = Depends(container),
                       p: Principal = Depends(require("report_template:write"))) -> dict:
@@ -394,6 +412,9 @@ def _view(db: Session, rep: Report, v: ReportVersion, p: Principal) -> dict:
     shown = visible_asset_ids(db, p, {a for m in v.metrics for a in m["sources"].get("asset_ids", [])})
     out["metrics"] = [reports.metric_view(m, shown) for m in v.metrics]
     out["damage"] = _damage_view(db, rep, v, p)
+    if _viewer(p):  # 관리기관 열람자에게는 제출된 버전 중 최신 — 제출되지 않은 초안의 수를 드러내지 않는다 (S38)
+        out["latest_version"] = db.execute(select(func.max(ReportVersion.version)).where(
+            ReportVersion.report_id == rep.report_id, reports.submitted_filter())).scalar_one()
     return out
 
 
@@ -429,6 +450,12 @@ def create_report(body: ReportCreate, request: Request, db: Session = DB,
             start, end = parse_rfc3339(body.from_), parse_rfc3339(body.to)
         except ValueError:
             raise _bad("/from", "RFC 3339 UTC 시각이어야 합니다") from None
+        # 보고서는 기간을 한국 시각으로 쓴다. 9999-12-31T15:00:00Z부터는 그 날짜가 없다 (계약 점검 S31)
+        late = [ptr for ptr, dt in (("/from", start), ("/to", end)) if not reports.kst_representable(dt)]
+        if late:
+            raise ProblemError("VALIDATION_ERROR", errors=[
+                {"pointer": ptr, "code": "invalid", "message": "한국 시각으로 9999-12-31을 넘는 시각은 쓸 수 없습니다"}
+                for ptr in late])
         if start >= end:
             raise _bad("/to", "끝이 시작보다 늦어야 합니다")
         project_id, title = prj.project_id, f"{tpl.name} — {start.date()} ~ {end.date()}"
@@ -468,7 +495,7 @@ def new_report_version(report_id: str, request: Request, db: Session = DB,
     tpl = reports.latest_template(db, rep.template_code, rep.template_version)
     if tpl is None:
         raise ProblemError("CONFLICT", detail="보고서 양식을 찾을 수 없습니다")
-    if rep.session_id:  # 회차가 끝났으면 끝 시각, 진행 중이면 지금까지
+    if rep.session_id:  # 회차가 끝났으면 끝 시각, 진행 중이면 지금까지. 앞 버전의 기간은 버전 행에 남는다 (S34)
         s = db.get(TrialSession, rep.session_id)
         rep.period_to = (s.ends_at if s and s.ends_at else c.clock.now())
     v = reports.generate(c, db, rep, tpl, p.principal_id)
@@ -526,10 +553,14 @@ def submit_report(report_id: str, request: Request, db: Session = DB,
 def export_report(report_id: str, request: Request, format: Literal["PDF", "XLSX", "HWPX"],  # noqa: A002
                   version: int | None = Query(None, ge=1), db: Session = DB,
                   c: Container = Depends(container), p: Principal = Depends(require("report:read"))) -> Response:
-    if format not in rr.enabled_formats(c.settings.report_formats):
-        raise ProblemError("CONFLICT", detail=f"{format} 내보내기가 켜져 있지 않습니다 (REPORT_FORMATS)")
+    # 범위 확인이 먼저다: 다른 기관·없는 보고서는 형식이 꺼져 있어도 404(+감사) (security.md, 계약 점검 S36)
     rep = _load_report(db, c, request, report_id, p)
     v = _report_version(db, rep, p, version)
+    if format not in rr.enabled_formats(c.settings.report_formats):
+        if format in c.settings.report_formats:  # 설정에는 있다: PDF 렌더러를 불러올 수 없다 (ADR-0018)
+            raise ProblemError("CONFLICT",
+                               detail="PDF 렌더러(WeasyPrint·pango)를 불러올 수 없어 PDF 내보내기가 꺼져 있습니다")
+        raise ProblemError("CONFLICT", detail=f"{format} 내보내기가 켜져 있지 않습니다 (REPORT_FORMATS)")
     tpl = reports.latest_template(db, rep.template_code, rep.template_version)
     if tpl is None:
         raise ProblemError("CONFLICT", detail="보고서 양식을 찾을 수 없습니다")
@@ -537,11 +568,29 @@ def export_report(report_id: str, request: Request, format: Literal["PDF", "XLSX
     if format == "XLSX":
         data = rr.render_xlsx(doc)
     elif format == "PDF":
-        data = rr.render_pdf(doc)
+        # 동시 렌더 상한 (ADR-0066): 기다리지 않는다 — 기다리는 요청도 스레드와 DB 차례(ADR-0062)를 쥔다
+        with c.pdf_slots.try_hold() as got:
+            if not got:
+                raise ProblemError("RATE_LIMITED", headers={"Retry-After": str(rr.PDF_RETRY_AFTER_S)},
+                                   detail=f"PDF를 만드는 요청이 많습니다(동시 {c.pdf_slots.total}건). "
+                                          "잠시 뒤 다시 시도하세요")
+            data = rr.render_pdf(doc)
     else:
         if not tpl.hwpx_key:
             raise ProblemError("CONFLICT", detail="이 양식에는 HWPX 원본이 없습니다")
-        data = rr.render_hwpx(c.storage.get_object(c.settings.bucket_evidence, tpl.hwpx_key), doc)
+        # 초안은 문서에 '초안' 표시가 있어야 한다(요구사항 4.4). HWPX는 양식의 {{report.status}} 자리로만 들어가므로
+        # 그 자리가 없는 양식이면 표시 없는 초안 파일을 내보내지 않는다 (ADR-0080, 계약 점검 S35)
+        required = ("report.status",) if v.status == "DRAFT" else ()
+        try:
+            data = rr.render_hwpx(c.storage.get_object(c.settings.bucket_evidence, tpl.hwpx_key), doc,
+                                  required=required)
+        except rr.HwpxTemplateError as exc:  # 양식 검사(ADR-0066) 전에 저장된 양식
+            raise ProblemError("CONFLICT",
+                               detail=f"저장된 HWPX 양식을 쓸 수 없습니다({exc}). 양식을 다시 올리세요") from None
+        except rr.HwpxPlaceholderMissing:
+            raise ProblemError("CONFLICT", detail="이 HWPX 양식에는 {{report.status}} 자리가 없어 초안 표시를 넣을 수 "
+                                                  "없습니다. 양식의 XML 본문에 {{report.status}}를 넣어 다시 올리세요"
+                                                  "(PDF·XLSX는 초안 표시를 넣어 내보냅니다)") from None
     c.audit.record("REPORT_EXPORTED", principal=p, organization_id=rep.organization_id, target_type="Report",
                    target_id=rep.report_id, source_ip=client_ip(request),
                    details={"version": v.version, "format": format})
