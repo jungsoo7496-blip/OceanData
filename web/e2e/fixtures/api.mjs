@@ -470,7 +470,7 @@ const GET = {
     { job_id: id('job', 3), asset_id: AST_VIDEO, start_s: 40, end_s: 55.5, status: 'QUEUED', requested_at: at('09:40:00') },
     { job_id: id('job', 2), asset_id: AST_VIDEO, start_s: 0, end_s: 1, status: 'FAILED', requested_at: at('08:00:00'), error_code: 'CLIP_ENCODE_FAILED' },
     { job_id: id('job', 1), asset_id: AST_VIDEO, start_s: 10, end_s: 25, status: 'DONE', requested_at: at('07:00:00'), clip_asset_id: AST_CLIP },
-  ] }),
+  ], next_cursor: null }),
   '/v1/events': ({ query }) => ({ items: EVENTS.filter((e) => !query.get('session_id') || e.session_id === query.get('session_id')), next_cursor: null }),
   '/v1/events/{event_id}/overlapping-assets': ({ params, query }) => {
     const margin = Number(query.get('margin_s') ?? '0')

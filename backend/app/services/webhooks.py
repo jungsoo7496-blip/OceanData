@@ -5,13 +5,14 @@
 - 발행(outbox): 자산 ingest_status·share_status, 이용 권한 status가 바뀌는 같은 트랜잭션에서
   `before_flush`가 보낼 목록을 만든다.
   어느 코드 경로로 바뀌든 빠지지 않는다. 새로 만든 행(파생본 생성 등)은 대상이 아니다.
-- 전송 (ADR-0041): 워커의 웹훅 전용 스레드가 라운드를 되풀이한다.
+- 전송 (ADR-0041·0070): 워커의 웹훅 전용 스레드가 전송마다 따로 보낸다 (라운드 장벽 없음).
   행 잠금을 잡은 채로 네트워크에 나가지 않는다.
-  1) 가져오기 — 짧은 트랜잭션에서 기한이 된 전송을 구독당 1건, 기관당 WEBHOOK_MAX_PER_ORG건,
-     모두 WEBHOOK_BATCH_SIZE건까지 고른다(구독·전송 행 모두 SKIP LOCKED라 다른 워커를 기다리지 않는다).
-     SENDING(임대)으로 바꾸고 커밋한다.
+  1) 가져오기 — 짧은 트랜잭션에서 기한이 된 전송을 구독당 1건, 기관당 보내는 중인 건까지 쳐서 WEBHOOK_MAX_PER_ORG건,
+     보내는 중인 건까지 모두 WEBHOOK_BATCH_SIZE건까지 고른다(구독·전송 행 모두 SKIP LOCKED라 다른 워커를 기다리지
+     않는다). SENDING(임대)으로 바꾸고 커밋한다. 한 건을 기록하면 그 자리와 그 구독의 다음 건을 바로 가져간다.
   2) 보내기 — 트랜잭션 밖에서 동시에. 한 건은 이름 풀기부터 응답 헤더까지 WEBHOOK_TIMEOUT_S 안에
-     끝나야 하고 상태 코드만 본다(본문은 읽지 않는다). HMAC-SHA256 서명(`timestamp.body`)·이벤트 ID.
+     끝나야 하고 상태 코드만 본다(본문은 읽지 않는다). 최종 응답 헤더까지 읽는 양은 중간 응답(1xx)을 합쳐
+     RESPONSE_HEAD_MAX_BYTES까지다(ADR-0064). HMAC-SHA256 서명(`timestamp.body`)·이벤트 ID.
      리디렉션은 따르지 않는다.
   3) 기록 — 건마다 짧은 트랜잭션. 실패는 지수 백오프, WEBHOOK_MAX_ATTEMPTS번 실패하면 구독을 끄고
      기관 ORG_ADMIN에게 알린다(알림은 커밋 뒤). 보내던 워커가 죽으면 임대가 끝난 뒤 다시 보낸다
@@ -51,6 +52,7 @@ from sqlalchemy.orm import Session, aliased
 from app.db.models import Asset, Grant, Upload, User, WebhookDelivery, WebhookSubscription
 from app.domain.ids import new_ulid
 from app.errors import ProblemError
+from app.metrics import WEBHOOK_DISPATCH_LAG, WEBHOOK_IN_FLIGHT
 from app.ports.notifier import Notification
 from app.timefmt import iso
 
@@ -70,6 +72,10 @@ SENDING = "SENDING"
 _DUE = ("PENDING", SENDING)  # 임대(next_attempt_at)가 지난 SENDING은 보내던 워커가 죽은 것 — 다시 보낸다
 # 이름을 못 풀었든 공인 주소가 아니든 기관에는 같은 문구 (내부 이름이 있는지 드러나지 않게). 자세한 이유는 서버 로그
 REFUSED = "보낼 수 없는 대상입니다 (공인 주소로 풀리는 https 주소만 보냅니다)"
+# 전송 한 건이 최종 응답 헤더를 받을 때까지 소켓에서 읽는 바이트 상한 (중간 응답 1xx 포함, ADR-0064).
+# httpcore가 응답 헤더 하나에 허용하는 크기(100KiB)에 중간 응답 몫 28KiB를 더했다.
+# 본문은 읽지 않으므로 한 건에서 읽는 양 전체의 상한이다
+RESPONSE_HEAD_MAX_BYTES = 128 * 1024
 
 
 class TargetRefused(Exception):
@@ -312,22 +318,59 @@ def _in_thread(fn: Callable[..., T], *args: Any, **kwargs: Any) -> asyncio.Futur
     return asyncio.wrap_future(fut)
 
 
+class _CappedStream(httpcore.AsyncNetworkStream):
+    """읽은 바이트를 전송 한 건(백엔드)에 더해 가는 스트림 (ADR-0064). 상한까지 읽은 뒤 더 읽으려 하면
+    RemoteProtocolError로 끝낸다 — 수신 서버가 중간 응답(1xx)을 끝없이 보내도 기한 내내 파싱하지 않는다.
+
+    읽기 한 번의 크기를 남은 몫으로 줄여 상한을 넘겨 읽지 않는다. start_tls가 돌려주는 새 스트림도 감싸 같은 셈을
+    이어 간다(TLS면 복호화한 바이트를 센다). 쓰기·닫기·연결 정보는 그대로 넘긴다."""
+
+    def __init__(self, stream: httpcore.AsyncNetworkStream, backend: _ClosingBackend) -> None:
+        self._stream, self._backend = stream, backend
+
+    async def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+        b = self._backend
+        left = b.read_limit - b.read_bytes
+        if left <= 0:
+            raise httpcore.RemoteProtocolError(f"응답 헤더가 {b.read_limit}바이트 안에 끝나지 않았습니다 "
+                                               "(중간 응답 범람 등)")
+        data = await self._stream.read(min(max_bytes, left), timeout)
+        b.read_bytes += len(data)
+        return data
+
+    async def write(self, buffer: bytes, timeout: float | None = None) -> None:
+        await self._stream.write(buffer, timeout)
+
+    async def aclose(self) -> None:
+        await self._stream.aclose()
+
+    async def start_tls(self, ssl_context: ssl.SSLContext, server_hostname: str | None = None,
+                        timeout: float | None = None) -> httpcore.AsyncNetworkStream:
+        return _CappedStream(await self._stream.start_tls(ssl_context, server_hostname, timeout), self._backend)
+
+    def get_extra_info(self, info: str) -> Any:
+        return self._stream.get_extra_info(info)
+
+
 class _ClosingBackend(httpcore.AsyncNetworkBackend):
     """연 TCP 연결을 기록해 두는 네트워크 백엔드. 전송이 끝나면(정상·오류·취소) 남은 것을 모두 닫는다 (ADR-0061).
 
     httpcore는 TLS 핸드셰이크가 일반 예외로 실패할 때만 소켓을 닫고, 전체 기한(asyncio.wait_for)이 핸드셰이크 중에
-    닿아 취소(CancelledError)로 끝나면 닫지 않는다 — 그 소켓은 가비지 수집 때까지 열려 있었다(검토 2026-11-12 W3)."""
+    닿아 취소(CancelledError)로 끝나면 닫지 않는다 — 그 소켓은 가비지 수집 때까지 열려 있었다(검토 2026-11-12 W3).
+    전송 한 건에 하나씩 만들고, 그 건에서 읽은 바이트(read_bytes)를 read_limit까지로 묶는다
+    (ADR-0064, `_CappedStream`)."""
 
-    def __init__(self) -> None:
+    def __init__(self, read_limit: int = RESPONSE_HEAD_MAX_BYTES) -> None:
         self._inner = httpcore.AnyIOBackend()
         self.streams: list[httpcore.AsyncNetworkStream] = []
+        self.read_limit, self.read_bytes = read_limit, 0
 
     async def connect_tcp(self, host: str, port: int, timeout: float | None = None, local_address: str | None = None,
                           socket_options: Any = None) -> httpcore.AsyncNetworkStream:
         stream = await self._inner.connect_tcp(host, port, timeout=timeout, local_address=local_address,
                                                socket_options=socket_options)
         self.streams.append(stream)
-        return stream
+        return _CappedStream(stream, self)
 
     async def connect_unix_socket(self, path: str, timeout: float | None = None,
                                   socket_options: Any = None) -> httpcore.AsyncNetworkStream:
@@ -359,7 +402,9 @@ async def _post(url: str, body: bytes, headers: dict[str, str], timeout: float, 
 
     이름은 Host 헤더·TLS SNI·인증서 확인에만 쓰고 다시 풀지 않는다. 프록시 환경변수(HTTPS_PROXY 등)와
     리디렉션은 따르지 않는다. 전체 기한은 부르는 쪽의 asyncio.wait_for가 건다(단계별 timeout은 보조).
-    주소가 여럿이면 연결이 안 될 때만 다음 주소로. 연 소켓은 어떻게 끝나든 여기서 닫는다(ADR-0061)."""
+    주소가 여럿이면 연결이 안 될 때만 다음 주소로. 연 소켓은 어떻게 끝나든 여기서 닫는다(ADR-0061).
+    최종 응답 헤더 전에 RESPONSE_HEAD_MAX_BYTES를 읽으면 httpx.RemoteProtocolError
+    (다른 실패와 같이 재시도, ADR-0064)."""
     u = httpx.URL(url)
     hdrs = {**headers, "Host": u.netloc.decode("ascii")}
     ext = {"sni_hostname": u.raw_host.decode("ascii")}
@@ -402,6 +447,10 @@ def http_send(url: str, body: bytes, headers: dict[str, str], timeout: float, *,
 
 # ------------------------------------------------------------------ 전송: 가져오기·기록 (짧은 트랜잭션)
 
+# 전송 스레드가 가져오기·기록에 동시에 쓰는 DB 연결 수 (ADR-0070). 워커의 작업 루프·감시와 같은 연결 풀을 쓰므로
+# 라운드 때와 같이 한 번에 하나다 (가져오기·기록은 짧은 트랜잭션이라 줄 서도 임대 안에 끝난다)
+_DB_THREADS = 1
+
 
 @dataclass(frozen=True)
 class _Claim:
@@ -417,9 +466,14 @@ def backoff(settings: Settings, attempts: int) -> timedelta:
     return timedelta(seconds=min(settings.webhook_backoff_max_s, settings.webhook_backoff_base_s * 2 ** (attempts - 1)))
 
 
-def _lease(settings: Settings, batch: int) -> timedelta:
-    """가져온 뒤 결과를 기록할 때까지의 임대: 보내기(기한 1번) + 건마다 기록(잠금 대기 ≤ 기한) + 여유(기한 1번)."""
-    return timedelta(seconds=settings.webhook_timeout_s * (batch + 2))
+def _lease(settings: Settings, cap: int) -> timedelta:
+    """가져온 뒤 결과를 기록할 때까지의 임대 (ADR-0070). cap은 디스패처가 동시에 보내는 건수 상한이다.
+
+    보내기(기한 1번) + 기록 차례(DB 스레드에서 내 기록 앞에 선 것: 보내는 중인 다른 건의 기록 많아야 cap − 1건 —
+    건마다 잠금 대기 ≤ 기한 — 과 가져오기 많아야 한 번) + 내 기록(기한 1번) + 여유(기한 1번, 그 가져오기 포함)
+    = 기한 × (cap + 2). 기준 시각(now)은 DB 스레드에서 가져오기가 실제로 돌 때 읽어야 한다 — 넣을 때 읽으면 그 앞에
+    줄 선 기록(많아야 cap − 1건)만큼 임대가 짧아진다."""
+    return timedelta(seconds=settings.webhook_timeout_s * (cap + 2))
 
 
 def _due(now: datetime) -> Any:
@@ -430,32 +484,41 @@ _LIVE = and_(WebhookSubscription.active.is_(True), WebhookSubscription.deleted_a
 
 
 def _busy(webhook_id: Any, now: datetime) -> Any:
-    """임대가 살아 있는 SENDING이 있다 = 다른 워커(또는 앞 라운드)가 이 구독의 한 건을 보내는 중."""
+    """임대가 살아 있는 SENDING이 있다 = 이 워커나 다른 워커가 이 구독의 한 건을 보내는 중."""
     sending = aliased(WebhookDelivery)
     return exists().where(sending.webhook_id == webhook_id, sending.status == SENDING, sending.next_attempt_at > now)
 
 
 def _candidates(db: Session, now: datetime, limit: int, per_org: int) -> list[str]:
-    """보낼 차례인 구독 (잠그지 않는 조회). 구독마다 가장 오래 기다린 기한으로 줄 세우고 기관마다 앞에서
-    per_org개만, 모두 limit개. 보내는 중인 구독은 뺀다 — 잠근 뒤 _claim이 다시 확인한다."""
+    """보낼 차례인 구독 (잠그지 않는 조회). 구독마다 가장 오래 기다린 기한으로 줄 세우고, 기관마다 보내는 중인 건
+    (임대가 살아 있는 SENDING — 이 워커든 다른 워커든)을 뺀 남은 몫만큼 앞에서, 모두 limit개 (ADR-0070).
+    보내는 중인 구독은 뺀다 — 잠근 뒤 _claim이 다시 확인한다."""
     first = (select(WebhookDelivery.webhook_id, func.min(WebhookDelivery.next_attempt_at).label("first_due"))
              .where(_due(now)).group_by(WebhookDelivery.webhook_id).subquery())
+    held = (select(WebhookDelivery.organization_id, func.count().label("n"))
+            .where(WebhookDelivery.status == SENDING, WebhookDelivery.next_attempt_at > now)
+            .group_by(WebhookDelivery.organization_id).subquery())
     rank = func.row_number().over(partition_by=WebhookSubscription.organization_id,
                                   order_by=(first.c.first_due, WebhookSubscription.webhook_id))
-    ranked = (select(WebhookSubscription.webhook_id, first.c.first_due, rank.label("rn"))
+    ranked = (select(WebhookSubscription.webhook_id, first.c.first_due, rank.label("rn"),
+                     func.coalesce(held.c.n, 0).label("held"))
               .join(first, first.c.webhook_id == WebhookSubscription.webhook_id)
+              .outerjoin(held, held.c.organization_id == WebhookSubscription.organization_id)
               .where(_LIVE, ~_busy(WebhookSubscription.webhook_id, now)).subquery())
-    return list(db.execute(select(ranked.c.webhook_id).where(ranked.c.rn <= per_org)
+    return list(db.execute(select(ranked.c.webhook_id).where(ranked.c.rn + ranked.c.held <= per_org)
                            .order_by(ranked.c.first_due, ranked.c.webhook_id).limit(limit)).scalars())
 
 
-def _claim(c: Container, now: datetime, limit: int) -> tuple[list[_Claim], int]:
-    """한 라운드에 보낼 전송을 고르고 SENDING(임대)으로 표시한다. 행 잠금은 모두 SKIP LOCKED라 기다리지 않는다.
+def _claim(c: Container, now: datetime, limit: int, *, cap: int | None = None) -> tuple[list[_Claim], int]:
+    """보낼 전송을 limit건까지 고르고 SENDING(임대)으로 표시한다. 행 잠금은 모두 SKIP LOCKED라 기다리지 않는다.
 
-    구독당 1건(이미 보내는 중인 구독은 건너뜀), 기관당 WEBHOOK_MAX_PER_ORG건, 모두 limit건. 기한이 오래된 것부터."""
+    구독당 1건(이미 보내는 중인 구독은 건너뜀), 기관당 보내는 중인 건까지 쳐서 WEBHOOK_MAX_PER_ORG건, 모두 limit건.
+    기한이 오래된 것부터. cap은 부르는 쪽이 동시에 보내는 건수 상한이다(임대 길이를 정한다, 기본 limit).
+    가져갈 때까지 기다린 시간(기한 → 지금)은 지표 webhook_dispatch_lag_seconds로 남긴다."""
     s = c.settings
     due = _due(now)
     claims: list[_Claim] = []
+    waited: list[float] = []
     with c.sessionmaker.begin() as db:
         # 지웠거나 꺼진 구독에 남은 전송(구독을 끄는 트랜잭션과 겹쳐 쌓인 것, 임대가 끝난 SENDING)은 취소
         dead = (select(WebhookDelivery.delivery_id)
@@ -467,10 +530,10 @@ def _claim(c: Container, now: datetime, limit: int) -> tuple[list[_Claim], int]:
         order = _candidates(db, now, limit, s.webhook_max_per_org)
         if not order:
             return claims, cancelled
-        # 구독 행을 SKIP LOCKED로 잠근다: 다른 워커가 고르는 중이거나 API가 지우는 중이면 이번 라운드는 건너뛴다
+        # 구독 행을 SKIP LOCKED로 잠근다: 다른 워커가 고르는 중이거나 API가 지우는 중이면 이번에는 건너뛴다
         subs = {x.webhook_id: x for x in db.execute(select(WebhookSubscription).where(
             WebhookSubscription.webhook_id.in_(order), _LIVE).with_for_update(skip_locked=True)).scalars()}
-        lease_until = now + _lease(s, limit)
+        lease_until = now + _lease(s, max(limit, cap or 0))
         ts = int(now.timestamp())
         for wid in order:
             sub = subs.get(wid)
@@ -483,12 +546,15 @@ def _claim(c: Container, now: datetime, limit: int) -> tuple[list[_Claim], int]:
                            .with_for_update(of=WebhookDelivery, skip_locked=True)).scalar_one_or_none()
             if d is None:
                 continue
+            waited.append(max(0.0, (now - d.next_attempt_at).total_seconds()))
             d.status, d.attempts, d.next_attempt_at = SENDING, d.attempts + 1, lease_until
             body = json.dumps(d.payload, ensure_ascii=False, separators=(",", ":")).encode()
             headers = {"Content-Type": "application/json", "X-Signature-Timestamp": str(ts),
                        "X-Signature": sign(secret_for(s, sub.secret_salt), ts, body), "X-Event-Id": d.event_id,
                        "User-Agent": "marine-platform-webhook/1"}
             claims.append(_Claim(d.delivery_id, wid, d.attempts, sub.url, body, headers))
+    for seconds in waited:  # 커밋한 뒤 (가져온 건만 센다)
+        WEBHOOK_DISPATCH_LAG.observe(seconds)
     return claims, cancelled
 
 
@@ -510,10 +576,6 @@ async def _attempt(cl: _Claim, s: Settings, send: Sender | None) -> tuple[int | 
         return None, f"BLOCKED_TARGET: {exc}"
     except Exception as exc:  # noqa: BLE001 - 네트워크 오류·기한 초과는 재시도
         return None, type(exc).__name__
-
-
-async def _send_all(claims: list[_Claim], s: Settings, send: Sender | None) -> list[tuple[int | None, str | None]]:
-    return list(await asyncio.gather(*(_attempt(cl, s, send) for cl in claims)))
 
 
 def _disable(db: Session, s: WebhookSubscription, now: datetime, why: str) -> Notification:
@@ -563,36 +625,130 @@ def _record(c: Container, cl: _Claim, code: int | None, err: str | None,
         return "retry", None
 
 
-def deliver_due(c: Container, *, now: datetime | None = None, limit: int | None = None, send: Sender | None = None,
-                stop: threading.Event | None = None) -> dict[str, int]:
-    """기한이 된 웹훅을 보낸다 (ADR-0041).
+def _notify(c: Container, note: Notification) -> None:
+    """구독을 끈 알림. 그 기록을 커밋한 뒤 알림 스레드에서 보낸다.
 
-    라운드(가져오기 → 트랜잭션 밖에서 동시에 보내기 → 건마다 기록)를 보낼 것이 없을 때까지, 또는 stop이
-    설정될 때까지 되풀이한다. 워커 여럿이 동시에 불러도 서로 기다리지 않고 같은 전송을 겹쳐 보내지 않는다.
+    실패해도 다른 전송을 멈추지 않는다 (구독은 이미 꺼졌다)."""
+    try:
+        c.notifier.send(note)
+    except Exception as exc:  # noqa: BLE001 - 메일 서버 오류 등. 서버 로그에만 남긴다
+        log.error("webhook_notify_failed", exc_info=exc, extra={"webhook_id": note.data.get("webhook_id")})
 
-    now를 주면 모든 시각을 그 값으로 계산한다(시험용). limit은 라운드당 건수(기본 WEBHOOK_BATCH_SIZE).
-    send는 시험용 전송 함수 (url, body, headers, timeout) → 상태 코드. 실행 중인 이벤트 루프 안에서는 부르지 않는다."""
+
+async def _dispatch(c: Container, now: datetime | None, limit: int, send: Sender | None,
+                    stop: threading.Event | None) -> dict[str, int]:
+    """deliver_due의 본체 (ADR-0070). 이벤트 루프 하나에서 전송마다 작업(task)을 따로 돌린다.
+
+    가져오기·기록(막히는 DB 작업)은 DB 스레드 _DB_THREADS개에서, 비활성 알림은 알림 스레드에서 한다 — 네트워크 작업을
+    막지 않고, 이 디스패처가 동시에 쓰는 DB 연결은 _DB_THREADS개를 넘지 않는다. 가져오기는 한 번에 하나이고, 마지막
+    가져오기가 돌기 시작한 뒤에 끝난 기록이 있거나 WEBHOOK_DISPATCH_INTERVAL_S가 지났을 때 다시 가져온다."""
     s = c.settings
+    loop = asyncio.get_running_loop()
     stats = {"delivered": 0, "retry": 0, "failed": 0, "cancelled": 0}
-    while stop is None or not stop.is_set():
-        claims, cancelled = _claim(c, now or c.clock.now(), limit or s.webhook_batch_size)
-        stats["cancelled"] += cancelled
-        if not claims:
-            break
-        results = asyncio.run(_send_all(claims, s, send))
-        notes: list[Notification] = []
-        for cl, (code, err) in zip(claims, results, strict=True):
+    db = concurrent.futures.ThreadPoolExecutor(max_workers=_DB_THREADS, thread_name_prefix="webhook-db")
+    mail = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="webhook-notify")
+    tasks: set[asyncio.Task[None]] = set()
+    notices: list[asyncio.Future[None]] = []
+    freed = asyncio.Event()  # 한 건의 기록이 끝났다 — 그 자리와 그 구독의 다음 건을 바로 가져간다
+    busy = 0  # 가져와서 아직 기록을 마치지 않은 건 (이벤트 루프가 센다 — 언제 끝낼지 정한다)
+    held = 0  # 같은 것을 DB 스레드가 센다 — 가져올 건수를 정한다
+    recorded = 0  # DB 스레드에서 끝난 기록 수 — 마지막 가져오기가 본 것보다 많으면 다시 가져온다
+    counts = threading.Lock()
+
+    def clock() -> datetime:
+        return now or c.clock.now()
+
+    # 시각과 가져올 건수는 DB 스레드에서 실제로 돌 때 정한다. 넣을 때 정하면 앞에 줄 선 기록이 끝날 때까지 낡는다:
+    # 임대가 줄 선 만큼 짧아져 기록 전에 끝날 수 있고(다른 워커가 같은 건을 다시 보낸다), 지연 지표와 기록 시각도
+    # 이르다. 건수도 그사이 빈자리를 빼고 정해 1건과 나머지를 번갈아 가져오게 된다 (ADR-0070 결정 3·4)
+    def claim_in_db() -> tuple[list[_Claim], int, int]:
+        nonlocal held
+        with counts:
+            free, mark = limit - held, recorded  # 앞에 줄 섰던 기록은 이 가져오기가 이미 본다
+        claims, cancelled = _claim(c, clock(), free, cap=limit)
+        with counts:
+            held += len(claims)
+        return claims, cancelled, mark
+
+    def record_in_db(cl: _Claim, code: int | None, err: str | None) -> tuple[str | None, Notification | None]:
+        nonlocal held, recorded
+        try:
+            return _record(c, cl, code, err, clock())
+        finally:
+            with counts:
+                held, recorded = held - 1, recorded + 1
+
+    async def one(cl: _Claim) -> None:
+        nonlocal busy
+        try:
+            code, err = await _attempt(cl, s, send)
             try:
-                outcome, note = _record(c, cl, code, err, now or c.clock.now())
+                outcome, note = await loop.run_in_executor(db, record_in_db, cl, code, err)
             except Exception as exc:  # noqa: BLE001 - 기록하지 못한 건은 임대가 끝난 뒤 다시 보낸다 (최소 한 번)
                 log.error("webhook_record_failed", exc_info=exc, extra={"delivery_id": cl.delivery_id})
-                continue
+                return
             if outcome:
                 stats[outcome] += 1
-            if note:
-                notes.append(note)
-        for note in notes:  # 라운드의 기록을 모두 커밋한 뒤 (메일 서버가 느려도 임대 안에 기록을 마친다)
-            c.notifier.send(note)
+            if note:  # 기록을 커밋한 뒤. 메일 서버가 느려도 다른 전송은 계속 나간다
+                notices.append(loop.run_in_executor(mail, _notify, c, note))
+        finally:
+            busy -= 1
+            WEBHOOK_IN_FLIGHT.dec()
+            freed.set()
+
+    failure: Exception | None = None
+    seen = -1  # 마지막 가져오기가 돌기 시작할 때까지 끝난 기록 수 (-1: 아직 가져오지 않음)
+    timed_out = False
+    try:
+        while True:
+            freed.clear()
+            halted = failure is not None or (stop is not None and stop.is_set())
+            with counts:
+                fresh = recorded > seen  # 마지막 가져오기가 보지 못한 기록이 있다 — 그 구독의 다음 건이 있을 수 있다
+            if not halted and busy < limit and (fresh or timed_out):
+                timed_out = False
+                try:
+                    claims, cancelled, seen = await loop.run_in_executor(db, claim_in_db)
+                except Exception as exc:  # noqa: BLE001 - DB 장애 등. 보내던 건은 끝까지 보내 기록한 뒤 올린다
+                    failure, claims, cancelled = exc, [], 0
+                stats["cancelled"] += cancelled
+                for cl in claims:
+                    busy += 1
+                    WEBHOOK_IN_FLIGHT.inc()
+                    task = asyncio.create_task(one(cl))
+                    tasks.add(task)
+                    task.add_done_callback(tasks.discard)
+                continue
+            # 보내는 중인 건이 없고, 마지막 가져오기 뒤에 끝난 기록도 없으면 끝
+            if busy == 0 and (halted or not fresh):
+                break
+            try:
+                await asyncio.wait_for(freed.wait(), s.webhook_dispatch_interval_s)
+            except TimeoutError:  # 새로 기한이 된 건은 쉴 때와 같은 간격으로 다시 본다
+                timed_out = True
+        await asyncio.gather(*tasks)
+        await asyncio.gather(*notices)
+    finally:
+        db.shutdown(wait=True)
+        mail.shutdown(wait=True)
+    if failure is not None:
+        raise failure
+    return stats
+
+
+def deliver_due(c: Container, *, now: datetime | None = None, limit: int | None = None, send: Sender | None = None,
+                stop: threading.Event | None = None) -> dict[str, int]:
+    """기한이 된 웹훅을 보낸다 (ADR-0041·0070).
+
+    라운드 장벽이 없다: 전송마다 따로 보내고(가져오기 → 트랜잭션 밖에서 보내기 → 그 건만 기록), 보내는 중인 건이
+    limit보다 적으면 더 가져온다. 한 건을 기록하면 그 자리와 그 구독의 다음 건을 바로 가져가므로, 응답하지 않는 수신
+    서버는 자기 구독과 자기 기관의 몫만 붙잡는다. 보낼 것도 보내는 중인 것도 없으면 돌아온다. stop이 설정되면 새로
+    가져오지 않고, 보내던 건(기한 안)을 기록한 뒤 돌아온다. 워커 여럿이 동시에 불러도 서로 기다리지 않고 같은 전송을
+    겹쳐 보내지 않는다.
+
+    now를 주면 모든 시각을 그 값으로 계산한다(시험용). limit은 동시에 보내는 건수(기본 WEBHOOK_BATCH_SIZE).
+    send는 시험용 전송 함수 (url, body, headers, timeout) → 상태 코드. 실행 중인 이벤트 루프 안에서는 부르지 않는다."""
+    stats = asyncio.run(_dispatch(c, now, limit or c.settings.webhook_batch_size, send, stop))
     if any(stats.values()):
         log.info("webhooks_dispatched", extra=stats)
     return stats

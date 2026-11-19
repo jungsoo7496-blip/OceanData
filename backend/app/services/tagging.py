@@ -203,11 +203,16 @@ def _events_from_tags(db: Session, a: Asset, objects: list[dict[str, Any]], now:
 
 
 def edit_tags(db: Session, a: Asset, add: list[str], remove: list[str], by: str, now: datetime) -> None:
-    """사람 수정과 이력 (요구사항 6.2)."""
+    """사람 수정과 이력 (요구사항 6.2).
+
+    모델이 이미 단 자산 전체 태그를 사람이 추가하면 그 행을 사람 태그(HUMAN)로 바꾼다. 그래야 이력(사람 ADD)과
+    상태가 맞고, 날씨 보정(apply_weather)이 사람이 확인한 태그를 지우지 않는다 (계약 점검 S21).
+    """
     for t in add:
         db.execute(insert(AssetTag).values(asset_id=a.asset_id, organization_id=a.organization_id, tag=t,
                                            t_offset=-1.0, confidence=None, source="HUMAN", created_at=now)
-                   .on_conflict_do_nothing())
+                   .on_conflict_do_update(index_elements=["asset_id", "tag", "t_offset"],
+                                          set_={"source": "HUMAN", "model_ref": None, "confidence": None}))
         db.add(AssetTagEdit(asset_id=a.asset_id, action="ADD", tag=t, edited_by=by, edited_at=now))
     for t in remove:
         for row in db.execute(select(AssetTag).where(AssetTag.asset_id == a.asset_id, AssetTag.tag == t)).scalars():

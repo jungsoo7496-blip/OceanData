@@ -32,6 +32,13 @@ WATCH_ACTIVE = Gauge("watch_alerts_active", "규칙별 활성 경보 수", ["rul
 WATCH_EVALS = Counter("watch_evaluations_total", "감시 규칙 평가 횟수", registry=WORKER_REGISTRY)
 INCIDENTS_OPENED = Counter("incidents_opened_total", "규칙별 새 장애 기록 수", ["rule_code"], registry=WORKER_REGISTRY)
 
+# 기관 웹훅 전송 (04번 요구사항 8.2·8.3, ADR-0070) — 디스패처가 밀리는지 본다
+WEBHOOK_DISPATCH_LAG = Histogram("webhook_dispatch_lag_seconds",
+                                 "기한이 된 웹훅 전송을 가져가기까지 기다린 시간 (기한 → 가져오기)",
+                                 buckets=(0.5, 1, 5, 10, 30, 60, 300, 1800, 3600), registry=WORKER_REGISTRY)
+WEBHOOK_IN_FLIGHT = Gauge("webhook_deliveries_in_flight", "가져가서 아직 결과를 기록하지 않은 웹훅 전송 수",
+                          registry=WORKER_REGISTRY)
+
 # Hot/Warm 계층 이동 (08번 요구사항 9) — 처리량은 가정하지 않고 재서 조정한다 (HW-8)
 TIER_MOVES = Counter("tier_moves_total", "계층 이동 결과 수 (SWITCHED·DONE·FAILED·CANCELLED)", ["to_tier", "result"],
                      registry=WORKER_REGISTRY)

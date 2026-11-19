@@ -1,4 +1,4 @@
-"""04번 웹훅 전송 (ADR-0041): 전체 기한·상태 코드만·주소 고정·프록시 무시·대상 검사(SSRF).
+"""04번 웹훅 전송 (ADR-0041): 전체 기한·상태 코드만·주소 고정·프록시 무시·대상 검사(SSRF)·응답 헤더 바이트 상한(ADR-0064).
 
 DB 없이 127.0.0.1의 합성 수신 서버로만 확인한다 (밖으로 나가지 않는다). 인증서는 시험 안에서 만든 자체 서명이다.
 """
@@ -124,6 +124,42 @@ def stall_before_tls(conn: socket.socket, seen: list[bytes]) -> None:
         seen.append(b"EOF")
     except OSError:
         pass
+
+
+def interim_then_204(conn: socket.socket, seen: list[bytes]) -> None:
+    """정상 수신 서버의 흔한 경우: 중간 응답 두 개(100·103) 뒤에 최종 204."""
+    seen.append(read_request(conn))
+    conn.sendall(b"HTTP/1.1 100 Continue\r\n\r\n")
+    conn.sendall(b"HTTP/1.1 103 Early Hints\r\nLink: </hook.css>; rel=preload; as=style\r\n\r\n")
+    conn.sendall(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+
+
+# 상한 아래의 큰 응답: 103 약 22KiB + 최종 200 헤더 약 94KiB (httpcore가 응답 헤더 하나에 허용하는 100KiB 안), 합쳐 약 116KiB
+LARGE_HINTS = (b"HTTP/1.1 103 Early Hints\r\n" + b"".join(b"Link: </asset-%04d.css>; rel=preload\r\n" % i
+                                                          for i in range(600)) + b"\r\n")
+LARGE_FINAL = (b"HTTP/1.1 200 OK\r\n" + b"".join(b"X-Pad-%03d: %s\r\n" % (i, b"a" * 950) for i in range(100))
+               + b"Content-Length: 0\r\n\r\n")
+
+
+def large_head(conn: socket.socket, seen: list[bytes]) -> None:
+    seen.append(read_request(conn))
+    conn.sendall(LARGE_HINTS)
+    conn.sendall(LARGE_FINAL)
+
+
+def interim_flood(conn: socket.socket, seen: list[bytes]) -> None:
+    """검토 재현(W4): 요청을 읽고 `102 Processing` 중간 응답을 끝없이 보낸다. 클라이언트가 소켓을 닫으면 보내기가
+    실패해 CLOSED를 남긴다(10초 동안 닫지 않으면 TIMEOUT)."""
+    seen.append(read_request(conn))
+    burst = b"HTTP/1.1 102 Processing\r\n\r\n" * 2000
+    conn.settimeout(10)
+    try:
+        while True:
+            conn.sendall(burst)
+    except TimeoutError:
+        seen.append(b"TIMEOUT")
+    except OSError:
+        seen.append(b"CLOSED")
 
 
 @pytest.fixture()
@@ -257,6 +293,59 @@ def test_next_address_is_tried_only_when_connect_fails(receiver) -> None:
     assert len(r.seen) == 1
     with pytest.raises(httpx.ConnectError):
         webhooks.http_send(f"http://hooks.example.test:{r.port}/h", BODY, HEADERS, 2.0, addresses=["127.0.0.2"])
+
+
+# ------------------------------------------------------------------ 응답 헤더 바이트 상한 (검토 2026-11-12 W4, ADR-0064)
+
+
+def test_a_few_interim_responses_then_204_succeed(receiver) -> None:
+    r = receiver(interim_then_204)
+    assert webhooks.http_send(f"http://hooks.example.test:{r.port}/h", BODY, HEADERS, 2.0,
+                              addresses=["127.0.0.1"]) == 204
+    assert len(r.seen) == 1
+
+
+@pytest.mark.parametrize("tls", [False, True], ids=["http", "https"])
+def test_large_response_head_below_the_cap_succeeds(receiver, tmp_path, tls) -> None:
+    assert 100 * 1024 < len(LARGE_HINTS + LARGE_FINAL) < webhooks.RESPONSE_HEAD_MAX_BYTES
+    server, trusted = self_signed(tmp_path, "hooks.example.test") if tls else (None, None)
+    r = receiver(large_head, tls=server)
+    assert webhooks.http_send(f"{'https' if tls else 'http'}://hooks.example.test:{r.port}/h", BODY, HEADERS, 2.0,
+                              addresses=["127.0.0.1"], verify=trusted) == 200
+
+
+@pytest.mark.parametrize("tls", [False, True], ids=["http", "https"])
+def test_interim_response_flood_ends_the_attempt_early(receiver, tmp_path, monkeypatch, tls) -> None:
+    """중간 응답(1xx)을 끝없이 보내는 수신 서버: 예전에는 기한(5초) 내내 읽고 파싱해 디스패처 스레드 CPU를 썼다.
+    이제 최종 응답 헤더 전에 RESPONSE_HEAD_MAX_BYTES를 읽으면 바로 실패로 끝내고 소켓을 닫는다(ADR-0061과 같이,
+    가비지 수집을 꺼 두고 서버가 바로 연결 끊김을 보는지 본다). TLS면 셈이 start_tls 뒤의 새 스트림으로 이어진다."""
+    backends: list[webhooks._ClosingBackend] = []
+
+    class Recording(webhooks._ClosingBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            backends.append(self)
+
+    monkeypatch.setattr(webhooks, "_ClosingBackend", Recording)
+    server, trusted = self_signed(tmp_path, "hooks.example.test") if tls else (None, None)
+    r = receiver(interim_flood, tls=server)
+    gc.disable()
+    try:
+        t0 = time.monotonic()
+        with pytest.raises((httpx.RemoteProtocolError, TimeoutError)) as e:
+            webhooks.http_send(f"{'https' if tls else 'http'}://hooks.example.test:{r.port}/h", BODY, HEADERS, 5.0,
+                               addresses=["127.0.0.1"], verify=trusted)
+        took = time.monotonic() - t0
+        deadline = time.monotonic() + 2
+        while len(r.seen) < 2 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        seen = list(r.seen)
+    finally:
+        gc.enable()
+    assert took < 1.0, f"중간 응답 범람을 {took:.1f}초 동안 읽었다 ({e.type.__name__})"
+    assert e.type is httpx.RemoteProtocolError
+    assert [b.read_bytes for b in backends] == [webhooks.RESPONSE_HEAD_MAX_BYTES]  # 상한만큼만 읽었다
+    assert seen[0].startswith(b"POST /h HTTP/1.1") and seen[1:] == [b"CLOSED"], "끊은 연결의 소켓이 열린 채 남았다"
 
 
 # ------------------------------------------------------------------ 대상 검사 (SSRF)

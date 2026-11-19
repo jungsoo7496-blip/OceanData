@@ -33,22 +33,32 @@ RECORD_FIELDS = ("kind", "title", "test_item", "conditions", "result", "note", "
 
 
 class BadEvidence(Exception):
-    def __init__(self, errors: list[dict[str, str]]) -> None:
+    def __init__(self, errors: list[dict[str, str]],
+                 foreign: list[tuple[str, str, str]] | None = None) -> None:
         super().__init__("bad evidence")
         self.errors = errors
+        self.foreign = foreign or []  # (대상 종류, ID, 소유 기관) — 다른 기관 근거. 호출자가 교차 기관 시도로 감사한다
 
 
 def check_refs(db: Session, organization_id: str, refs: list[dict[str, Any]]) -> list[str]:
     """근거가 같은 기관 소속이고 지금 있는지 확인하고 (요구사항 1.2) 인용 자산 목록을 돌려준다.
 
-    다른 기관의 자산·이벤트·장비는 '없음'과 같은 오류로 답한다 (존재를 드러내지 않는다)."""
+    다른 기관의 자산·이벤트·장비는 '없음'과 같은 오류로 답한다 (존재를 드러내지 않는다). 그런 근거는
+    BadEvidence.foreign에 대상마다 한 번 담는다 (ADR-0078)."""
     errors: list[dict[str, str]] = []
     assets: set[str] = set()
+    foreign: dict[tuple[str, str], str] = {}
+
+    def other_org(target_type: str, row: Asset | Event | Device | None, ident: str) -> None:
+        if row is not None and row.organization_id != organization_id:
+            foreign.setdefault((target_type, ident), row.organization_id)
+
     for i, r in enumerate(refs):
         ptr = f"/evidence_refs/{i}"
         if r["kind"] == "ASSET":
             a = db.get(Asset, r["asset_id"])
             if a is None or a.organization_id != organization_id or a.deleted_at is not None:
+                other_org("Asset", a, r["asset_id"])
                 errors.append({"pointer": ptr, "code": "not_found", "message": "자산을 찾을 수 없습니다"})
                 continue
             if r.get("from_offset_s") is not None and r.get("to_offset_s") is not None \
@@ -58,6 +68,7 @@ def check_refs(db: Session, organization_id: str, refs: list[dict[str, Any]]) ->
         elif r["kind"] == "EVENT":
             e = db.get(Event, r["event_id"])
             if e is None or e.organization_id != organization_id:
+                other_org("Event", e, r["event_id"])
                 errors.append({"pointer": ptr, "code": "not_found", "message": "이벤트를 찾을 수 없습니다"})
                 continue
             assets |= set(db.execute(select(EventAsset.asset_id).where(EventAsset.event_id == e.event_id)).scalars())
@@ -65,6 +76,7 @@ def check_refs(db: Session, organization_id: str, refs: list[dict[str, Any]]) ->
             d = db.get(Device, r["source_system_id"])
             start, end = parse_rfc3339(r["from"]), parse_rfc3339(r["to"])
             if d is None or d.organization_id != organization_id:
+                other_org("Device", d, r["source_system_id"])
                 errors.append({"pointer": ptr, "code": "not_found", "message": "장비를 찾을 수 없습니다"})
                 continue
             if start > end:
@@ -75,7 +87,7 @@ def check_refs(db: Session, organization_id: str, refs: list[dict[str, Any]]) ->
                 OBS.c.metric == r["metric"], OBS.c.observed_at >= start, OBS.c.observed_at <= end,
                 OBS.c.source_asset_id.is_not(None))).scalars() if x}
     if errors:
-        raise BadEvidence(errors)
+        raise BadEvidence(errors, [(t, ident, org) for (t, ident), org in foreign.items()])
     return sorted(assets)
 
 

@@ -1,7 +1,8 @@
 """QueuePort → PostgreSQL `FOR UPDATE SKIP LOCKED` (ADR-0002, ADR-0014).
 
 - 우선순위·자원 클래스·최대 시도·임대 시간은 `job_policies` 표에서 읽는다 (05번 요구사항 6, HW-3)
-- 임대(lease)가 지난 RUNNING 작업은 `reap_expired_leases()`가 다시 QUEUED로 돌린다 (요구사항 1.3)
+- 임대(lease)가 지난 RUNNING 작업은 `reap_expired_leases()`가 다시 QUEUED로 돌린다 (요구사항 1.3).
+  임대보다 오래 걸릴 수 있는 작업(구간 클립)은 워커가 도는 동안 `renew_lease()`로 다시 건다 (ADR-0069)
 - 외부 브로커는 쓰지 않는다
 """
 
@@ -9,7 +10,7 @@ from __future__ import annotations
 
 import json
 from contextlib import nullcontext
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -102,7 +103,7 @@ class PgQueue:
         payload = row["payload"] if isinstance(row["payload"], dict) else json.loads(row["payload"])
         return Job(job_id=row["job_id"], job_type=row["job_type"], payload=payload,
                    attempts=int(row["attempts"]) + 1, priority=int(row["priority"]),
-                   organization_id=row["organization_id"], created_at=row["created_at"])
+                   organization_id=row["organization_id"], created_at=row["created_at"], lease_s=int(row["lease_s"]))
 
     def complete(self, job_id: str) -> None:
         with self.engine.begin() as conn:
@@ -130,6 +131,18 @@ class PgQueue:
             )
             return False
 
+    def renew_lease(self, job_id: str, worker_id: str, lease_s: int) -> bool:
+        """실행 중인 작업의 임대를 지금부터 lease_s초로 다시 건다 (ADR-0069).
+
+        그 워커가 쥔 RUNNING 작업일 때만 바꾼다 — 이미 회수돼 다른 워커가 가져갔거나 끝난 작업이면 False.
+        updated_at은 두지 않는다 (상태가 바뀐 시각이고, 처리 시간 집계가 locked_at과의 차로 쓴다)."""
+        now = self.clock.now()
+        with self.engine.begin() as conn:
+            res = conn.execute(text("""UPDATE jobs SET lease_expires_at = :lease
+                                       WHERE job_id = :id AND status = 'RUNNING' AND locked_by = :w"""),
+                               {"lease": now + timedelta(seconds=int(lease_s)), "id": job_id, "w": worker_id})
+            return bool(res.rowcount)
+
     def reap_expired_leases(self) -> int:
         """작업 도중 멈춘 워커의 작업을 다시 대기 상태로 (요구사항 1.3)."""
         now = self.clock.now()
@@ -154,14 +167,21 @@ class PgQueue:
             ).all()
         return {r[0]: int(r[1]) for r in rows}
 
-    def jobs_for_asset(self, job_type: str, asset_id: str, limit: int = 100) -> list[JobInfo]:
-        """한 자산에 걸린 작업을 최근 것부터 (예: 구간 클립 진행 상황, 09번 요구사항 7.2)."""
+    def jobs_for_asset(self, job_type: str, asset_id: str, limit: int = 100, *,
+                       before: tuple[datetime, str] | None = None) -> list[JobInfo]:
+        """한 자산에 걸린 작업을 최근 것부터 (예: 구간 클립 진행 상황, 09번 요구사항 7.2).
+
+        before=(created_at, job_id)를 주면 정렬에서 그 뒤(더 오래된 것)만 준다.
+        같은 시각은 작업 ID로 가른다 (목록 다음 페이지, ADR-0077)."""
+        before_at, before_id = before if before is not None else (None, None)
         with self.engine.connect() as conn:
             rows = conn.execute(
                 text("""SELECT job_id, job_type, status, payload, attempts, last_error_code, created_at, updated_at
                         FROM jobs WHERE job_type = :t AND asset_id = :a
+                          AND (CAST(:ba AS TIMESTAMPTZ) IS NULL
+                               OR (created_at, job_id) < (CAST(:ba AS TIMESTAMPTZ), :bj))
                         ORDER BY created_at DESC, job_id DESC LIMIT :n"""),
-                {"t": job_type, "a": asset_id, "n": limit},
+                {"t": job_type, "a": asset_id, "n": limit, "ba": before_at, "bj": before_id},
             ).mappings().all()
         return [JobInfo(**{**dict(r), "attempts": int(r["attempts"]),
                            "payload": r["payload"] if isinstance(r["payload"], dict) else json.loads(r["payload"])})

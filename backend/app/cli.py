@@ -57,6 +57,15 @@ def main(argv: list[str] | None = None) -> int:
     op_ = sub.add_parser("org-policy", help="기관 정책 변경 (운영자, 감사). 지금은 악성코드 검사 요구 여부 (04번 4.7)")
     op_.add_argument("organization_id")
     op_.add_argument("--malware-scan", choices=["on", "off"], required=True)
+    rv = sub.add_parser("requeue-verify", help="RECEIVED에 멈춘 자산(대기·실행 중인 검증 작업이 없음)에 "
+                                               "무결성 검증 작업을 다시 넣는다 (운영자, 감사). --dry-run은 목록만 "
+                                               "(04번 4.7, ADR-0071)")
+    rv_target = rv.add_mutually_exclusive_group(required=True)
+    rv_target.add_argument("--asset", dest="asset_id", default=None, help="자산 한 건")
+    rv_target.add_argument("--all-stuck", action="store_true", help="멈춘 자산 전부 (오래된 것부터)")
+    rv.add_argument("--org", dest="organization_id", default=None, help="기관 한 곳으로 범위 제한")
+    rv.add_argument("--dry-run", action="store_true", help="바꾸지 않고 대상만 보여 준다")
+    rv.add_argument("--reason", default=None, help="재투입 사유 (실행할 때 필수, 감사 기록에 남는다)")
     sub.add_parser("backup", help="계층형 백업 한 회차 (08번 요구사항 6, ADR-0021)")
     rt = sub.add_parser("restore-test", help="최근 백업을 임시 DB·위치에 복원해 행 수·해시 대조 (T10-a)")
     rt.add_argument("--run", default=None, help="백업 회차 ID (기본: 최근 성공)")
@@ -143,6 +152,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{args.organization_id}: 악성코드 검사 {'요구' if args.malware_scan == 'on' else '안 함'}"
               f" (검사기 MALWARE_SCANNER={settings.malware_scanner})")
         return 0
+    if args.cmd == "requeue-verify":
+        return _requeue_verify(c, args)
     if args.cmd == "backup":
         import json
 
@@ -300,6 +311,51 @@ def _set_mapping(c, device_id: str, mapping_file: str) -> int:  # type: ignore[n
                    details={"before": before.mapping if before else None, "version": ver})
     print(f"매핑 저장: {device_id} v{ver}")
     return 0
+
+
+def _requeue_verify(c, args: argparse.Namespace) -> int:  # type: ignore[no-untyped-def]
+    """RECEIVED에 멈춘 자산의 검증 재투입 (ADR-0071).
+
+    상태는 바꾸지 않고 작업과 감사만 더한다 — 등록·예약 정산은 워커의 검증이 한다."""
+    import json
+    import re
+
+    from app.api.assets import CLIP_REASON_PATTERN
+    from app.db.models import Asset
+    from app.services import verify_requeue
+
+    reason = (args.reason or "").strip()
+    # 감사 기록에 남는 글이라 API 사유와 같은 검사를 한다 (제어·방향 제어 문자 없이, ADR-0063)
+    if not args.dry_run and not (2 <= len(reason) <= 500 and re.fullmatch(CLIP_REASON_PATTERN, reason)):
+        print("--reason이 필요합니다 (2~500자, 제어 문자 없이). 감사 기록에 남습니다", file=sys.stderr)
+        return 1
+    skipped: list[dict] = []
+    with c.sessionmaker() as db:
+        if args.asset_id is not None:
+            a = db.get(Asset, args.asset_id)
+            if a is None or a.deleted_at is not None or args.organization_id not in (None, a.organization_id):
+                print(f"자산이 없습니다: {args.asset_id}", file=sys.stderr)
+                return 1
+            if (why := verify_requeue.not_stuck(db, a)) is not None:
+                skipped.append({"asset_id": a.asset_id, **why})
+        stuck = [] if skipped else verify_requeue.find_stuck(db, organization_id=args.organization_id,
+                                                              asset_id=args.asset_id)
+    scanner = c.settings.malware_scanner
+    if scanner == "none" and any(r["malware_scan_required"] for r in stuck):
+        print("경고: 이 명령이 본 MALWARE_SCANNER=none — 기관 정책이 악성코드 검사를 요구하는 자산은 "
+              "워커에 검사기를 켜기 전에는 다시 실패합니다 (docs/runbook/11-verify-stuck-received.md)", file=sys.stderr)
+    if args.dry_run:
+        print(json.dumps({"dry_run": True, "malware_scanner": scanner, "stuck": stuck, "skipped": skipped},
+                         ensure_ascii=False, indent=1))
+        return 0
+    report = verify_requeue.requeue(c, [r["asset_id"] for r in stuck], reason=reason)
+    # 표준 출력은 결과 JSON 하나만 — 경고·실패 안내는 표준 오류로 (Runbook 11이 결과를 읽게 한다)
+    print(json.dumps({"dry_run": False, "malware_scanner": scanner, "requeued": report.requeued,
+                      "skipped": skipped + report.skipped, "failed": report.failed}, ensure_ascii=False, indent=1))
+    if report.failed:
+        print(f"검증 작업을 넣지 못한 자산 {len(report.failed)}건 (failed). 원인을 확인한 뒤 다시 돌립니다 — "
+              "넣은 자산은 다시 고르지 않습니다", file=sys.stderr)
+    return 1 if report.failed else 0
 
 
 def _enrollment_code(c, device_id: str) -> int:  # type: ignore[no-untyped-def]

@@ -26,7 +26,7 @@ from app.db.models import (
     TrialSession,
 )
 from app.domain.ids import new_id
-from app.domain.normalize import parse_rfc3339
+from app.domain.normalize import TimeRuleError, parse_rfc3339
 from app.domain.principal import Principal
 from app.errors import ProblemError
 from app.services import evidence, metrics, reports
@@ -68,6 +68,16 @@ class ObsRef(BaseModel):
     from_: str = Field(alias="from", pattern=UTC_TS.pattern)
     to: str = Field(pattern=UTC_TS.pattern)
 
+    @field_validator("from_", "to")
+    @classmethod
+    def _real_time(cls, v: str) -> str:
+        # 형식만 맞고 없는 시각(2월 30일, 25시, 윤초)도 400이다 — check_refs가 이 값을 다시 해석한다 (계약 점검 S40)
+        try:
+            parse_rfc3339(v)
+        except TimeRuleError:
+            raise ValueError("유효한 날짜와 시각을 입력하세요") from None
+        return v
+
 
 Ref = Annotated[AssetRef | EventRef | ObsRef, Field(discriminator="kind")]
 
@@ -98,10 +108,17 @@ def _refs(refs: list[Any]) -> list[dict[str, Any]]:
     return [r.model_dump(by_alias=True, exclude_none=True) for r in refs]
 
 
-def _check(db: Session, org: str, refs: list[dict[str, Any]]) -> list[str]:
+def _check(db: Session, c: Container, request: Request, p: Principal, org: str,
+           refs: list[dict[str, Any]]) -> list[str]:
     try:
         return evidence.check_refs(db, org, refs)
     except evidence.BadEvidence as exc:
+        # 다른 기관 근거는 '없음'과 같은 400으로 답하고 교차 기관 시도로 감사한다 (security.md, ADR-0078).
+        # 요청 트랜잭션은 400으로 되돌려지므로 load_scoped처럼 감사는 따로 커밋한다 (ADR-0053)
+        for target_type, ident, owner in exc.foreign:
+            c.audit.record("CROSS_ORG_ACCESS_ATTEMPT", result="DENIED", principal=p, organization_id=owner,
+                           target_type=target_type, target_id=ident, source_ip=client_ip(request),
+                           details={"path": request.url.path})
         raise ProblemError("VALIDATION_ERROR", errors=exc.errors) from None
 
 
@@ -137,7 +154,7 @@ def create_record(session_id: str, body: RecordCreate, request: Request, db: Ses
     def create() -> tuple[int, dict]:
         s = load_scoped(db, c, request, TrialSession, session_id, p)
         values = {**body.model_dump(exclude={"evidence_refs"}), "evidence_refs": _refs(body.evidence_refs)}
-        assets = _check(db, s.organization_id, values["evidence_refs"])
+        assets = _check(db, c, request, p, s.organization_id, values["evidence_refs"])
         now = c.clock.now()
         rec = SessionRecord(record_id=new_id("record"), organization_id=s.organization_id, project_id=s.project_id,
                             session_id=s.session_id, latest_version=0, created_by=p.principal_id, created_at=now,
@@ -167,15 +184,16 @@ def update_record(record_id: str, body: RecordUpdate, request: Request, db: Sess
     fields = body.model_dump(exclude_unset=True)
     if not fields:
         raise _bad("", "바꿀 값이 없습니다", "minProperties")
-    if fields.get("title", "") is None or fields.get("kind", "") is None:
-        raise _bad("/title", "제목·종류는 비울 수 없습니다")
+    for name in ("title", "kind", "evidence_refs"):  # 계약이 null을 허용하지 않는 항목 — 그 항목 위치로 답한다
+        if name in fields and fields[name] is None:
+            raise _bad(f"/{name}", "비울 수 없는 항목입니다", "not_nullable")
     rec = _record(db, c, request, record_id, p, lock=True)
     cur = _version(db, rec, None)
     values = {k: getattr(cur, k) for k in evidence.RECORD_FIELDS}
     values.update(fields)
     if body.evidence_refs is not None:
         values["evidence_refs"] = _refs(body.evidence_refs)
-    assets = _check(db, rec.organization_id, values["evidence_refs"])
+    assets = _check(db, c, request, p, rec.organization_id, values["evidence_refs"])
     v = evidence.add_version(db, rec, values, p.principal_id, c.clock.now(), assets)
     return evidence.record_view(rec, v)
 
@@ -537,11 +555,21 @@ def export_report(report_id: str, request: Request, format: Literal["PDF", "XLSX
     if format == "XLSX":
         data = rr.render_xlsx(doc)
     elif format == "PDF":
-        data = rr.render_pdf(doc)
+        # 동시 렌더 상한 (ADR-0066): 기다리지 않는다 — 기다리는 요청도 스레드와 DB 차례(ADR-0062)를 쥔다
+        with c.pdf_slots.try_hold() as got:
+            if not got:
+                raise ProblemError("RATE_LIMITED", headers={"Retry-After": str(rr.PDF_RETRY_AFTER_S)},
+                                   detail=f"PDF를 만드는 요청이 많습니다(동시 {c.pdf_slots.total}건). "
+                                          "잠시 뒤 다시 시도하세요")
+            data = rr.render_pdf(doc)
     else:
         if not tpl.hwpx_key:
             raise ProblemError("CONFLICT", detail="이 양식에는 HWPX 원본이 없습니다")
-        data = rr.render_hwpx(c.storage.get_object(c.settings.bucket_evidence, tpl.hwpx_key), doc)
+        try:
+            data = rr.render_hwpx(c.storage.get_object(c.settings.bucket_evidence, tpl.hwpx_key), doc)
+        except rr.HwpxTemplateError as exc:  # 양식 검사(ADR-0066) 전에 저장된 양식
+            raise ProblemError("CONFLICT",
+                               detail=f"저장된 HWPX 양식을 쓸 수 없습니다({exc}). 양식을 다시 올리세요") from None
     c.audit.record("REPORT_EXPORTED", principal=p, organization_id=rep.organization_id, target_type="Report",
                    target_id=rep.report_id, source_ip=client_ip(request),
                    details={"version": v.version, "format": format})

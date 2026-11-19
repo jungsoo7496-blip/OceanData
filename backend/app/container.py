@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.adapters import report_renderers
 from app.adapters.keycloak_identity import KeycloakIdentity
 from app.adapters.notifier import LogNotifier, SmtpNotifier
 from app.adapters.pg_queue import PgQueue
@@ -42,6 +43,8 @@ class Container:
     warm_storage: StoragePort | None = None
     # 요청의 DB 작업 동시 실행 수 (ADR-0062). api.deps.get_db가 쓴다
     db_slots: RequestSlots = field(default_factory=lambda: RequestSlots(15, wait_s=10.0))
+    # 동시에 만드는 보고서 PDF 수 (ADR-0066). api.reports.export_report가 쓴다
+    pdf_slots: report_renderers.RenderSlots = field(default_factory=lambda: report_renderers.RenderSlots(2))
 
 
 def build_container(settings: Settings, **overrides: Any) -> Container:
@@ -69,4 +72,5 @@ def build_container(settings: Settings, **overrides: Any) -> Container:
         authenticator=Authenticator(identity, machine, clock),
         warm_storage=warm,
         db_slots=RequestSlots(slots, wait_s=settings.db_request_slot_wait_s),
+        pdf_slots=report_renderers.RenderSlots(settings.report_pdf_max_concurrent),
     )

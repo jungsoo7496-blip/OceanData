@@ -6,12 +6,23 @@
 
 from __future__ import annotations
 
+import codecs
+import functools
 import html
 import io
+import logging
+import lzma
 import re
+import threading
+import unicodedata
 import zipfile
+import zlib
+from collections.abc import Generator, Iterator
+from contextlib import closing, contextmanager
 from typing import Any
 from xml.sax.saxutils import escape as xml_escape
+
+log = logging.getLogger(__name__)
 
 STATUS_LABEL = {"DRAFT": "초안", "APPROVED": "승인본", "SUBMITTED": "제출본", "SUPERSEDED": "대체됨"}
 METRIC_STATUS = {"OK": "확정", "NO_DATA": "데이터 없음", "NEEDS_VERIFICATION": "검증 필요"}
@@ -104,10 +115,57 @@ def to_html(doc: dict[str, Any]) -> str:
     return "".join(parts)
 
 
-def render_pdf(doc: dict[str, Any]) -> bytes:
+@functools.cache
+def _no_fetch() -> Any:
+    """어떤 주소도 가져오지 않는 WeasyPrint URL fetcher (ADR-0066).
+
+    WeasyPrint 기본 fetcher는 이미지·스타일·글꼴 주소를 http·https·file·data 가리지 않고 가져온다. 보고서 HTML은 고정
+    스타일과 이스케이프한 글뿐이라 가져올 것이 없다 — 글꼴은 이미지에 설치한 나눔 글꼴을 fontconfig로 찾는다
+    (ADR-0018). 그래도 이스케이프가 뚫리는 경우를 대비해 렌더러가 네트워크·파일을 건드리지 못하게 한다.
+    WeasyPrint 70은 fetcher가 URLFetcher처럼 동작하기를 기대하므로(실패 처리에서 속성을 읽는다) 상속해 fetch만
+    바꾼다. 상태가 없어 렌더끼리 한 개를 같이 쓴다."""
+    from weasyprint.urls import URLFetcher, URLFetchingError
+
+    class NoFetch(URLFetcher):  # type: ignore[misc]
+        def fetch(self, url: str, headers: Any = None) -> Any:
+            log.warning("보고서 PDF 렌더가 외부 자원을 가져오려 해 막았습니다 (%s:)", url.split(":", 1)[0][:16])
+            raise URLFetchingError("보고서 PDF는 외부 자원을 가져오지 않습니다")
+
+    return NoFetch()
+
+
+def html_to_pdf(text: str) -> bytes:
     from weasyprint import HTML
 
-    return HTML(string=to_html(doc)).write_pdf()  # type: ignore[no-any-return]
+    return HTML(string=text, url_fetcher=_no_fetch()).write_pdf()  # type: ignore[no-any-return]
+
+
+def render_pdf(doc: dict[str, Any]) -> bytes:
+    return html_to_pdf(to_html(doc))
+
+
+PDF_RETRY_AFTER_S = 5  # 차례가 없을 때 Retry-After. 보통 보고서는 1초 안팎, 합성 최악 기록은 10초대 (ADR-0066)
+
+
+class RenderSlots:
+    """프로세스마다 동시에 만드는 PDF 수 (ADR-0066).
+
+    PDF 렌더는 동기 엔드포인트 안에서 CPU를 오래 쓴다(계약 한계 길이의 기록 한 건이 10초대). 그동안 요청은 스레드와
+    DB 차례(ADR-0062)를 쥐고 있어, 렌더가 몰리면 다른 요청이 차례를 못 받아 503이 된다. 차례는 기다리지 않는다 —
+    기다리면 기다리는 요청도 스레드와 DB 차례를 쥔다. 차례가 없으면 호출자가 429 RATE_LIMITED로 답한다."""
+
+    def __init__(self, total: int) -> None:
+        self.total = total
+        self._sem = threading.BoundedSemaphore(total)
+
+    @contextmanager
+    def try_hold(self) -> Iterator[bool]:
+        got = self._sem.acquire(blocking=False)
+        try:
+            yield got
+        finally:
+            if got:
+                self._sem.release()
 
 
 # ------------------------------------------------------------------ XLSX
@@ -177,19 +235,116 @@ def _neutralize_formulas(wb: Any) -> None:
 # ------------------------------------------------------------------ HWPX (양식 XML 치환)
 
 
-def check_hwpx(data: bytes) -> list[str]:
-    """올린 양식이 zip이고 XML 항목이 있는지만 본다 (내부 구조는 해석하지 않는다, ADR-0018)."""
+class HwpxTemplateError(Exception):
+    """렌더러가 쓸 수 없는 HWPX 양식 (올릴 때 400, 검사 전에 저장된 양식이면 내보내기 409, ADR-0066)."""
+
+
+HWPX_MAX_UNPACKED = 100 * 1024 * 1024
+# 망가진 zip을 읽을 때 zipfile·압축 해제기가 내는 예외 (헤더·CRC·이름 불일치, 암호화, 모르는 압축 방식·zip 버전,
+# 잘린 압축 자료, UTF-8 표시가 있지만 UTF-8이 아닌 이름 등). 무작위로 망가뜨린 양식으로 확인했다.
+_ZIP_ERRORS = (zipfile.BadZipFile, RuntimeError, NotImplementedError, EOFError, OSError, ValueError, zlib.error,
+               lzma.LZMAError)
+# 항목을 한 번에 읽는 양. 이 이미지의 Python(3.12) zipfile은 한 번 읽을 때 푸는 양도 요청한 크기로 묶으므로(deflate·
+# bzip2·lzma), 헤더에 적은 크기보다 훨씬 길게 풀리는 압축 자료(압축 폭탄)도 조각 하나 넘게 메모리에 올리지 않는다.
+# 헤더에 적은 크기를 넘는 부분은 zipfile이 버린다 (ADR-0066)
+_READ_CHUNK = 256 * 1024
+# XML 선언은 문서 맨 앞의 짧은 줄이다. 인코딩 선언은 앞 4KiB 안에서만 찾는다 (검사가 항목 전체를 글로 들고 있지 않게)
+_XML_HEAD = 4096
+_XML_ENCODING = re.compile(r"""\A\ufeff?<\?xml[^>]*?\bencoding\s*=\s*["']([^"']*)["']""")
+# 항목 이름에 넣을 수 없는 글자의 유니코드 범주: 제어 문자 Cc(C0·DEL·C1), 보이지 않는 서식 문자 Cf(방향 제어
+# U+200E·U+200F·U+202A~U+202E·U+2066~U+2069, 폭 없는 문자 U+200B~U+200D, BOM 등), 줄·문단 구분 Zl·Zp(U+2028·U+2029).
+# 계약이 다른 곳(ClipRequest.reason)에서 '제어 문자·보이지 않는 서식 문자'로 정한 글자를 모두 포함한다
+_NAME_FORBIDDEN = frozenset({"Cc", "Cf", "Zl", "Zp"})
+
+
+def _bad_entry_name(name: str) -> bool:
+    """zip 항목 이름이 패키지 밖을 가리키거나, OS마다 다르게 풀리거나, 보이는 것과 다른 이름이면 참.
+
+    ZIP 형식의 구분자는 '/'뿐이다. 역슬래시는 Windows에서 구분자라 '..\\'·'C:\\'·UNC('\\\\서버')가 되고,
+    ':'는 드라이브 문자('C:x')나 NTFS 스트림('a.xml:s')이 된다. 그래서 POSIX 형태('/'로 시작·'..' 단계)와 함께
+    역슬래시·':'가 든 이름을 거부한다. 제어 문자와 보이지 않는 서식 문자(방향 제어로 'evil‹RLO›lmx.png'가
+    'evilgnp.xml'처럼 보이는 등)도 거부한다. 일반 항목 이름('Contents/section0.xml', 'BinData/그림 1.png' 등)은
+    해당이 없다."""
+    return (not name or name.startswith("/") or "\\" in name or ":" in name or ".." in name.split("/")
+            or any(unicodedata.category(ch) in _NAME_FORBIDDEN for ch in name))
+
+
+def _is_xml(info: zipfile.ZipInfo) -> bool:
+    return info.filename.lower().endswith(".xml")
+
+
+def _entry_chunks(z: zipfile.ZipFile, info: zipfile.ZipInfo) -> Generator[bytes, None, None]:
+    """항목 하나를 _READ_CHUNK씩 읽는다. 읽을 수 없으면(손상·암호화·지원하지 않는 압축) HwpxTemplateError."""
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as z:
-            names = z.namelist()
-            if any(n.startswith("/") or ".." in n.split("/") for n in names):
-                return ["zip 항목 경로가 올바르지 않습니다"]
-            if not any(n.lower().endswith(".xml") for n in names):
-                return ["XML 항목이 없습니다"]
-            if sum(i.file_size for i in z.infolist()) > 100 * 1024 * 1024:
-                return ["압축을 푼 크기가 너무 큽니다"]
-    except zipfile.BadZipFile:
-        return ["HWPX(zip) 파일이 아닙니다"]
+        with z.open(info) as fp:
+            while chunk := fp.read(_READ_CHUNK):
+                yield chunk
+    except _ZIP_ERRORS:
+        raise HwpxTemplateError(
+            f"zip 항목을 읽을 수 없습니다(손상·암호화·지원하지 않는 압축): {info.filename[:120]}") from None
+
+
+def _read_entry(z: zipfile.ZipFile, info: zipfile.ZipInfo, keep: bool) -> bytes | str:
+    """항목 하나를 끝까지 읽어 확인한다. XML 항목은 읽으면서 조각마다 엄격한 UTF-8인지 보고(글은 만들지 않고 버린다),
+    앞부분의 인코딩 선언을 본다. keep이면 내용(XML은 UTF-8로 푼 글, 나머지는 바이트)을, 아니면 빈 값을 돌려준다."""
+    name = info.filename[:120]
+    utf8 = codecs.getincrementaldecoder("utf-8")("strict") if _is_xml(info) else None
+    head = b""
+    parts: list[bytes] = []
+    try:
+        with closing(_entry_chunks(z, info)) as chunks:
+            for chunk in chunks:
+                if keep:
+                    parts.append(chunk)
+                if utf8 is not None:
+                    utf8.decode(chunk)
+                    if len(head) < _XML_HEAD:
+                        head += chunk[:_XML_HEAD - len(head)]
+        if utf8 is not None:
+            utf8.decode(b"", final=True)  # 끝이 잘린 글자
+    except UnicodeDecodeError:  # zipfile 쪽 오류는 _entry_chunks가 이미 HwpxTemplateError로 바꿨다
+        raise HwpxTemplateError(f"XML 항목이 UTF-8이 아닙니다: {name}") from None
+    raw = b"".join(parts)
+    parts.clear()
+    if utf8 is None:
+        return raw
+    # head는 UTF-8 글의 앞부분이라 끝에 잘린 글자 하나만 있을 수 있다
+    declared = _XML_ENCODING.match(head.decode("utf-8", "ignore"))
+    if declared and declared.group(1).strip().lower() not in ("utf-8", "utf8"):
+        # 내보내기는 UTF-8로 쓴다. 다른 인코딩을 선언한 문서에 UTF-8 한글을 넣으면 읽는 쪽이 글자를 깨뜨린다
+        raise HwpxTemplateError(f"XML 항목의 인코딩 선언이 UTF-8이 아닙니다: {name}")
+    return raw.decode("utf-8")
+
+
+def _template_entries(data: bytes, *, keep: bool) -> Iterator[tuple[zipfile.ZipInfo, bytes | str]]:
+    """양식의 항목을 순서대로 읽는다. keep이면 XML 항목은 UTF-8로 푼 글(str), 나머지는 바이트다.
+
+    올릴 때 검사(check_hwpx)와 내보내기(render_hwpx)가 이 함수 하나로 양식을 읽는다 — 검사를 통과한 양식은 내보낼 때도
+    같은 길로 열린다. 검사는 keep=False로 읽은 조각을 바로 버려, 올리기 한 번이 양식을 푼 크기만큼 메모리를 쓰지
+    않는다(조각 몇 개 크기). 쓸 수 없는 양식이면 HwpxTemplateError (내부 구조는 해석하지 않는다, ADR-0018)."""
+    try:
+        z = zipfile.ZipFile(io.BytesIO(data))
+    except _ZIP_ERRORS:
+        raise HwpxTemplateError("HWPX(zip) 파일이 아닙니다") from None
+    with z:
+        infos = z.infolist()
+        if any(_bad_entry_name(i.filename) for i in infos):
+            raise HwpxTemplateError("zip 항목 경로가 올바르지 않습니다")
+        if not any(_is_xml(i) for i in infos):
+            raise HwpxTemplateError("XML 항목이 없습니다")
+        if sum(i.file_size for i in infos) > HWPX_MAX_UNPACKED:
+            raise HwpxTemplateError("압축을 푼 크기가 너무 큽니다")
+        for info in infos:
+            yield info, _read_entry(z, info, keep)
+
+
+def check_hwpx(data: bytes) -> list[str]:
+    """올린 양식을 렌더러가 쓸 수 있는지 본다: zip 항목 이름, 모든 항목 읽기, XML 항목의 UTF-8 (ADR-0018·0066)."""
+    try:
+        for _ in _template_entries(data, keep=False):
+            pass
+    except HwpxTemplateError as exc:
+        return [str(exc)]
     return []
 
 
@@ -208,17 +363,16 @@ def hwpx_values(doc: dict[str, Any]) -> dict[str, str]:
 
 
 def render_hwpx(template: bytes, doc: dict[str, Any]) -> bytes:
+    """양식의 XML 항목에서 {{변수}}를 바꾼다. 쓸 수 없는 양식이면 HwpxTemplateError (check_hwpx와 같은 기준)."""
     values = hwpx_values(doc)
 
     def sub(m: re.Match[str]) -> str:
         return xml_escape(xml_safe(values.get(m.group(1), m.group(0))), _ATTR_ENTITIES)
 
-    src = zipfile.ZipFile(io.BytesIO(template))
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w") as dst:
-        for info in src.infolist():  # 순서·압축 방식을 그대로 둔다 (첫 항목이 무압축이어야 하는 패키지 형식 대비)
-            data = src.read(info)
-            if info.filename.lower().endswith(".xml"):
-                data = PLACEHOLDER.sub(sub, data.decode("utf-8")).encode("utf-8")
+        # 순서·압축 방식을 그대로 둔다 (첫 항목이 무압축이어야 하는 패키지 형식 대비)
+        for info, content in _template_entries(template, keep=True):
+            data = PLACEHOLDER.sub(sub, content).encode("utf-8") if isinstance(content, str) else content
             dst.writestr(info, data, compress_type=info.compress_type)
     return out.getvalue()
