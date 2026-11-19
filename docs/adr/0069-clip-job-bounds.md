@@ -44,13 +44,16 @@ veryfast, CRF 18, AAC 128k), 합성 testsrc2 30fps 원본(8 Mbps, 4K는 30 Mbps)
    `min(FFMPEG_TIMEOUT_S, max(CLIP_TIMEOUT_MIN_S, ⌈구간 길이 × CLIP_TIMEOUT_FACTOR⌉))`, 기본 배수 4·최솟값 120초.
    배수 4는 위 측정에서 가장 느린 경우(4K·스레드 4개, 0.86)의 약 4.6배, 1080p 자동 스레드의 약 40배 여유다. 최솟값은 프로세스 시작과
    키프레임부터 디코딩하는 시간(키프레임 간격이 긴 원본)을 덮는다. 30초 클립은 120초, 60초는 240초, 900초부터는 전체 한도(3600초)다.
-   결과 다시 읽기(ffprobe)도 같은 한도다.
+   결과 다시 읽기(ffprobe)도 같은 한도를 따로 받는다 — 그래서 클립 하나가 워커를 쥐는 시간은 최악에 이 한도의 두 배(인코딩 +
+   다시 읽기)에 원본 받기·올리기 시간을 더한 것이다(통합 검토 CLIPS-5).
    - 한도를 넘으면 `subprocess.run`이 ffmpeg 프로세스를 끝내고, 작업은 `PermanentJobError("CLIP_TIMEOUT")`로 재시도 없이 FAILED
      (시도 1번)다 — 같은 구간·같은 장비는 다시 해도 같은 시간이 걸리고 재시도는 비용만 늘린다. 받아 둔 원본·임시 폴더는 지금처럼
      지운다. 클립 목록에 `error_code=CLIP_TIMEOUT`이 보이고, 화면에 문구를 더했다. 계약은 설명만 바뀐다(`ClipJob.error_code`의 예,
      클립 POST 설명 한 줄) — 계약 먼저 고쳤다.
    - ffprobe 시간 초과는 다시 읽기 실패와 같게 본다(길이 정보 없이 저장, 지금 종료 코드가 0이 아닐 때와 같다).
-   - 설정 `CLIP_TIMEOUT_FACTOR`·`CLIP_TIMEOUT_MIN_S`는 `config.py`·`.env.example`·Compose(워커)에 넣었다.
+   - 설정 `CLIP_TIMEOUT_FACTOR`·`CLIP_TIMEOUT_MIN_S`는 `config.py`·`.env.example`·Compose(워커)에 넣었다. 배수는 유한한 양수만
+     받고(inf·nan이면 기동하지 않는다), 곱이 전체 한도 이상이면 올림 전에 전체 한도로 자른다(통합 검토 CLIPS-3·4 — 전에는 inf나
+     1e308 같은 배수가 기동을 통과하고 클립 작업마다 OverflowError로 INTERNAL 재시도 뒤 FAILED가 됐다).
    - 버린 대안: 전체 한도만 낮추기 — 프록시·썸네일 같은 다른 단계와 긴 클립이 함께 걸린다. 원본 해상도·비트레이트로 한도 계산 —
      측정이 합성 영상뿐이라 근거가 약하고 설정이 늘어난다. 배수 하나를 운영 실측 뒤 맞춘다.
 2. **전용 워커는 워커가 가져갈 작업 유형을 설정으로 나눠 만든다.** `WORKER_JOB_TYPES`(비우면 등록된 모든 유형) −
@@ -90,7 +93,9 @@ veryfast, CRF 18, AAC 128k), 합성 testsrc2 30fps 원본(8 Mbps, 4K는 30 Mbps)
 
 감수할 점:
 - 운영 장비가 개발 PC보다 많이 느리거나 실제 영상이 무거우면 정상 클립이 `CLIP_TIMEOUT`으로 실패할 수 있다 — 배수를 실측에 맞춘다.
-  900초가 넘는 구간은 지금처럼 전체 한도(3600초)를 받는다.
+  900초 이상 구간은 인코딩과 다시 읽기가 각각 전체 한도(3600초)를 받아, 기본 워커 하나 배치에서는 긴 구간 하나가 최악에
+  `FFMPEG_TIMEOUT_S`의 두 배(기본 2시간)에 원본 받기·올리기 시간을 더한 만큼 워커를 쥔다(통합 검토 CLIPS-5). 전용 워커를 켜야
+  수집 처리와 나뉜다.
 - 원본 받기·올리기에는 여전히 한도가 없다(ADR-0033 감수: 짧은 구간도 원본 전체를 받는다).
 - 살아 있는 워커 안에서 멈춘 클립(예: 응답 없는 저장소)은 임대가 계속 갱신돼 다른 워커가 회수하지 않는다. 그 클립을 쥔 워커
   (전용 워커를 쓰면 `worker-clips`)를 다시 시작하면(runbook 07 2번) 갱신이 멈추고 임대 시간 뒤 회수된다.
@@ -135,3 +140,13 @@ veryfast, CRF 18, AAC 128k), 합성 testsrc2 30fps 원본(8 Mbps, 4K는 30 Mbps)
 검토 뒤 더한 두 시험도 수정 전 코드에서 실패한다 — 가짜 ffprobe를 20초 기다림(`< 15` 실패), 잘못된 설정으로 컨테이너를 만듦.
 또 이 변경에서 해당 처리만 지우면 실패하는 것을 확인했다 — ffprobe 시간 초과를 잡지 않으면 `('QUEUED', 1, 'INTERNAL')`(재시도),
 `main()`의 작업 유형 확인을 지우면 컨테이너를 만든다.
+
+통합 검토(2026-11-20) 뒤 더한 시험 — 모두 수정 전 코드·문서에서 실패하는 것을 확인했다.
+- `tests/unit/test_clip_timeout_factor.py`(CLIPS-3·4): `CLIP_TIMEOUT_FACTOR`가 inf·nan이면 `ConfigError(CLIP_TIMEOUT_FACTOR)`로
+  기동하지 않고, 1e308처럼 곱이 넘치는 배수는 전체 한도(3600초)를 받는다. 수정 전: `DID NOT RAISE ConfigError`,
+  `OverflowError: cannot convert float infinity to integer`.
+- `tools/tests/test_compose_up.py`(CLIPS-1): 기본 워커가 `clip_export`를 가져가지 않는데 `worker-clips`가 활성 서비스에 없으면
+  `make up`이 경고한다(가짜 docker). 수정 전: `'worker-clips' not found in ''`.
+- `tests/unit/test_clip_worker_ops_docs.py`(CLIPS-1·2): 켜는 법을 적은 곳이 `COMPOSE_PROFILES=clip-worker`도 `.env`에 두라고
+  하는지, `worker`를 restart·up 하는 runbook 단계가 같은 단계에서 `worker-clips`를 말하는지. 수정 전: 네 곳·네 단계가 빠짐.
+- CLIPS-5(최악 시간 문장)는 문장만 고쳤다. ffprobe가 같은 한도를 받는 것은 `test_clip_ffmpeg_limit_follows_clip_length`가 고정한다.
