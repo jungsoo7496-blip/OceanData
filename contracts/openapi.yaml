@@ -4196,6 +4196,7 @@ paths:
       tags: [datasets]
       operationId: listDatasets
       summary: 게시된 데이터셋 (CONSUMER에게는 승인 가능한 것만)
+      description: 운영자는 모든 버전, 이용기관은 게시된 데이터셋의 L3 이상·READY 버전만 본다. 제공기관(ORG_ADMIN·ORG_MEMBER)은 자기 기관 자산이 든 버전만 보고(계보 조회와 같은 규칙), data_card와 samples도 그 버전에서 고른다.
       x-freeze: G5
       parameters:
         - {$ref: '#/components/parameters/Cursor'}
@@ -4223,6 +4224,7 @@ paths:
       tags: [datasets]
       operationId: getDataset
       summary: 데이터셋 상세 (데이터 카드 포함)
+      description: 운영자는 모든 버전, 이용기관은 게시된 데이터셋의 L3 이상·READY 버전만 본다. 제공기관(ORG_ADMIN·ORG_MEMBER)은 자기 기관 자산이 든 버전만 보고(계보 조회와 같은 규칙), data_card와 samples도 그 버전에서 고른다.
       x-freeze: G5
       responses:
         '200':

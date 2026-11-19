@@ -84,8 +84,18 @@ def _with_samples(c: Container, view: dict, versions: list[DatasetVersion]) -> d
     return {**view, "samples": samples} if samples else view
 
 
-def _view(db: Session, c: Container, p: Principal, ds: Dataset) -> dict:
+def _visible(db: Session, p: Principal, ds: Dataset) -> list[DatasetVersion]:
+    """이 주체에게 보이는 버전. 운영자는 모두, 이용기관은 게시·L3 이상·READY(요구사항 7), 제공기관은 자기 기관 자산이 든
+    버전만이다 — 메타데이터·바이너리는 자기 기관만(domain.md 2장)이고 계보 조회와 같은 규칙이다. 데이터 카드와 샘플도
+    이 목록에서 고른다 (통합 검토 SHARING-2, ADR-0088)."""
     vs = datasets.visible_versions(db, ds, consumer=_consumer(p))
+    if _operator(p) or _consumer(p):
+        return vs
+    return [v for v in vs if p.organization_id in v.provider_organization_ids]
+
+
+def _view(db: Session, c: Container, p: Principal, ds: Dataset) -> dict:
+    vs = _visible(db, p, ds)
     return _with_samples(c, datasets.dataset_view(db, ds, vs), vs)
 
 
@@ -106,20 +116,21 @@ def create_dataset(body: DatasetCreate, request: Request, db: Session = DB,
     return datasets.dataset_view(db, ds, [])
 
 
-def _dataset_page(db: Session, stmt: Any, consumer: bool, limit: int,
+def _dataset_page(db: Session, stmt: Any, p: Principal, limit: int,
                   cursor: str | None) -> tuple[list[tuple[Dataset, list[DatasetVersion]]], str | None]:
     """dataset_id 순으로 한 쪽 (api-conventions.md 커서). 커서는 마지막으로 돌려준 데이터셋 ID다.
 
     이용기관에게 보이는 버전(게시·L3 이상·READY)은 visible_versions가 파이썬에서 고르므로, 보이는 버전이 없는
-    데이터셋은 건너뛰며 쪽이 찰 때까지 limit+1개씩 더 읽는다 — 쪽이 짧거나 다음 쪽이 비지 않게."""
+    데이터셋은 건너뛰며 쪽이 찰 때까지 limit+1개씩 더 읽는다 — 쪽이 짧거나 다음 쪽이 비지 않게.
+    운영자 말고는 보이는 버전(_visible)이 없는 데이터셋을 건너뛴다."""
     after = decode_cursor(cursor) if cursor else None
     out: list[tuple[Dataset, list[DatasetVersion]]] = []
     while True:
         q = stmt if after is None else stmt.where(Dataset.dataset_id > after)
         rows = list(db.execute(q.order_by(Dataset.dataset_id).limit(limit + 1)).scalars())
         for ds in rows:
-            vs = datasets.visible_versions(db, ds, consumer=consumer)
-            if consumer and not vs:
+            vs = _visible(db, p, ds)
+            if not vs and not _operator(p):
                 continue
             if len(out) == limit:  # 다음 쪽에 보일 것이 있다
                 return out, encode_cursor(out[-1][0].dataset_id)
@@ -137,7 +148,7 @@ def list_datasets(db: Session = DB, c: Container = Depends(container),
         stmt = stmt.where(Dataset.published.is_(True))
     elif not _operator(p):
         stmt = stmt.where(Dataset.dataset_id.in_(_versions_with_org(p.organization_id)))
-    rows, nxt = _dataset_page(db, stmt, _consumer(p), page["limit"], page["cursor"])
+    rows, nxt = _dataset_page(db, stmt, p, page["limit"], page["cursor"])
     return {"items": [_with_samples(c, datasets.dataset_view(db, ds, vs), vs) for ds, vs in rows], "next_cursor": nxt}
 
 
