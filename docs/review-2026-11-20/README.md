@@ -60,6 +60,12 @@
 | CLIPS-4 | `CLIP_TIMEOUT_FACTOR`가 inf·큰 값을 받아 클립 작업마다 OverflowError로 INTERNAL 재시도된다(CLIPS-3과 같은 지적) | 낮음 | 확인 | 고침 (이 PR) |
 | CLIPS-5 | 긴 클립이 기본 워커를 최대 `FFMPEG_TIMEOUT_S`(1시간) 쥔다고 적었지만, 코드는 그 두 배와 전송 시간까지 허용한다 | 낮음 | 확인 | 고침 (이 PR) |
 
+- **CLIPS-1 클립 전용 워커 프로필이 다시 시작 뒤 빠짐** — 켜는 법(runbook 07 5번·`.env.example`·Compose 주석·ADR-0069)이 이제 `COMPOSE_PROFILES=clip-worker`를 `WORKER_EXCLUDE_JOB_TYPES=clip_export`와 함께 `.env`에 두라고 적는다. 그래서 `make up`·`make down`(재부팅 뒤 기동 포함)에서 worker-clips도 함께 오르내린다. `make up`은 기본 워커가 clip_export를 가져가지 않는데 worker-clips가 꺼져 있으면 경고한다(`test_clip_worker_ops_docs.py`, `tools/tests/test_compose_up.py`).
+- **CLIPS-2 runbook이 worker만 다시 시작함** — runbook 03 5번·06 2·5번·07 1·2·5번이 이제 worker-clips도 함께 다시 만들거나 다시 시작한다. 11 2번에는 다시 만들 필요가 없다고 적었다. ADR-0069 감수할 점에 두 워커가 각자 환경으로 정비 주기를 돈다는 것을 적었다. 전용 워커가 주기 작업을 건너뛰는 설정은 두지 않았다(까닭은 ADR)(`test_clip_worker_ops_docs.py`).
+- **CLIPS-3 CLIP_TIMEOUT_FACTOR inf로 클립마다 OverflowError** — 이제 inf·nan이면 `ConfigError(CLIP_TIMEOUT_FACTOR)`로 기동하지 않는다. 곱이 넘치는 큰 배수는 `FFMPEG_TIMEOUT_S`로 자른다(`test_clip_timeout_factor.py`).
+- **CLIPS-4 CLIP_TIMEOUT_FACTOR inf·큰 값 (CLIPS-3과 같은 지적)** — CLIPS-3과 같은 수정으로 고쳤다.
+- **CLIPS-5 긴 구간의 최악 점유 시간을 낮게 적음** — ADR-0069에 인코딩 + ffprobe 다시 읽기 = 한도의 두 배(기본 2시간) + 원본 받기·올리기라고 적었다. 코드는 그대로다. HANDOFF -1bb·검토 README C7 행의 '최대 한 시간'은 통합 때 고친다.
+
 ## 공유
 
 | id | 지적 | 심각도 | 판정 | 처리 |
