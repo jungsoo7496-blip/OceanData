@@ -900,7 +900,7 @@ paths:
     get:
       tags: [reports]
       operationId: exportReport
-      summary: 보고서 내보내기 (켜진 형식만, /v1/capabilities의 report_formats). 초안은 "초안" 표시
+      summary: 보고서 내보내기 (켜진 형식만, /v1/system/capabilities의 report_formats). 초안은 "초안" 표시
       description: |
         보고서·버전을 먼저 확인한다: 없거나 다른 기관 보고서면 형식과 관계없이 404다. 볼 수 있는 보고서의 형식이 꺼져 있으면 409 CONFLICT다
         (켜진 형식은 /v1/system/capabilities의 report_formats와 같다. PDF는 렌더러를 불러올 수 없으면 꺼진 것이다).
