@@ -53,11 +53,11 @@
 | C7 | 클립 ffmpeg 한도를 구간 길이에 맞추고, 넘으면 재시도 없이 실패로 끝내며, 클립 전용 워커를 고를 수 있게 했다 | 0069 | `integration/test_clip_job_bounds.py` |
 | dsa (S01·S03·S04·S05) | 큰 데이터셋 버전도 데이터 카드를 검사하고, 데이터셋 목록을 쪽으로 나누고, 계보 409와 항목 ID 400을 맞췄다 | 0072 | `integration/test_dataset_contract_checks.py`, `integration/test_dataset_build.py`(추가) |
 | dsb (S02·S06·S07·S09·S10) | 다른 기관 이용 권한·신청에 404와 교차 기관 감사를 남기고, 없는 날짜와 기한 지난 승인을 거부한다 | 0073 | `integration/test_grant_access_request_tenant_audit.py`, `integration/test_access_request_period_dates.py`, `integration/test_access_decision_below_l3.py`, `integration/test_access_decision_deadline.py` |
-| shr (S11·S12·S14·S15·S16) | 분류 변경 뒤 공유 등급을 자동으로 내리고 권한을 철회하며, 재신청·403 감사·409·빈 목록을 바로잡았다 | 0074 | `unit/test_scope_after_change.py`, `integration/test_classification_lowers_scope.py`, `integration/test_classification_family_locks.py`, `integration/test_share_resubmit_rules.py`, `integration/test_share_review_denial_audit.py`, `integration/test_share_request_conflict_contract.py`, `integration/test_share_candidates_body.py` |
+| shr (S11·S12·S14·S15·S16) | 분류 변경 뒤 공유 등급을 자동으로 내리고 권한을 철회하며, 재신청·403 감사·409·빈·중복 `asset_ids`를 바로잡았다 | 0074 | `unit/test_scope_after_change.py`, `integration/test_classification_lowers_scope.py`, `integration/test_classification_family_locks.py`, `integration/test_share_resubmit_rules.py`, `integration/test_share_review_denial_audit.py`, `integration/test_share_request_conflict_contract.py`, `integration/test_share_candidates_body.py` |
 | deid (S17·S19·S20·S21) | 원본 프레임 거부를 감사하고, 운영자는 심사 중일 때만 비식별본 프레임을 보며, 재검수 중복과 사람 태그를 바로잡았다 | 0075 | `integration/test_deid_frame_scope.py`, `integration/test_deid_recheck.py`, `integration/test_tag_human_edit.py` |
 | asa (S22~S26) | 검증에서 실패한 자산의 재처리가 검증부터 다시 하고, data_role 변경의 감사 세 가지를 맞췄다 | 0076 | `integration/test_asset_patch_audit.py`, `integration/test_verify_resume.py`(추가) |
 | asb (S27~S29) | 삭제 증명·다운로드 URL 거부를 감사하고, 클립 작업 목록에 `limit`·`cursor`를 더했다 | 0077 | `integration/test_deletion_certificate_cross_org_audit.py`, `integration/test_download_url_denial_audit.py`, `integration/test_clip_list_pagination.py` |
-| rec (S39~S42) | 회차 기록의 null·없는 시각을 500 대신 400으로 답하고, 다른 기관 근거를 감사한다 | 0078 | `integration/test_record_contract_errors.py` |
+| rec (S39~S42) | 회차 기록 수정의 null 항목은 그 항목 위치의 400으로(S39·S42), 근거의 없는 시각은 500 대신 400으로(S40) 답하고, 다른 기관 근거를 감사한다 | 0078 | `integration/test_record_contract_errors.py` |
 | rpa (S30~S33) | 기간 보고서가 그 사업의 관측값만 세고, 9999년 끝 기간과 양식 버전 0을 400으로 답한다 | 0079 | `integration/test_period_report_scope.py`, `integration/test_report_template_hwpx_put.py` |
 | rpb (S34~S38) | 보고서 버전마다 데이터 기간을 저장하고, 표시 없는 초안 HWPX를 막고, 내보내기 범위와 열람자 최신 버전을 맞췄다 | 0080 | `integration/test_report_contract_sweep.py` |
 | ctr (S43·S44) | 사전 검증이 운영 경로와 같은 코드표·시각 순서 규칙도 본다 | 0081 | `unit/test_contract_prevalidate_rules.py`, `integration/test_contract_validator_rules.py` |
@@ -78,7 +78,7 @@
 | 5 | 하향 감사 모양 (S11·S25) | CORE 변경 하향은 자산마다 새 감사 동작 `SHARE_SCOPE_DOWNGRADED`를 쓴다. 분류 변경 하향은 `ASSET_CLASSIFIED` details와 `GRANT_REVOKED`(cause `ASSET_CLASSIFIED`)를 쓴다 | 한 모양으로 맞출지 정한다. 분류 변경에도 `SHARE_SCOPE_DOWNGRADED`를 쓰면 내린 파생본을 target_id로 찾을 수 있다 | ADR-0074, ADR-0076 |
 | 6 | 승인 뒤(APPROVED)를 '심사 중'으로 볼지 (S19) | 보지 않는다. 승인된 원본의 비식별본에 재검수가 열려도 운영자는 프레임을 못 본다(배정 검수자는 본다) | (가) 그대로 둔다. (나) `backend/app/api/deid.py`의 `UNDER_REVIEW`에 APPROVED를 더한다(한 줄) | ADR-0075 |
 | 7 | 사람이 지운 날씨 태그 (S21 이웃) | 사람이 REMOVE한 날씨 태그를 뒤의 날씨 보정이 다시 달 수 있다 | 막을지 정한다 | ADR-0075 결과 |
-| 8 | 교차 기관 사례를 수용 표에 넣을지 (S02·S06·S27) | 이용 권한·신청의 교차 기관 사례는 S3가 필요해 통합 시험 파일에만 있다. 삭제 증명 사례도 T01 `CROSS_ORG_CASES`에 없다 | T01 수용 표에 넣을지 정한다 | 이 문서(dsb·asb 항목 메모) |
+| 8 | 교차 기관 사례를 수용 표에 넣을지 (S02·S06·S27) | 이용 권한·신청의 교차 기관 사례는 S3가 필요해 통합 시험 파일에만 있다. 삭제 증명 사례도 T01 `CROSS_ORG_CASES`에 없다 | T01 수용 표에 넣을지 정한다 | HANDOFF -1bd·-1bh |
 | 9 | 응답 기한이 지난 이용 신청 (S10) | 승인은 409로 거부하고 거절은 받는다. `DENIED`로 바꾸는 것은 정비 주기(기본 60초)를 기다린다 | (가) 그대로 둔다. (나) 요청 안에서 바로 `DENIED`로 바꾼다 | ADR-0073 |
 | 10 | 이미 저장된 기간 보고서 (S30) | 저장된 버전(승인·제출본 포함)에는 다른 사업 값이 섞인 채 남는다. 장비의 사업과 회차 장비 목록은 지금 값으로 본다 | 제출된 기간 보고서를 새 버전으로 다시 만들지 정한다. 정확한 사업 이력이 필요하면 관측값에 `project_id` 열을 더한다(파티션 표 마이그레이션) | ADR-0079 |
 | 11 | 초안 HWPX의 표시 범위 (S35) | 초안은 `{{report.status}}` 자리만 요구한다. 생성 시각·데이터 기준 시각 자리는 강제하지 않고, SUPERSEDED는 막지 않는다 | 실제 관리기관 양식(T11-f)을 본 뒤, 요구사항 4.4·ADR-0018대로 더 막을지 정한다 | ADR-0080 |
@@ -99,7 +99,7 @@
 | # | 정할 것 | 오늘 밤 뒤 상태 | 고를 길 | 기록 |
 |---|---|---|---|---|
 | 18 | 삭제를 2단계(outbox)로 할지 (C1) | 바뀌지 않았다. 객체 삭제를 확인한 뒤에야 증명을 발급한다(실패하면 503) | (가) 그대로 둔다. (나) 2단계로 하고 증명을 '삭제 요청됨'·'삭제 확인됨'으로 나눈다(증명의 법적 의미가 바뀐다) | ADR-0055, 검토 README '사람이 정할 것' 1 |
-| 19 | `RECEIVED`에서 실패로 가는 길 (C2) | 좁혀졌다. 운영자 명령 `python -m app.cli requeue-verify`로 검증 작업을 다시 넣을 수 있다(-1ay). 검사기가 계속 없으면 예약은 묶인 채다 | `RECEIVED → FAILED(예약 해제)` 전이를 domain.md 5장에 더할지, 'RECEIVED 장기 체류' 감시 규칙 코드를 둘지 정한다 | ADR-0058·0071, 검토 README '사람이 정할 것' 2 |
+| 19 | `RECEIVED`에서 실패로 가는 길 (C2) | 좁혀졌다. 운영자 명령 `python -m app.cli requeue-verify`로 검증 작업을 다시 넣을 수 있다(-1ay). 검사기가 계속 없으면 예약은 묶인 채다. 실제 악성코드 검사기 제품도 아직 결정 대기다(ADR-0031) | `RECEIVED → FAILED(예약 해제)` 전이를 domain.md 5장에 더할지, 'RECEIVED 장기 체류' 감시 규칙 코드를 둘지 정한다 | ADR-0058·0071, 검토 README '사람이 정할 것' 2 |
 | 20 | 웹훅 구독 비활성화의 의미 (W5) | 좁혀졌다. 라운드 장벽(W1)은 고쳤다(-1av). 독살 이벤트 하나가 건강한 구독을 끄고 다른 대기 이벤트를 취소하는 것은 그대로다 | 연속 실패 N회 같은 규칙으로 바꿀지 정한다(ADR-0030·0041 개정) | ADR-0070, 검토 README '사람이 정할 것' 3 |
 | 21 | 미완성 멀티파트 청소 (C4) | 좁혀졌다. 정리가 실패하면 세션·예약을 남겨 다시 한다(-1ax) | 저장소 수명주기 규칙(`AbortIncompleteMultipartUpload`)을 쓸지(SeaweedFS 지원은 확인 필요), 수정 전에 남은 것을 한 번 대조 점검할지 정한다 | ADR-0065, 검토 README '사람이 정할 것' 4 |
 | 22 | 요청 본문 크기 한도 (V5) | 임시로 정했다. 프록시 한도는 그대로 두고 앱에도 같은 20MiB를 두었다(-1aw) | (가) 그대로 둔다. (나) 앱 한도를 프록시보다 줄인다. (다) 앱 한도를 뺀다(되돌리는 법은 ADR) | ADR-0068, 검토 README '사람이 정할 것' 5 |
@@ -114,6 +114,7 @@
 ## 고치지 않은 새 발견
 
 오늘 밤 찾았지만 고치지 않았고, 사람 결정도 아닌 것이다. 다음 묶음의 후보다.
+'이 문서(… 항목 메모)'는 ADR·HANDOFF에는 없고 그 항목의 검증 메모에만 있던 것이라 여기에 처음 적는다는 뜻이다.
 
 | 무엇 | 드러난 곳 | 기록 |
 |---|---|---|
@@ -121,19 +122,25 @@
 | 스토리지 읽기 실패로 재시도를 다 쓴 자산은 FAILED(VALIDATING에서)가 되고 업로드·쿼터 예약이 풀리지 않는다. 영상·센서는 이제 재처리로 검증부터 다시 하지만(S22), 그 밖의 유형은 재처리가 409라 되돌릴 길이 없다 | rq, asa | ADR-0071·0076 |
 | 공유 심사 WITHDRAW와 공유 등급 신청의 하향에는 권한마다 `GRANT_REVOKED`가 없다 | asa | ADR-0076, 발견 문서 S25 |
 | 회차 지정이 실패해 되돌아간 CORE 변경에서도 이용 기관 철회 알림 메일은 이미 나갔을 수 있다(전부터) | asa | ADR-0076 |
-| `request_clip`의 같은 구간 작업 찾기가 최근 100건까지만 본다. 더 오래된 QUEUED·RUNNING 작업이 있으면 같은 작업이 또 들어갈 수 있다 | asb | ADR-0077 |
-| 다른 경로의 감사 없는 403(`observations.py`·`datasets.py`·`reports.py`·`assets.py`의 몇 곳, 줄 번호는 shr 브랜치 기준). 다운로드 URL과 원본 프레임은 S28·S17에서 고쳤다 | shr | ADR-0074 |
-| `createSessionRecord`·`createAccessRequest`는 `Idempotency-Key`를 받지만 409를 계약에 적지 않았다. `asset_ids: null`은 아직 받는다 | shr | ADR-0074 |
-| `api/sharing.py`·`api/datasets.py`의 성공 감사 몇 가지가 요청 트랜잭션과 따로 확정된다. ADR-0053과 다를 수 있다(확인 필요) | shr, dsb | ADR-0073·0074 |
-| 처리기 없는 `parse_rfc3339` 호출이 다른 라우터에도 있다(`external.py`·`agents.py`·`catalog.py`·`monitoring.py`). 같은 500이 나는지는 확인하지 않았다 | rec | ADR-0078 |
-| `getUpload`가 파트 목록 저장소 오류를 빈 목록으로 삼킨다 | upl | ADR-0082 |
-| 크기 불일치 취소에서 멀티파트 중단 응답이 유실되면, 다시 보낸 완료나 재개 조회가 만료 때까지 막힌다(전부터) | c4 | ADR-0065 감수할 점 |
-| 에이전트는 완료가 5xx면 `GET .../parts`로 재개해, 저장소에서 끝난 완료를 마저 끝내는 재시도 경로에 닿지 않을 수 있다 | c4 | ADR-0065 |
-| 천천히 흘리는 웹훅 수신 서버는 여전히 기한까지 간다(수정 전과 같다). 막으려면 읽기 횟수나 속도 하한을 따로 정해야 한다. TLS 안의 비응용 레코드는 세지 않는다(확인 필요) | w4 | ADR-0064 |
-| 기본 워커 하나 배치에서는 900초 이상 구간 클립이 최대 `FFMPEG_TIMEOUT_S` 동안 워커를 쥔다. 전역 클립 동시 한도, 다른 긴 작업의 임대 갱신, 원본 받기·올리기 시간 한도, `worker-clips` 지표 수집이 없다 | c7 | ADR-0069 |
+| `request_clip`의 같은 구간 작업 찾기가 최근 100건까지만 본다. 더 오래된 QUEUED·RUNNING 작업이 있으면 같은 작업이 또 들어갈 수 있다 | asb | HANDOFF -1bh |
+| 다른 경로의 감사 없는 403(`observations.py`·`datasets.py`·`reports.py`·`assets.py`의 몇 곳, 줄 번호는 shr 브랜치 기준). 다운로드 URL과 원본 프레임은 S28·S17에서 고쳤다 | shr | 이 문서(shr 항목 메모) |
+| `createSessionRecord`·`createAccessRequest`는 `Idempotency-Key`를 받지만 409를 계약에 적지 않았다. `asset_ids: null`은 아직 받는다 | shr | 이 문서(shr 항목 메모) |
+| `api/sharing.py`·`api/datasets.py`의 성공 감사 몇 가지가 요청 트랜잭션과 따로 확정된다. ADR-0053과 다를 수 있다(확인 필요) | shr, dsb | HANDOFF -1bd, 이 문서(shr 항목 메모) |
+| S14의 권한 거부 감사는 자산 행 잠금을 쥔 채 따로 확정된다. 감사 체인 잠금을 쥔 다른 트랜잭션이 같은 자산 행을 기다리면 PostgreSQL이 알아채지 못하는 서로 기다림이 될 수 있다. 공유 쪽에서 그런 경로는 찾지 못했다(확인 필요) | shr | 이 문서(shr 항목 메모) |
+| 데이터셋 버전을 요청 안에서 만드는 경로는 카드 검사 전에 객체를 DATASET 존에 복사한 뒤 422를 낸다(전부터) | dsa | 이 문서(dsa 항목 메모) |
+| 처리기 없는 `parse_rfc3339` 호출이 다른 라우터에도 있다(`external.py`·`agents.py`·`catalog.py`·`monitoring.py`). 같은 500이 나는지는 확인하지 않았다. 판별 유니언 오류 위치에 태그가 들어가는 것(`/evidence_refs/{i}/OBSERVATION_RANGE/from`)도 전부터 있는 일반 문제다 | rec | HANDOFF -1bi |
+| 가려진 스키마 오류로 목록이 잘리면 안내가 '앞의 100개만 보여줍니다'라고 하지만, 실제로는 그보다 적게 보일 수 있다(예: 60개). 안내를 남기는 것은 맞고 문구만 다르다 | ctr | 이 문서(ctr 항목 메모) |
+| `getUpload`가 파트 목록 저장소 오류를 빈 목록으로 삼킨다 | upl | HANDOFF -1bm |
+| `completeUpload` 설명의 '누락 파트'(409)와 400 `incomplete_parts` 문구가 어긋나 보인다. 조사하지 않았다 | upl | 이 문서(upl 항목 메모) |
+| 크기 불일치 취소에서 멀티파트 중단 응답이 유실되면, 다시 보낸 완료나 재개 조회가 만료 때까지 막힌다(전부터) | c4 | ADR-0065 감수할 점, HANDOFF -1ax |
+| 영구히 실패하는 만료 세션이 100개를 넘으면 정리기 후보가 막혀 그 뒤 세션이 정리되지 않는다(매 주기 오류 로그로 드러난다) | c4 | ADR-0065 감수할 점, HANDOFF -1ax |
+| 에이전트는 완료가 5xx면 `GET .../parts`로 재개해, 저장소에서 끝난 완료를 마저 끝내는 재시도 경로에 닿지 않을 수 있다 | c4 | HANDOFF -1ax |
+| `_mark_received`의 검증 작업 등록이 요청 트랜잭션과 따로 커밋되는 틈을 코드로만 봤다(재현하지 않음). 생기면 `requeue-verify`로 복구된다 | rq | 이 문서(rq 항목 메모) |
+| 천천히 흘리는 웹훅 수신 서버는 여전히 기한까지 간다(수정 전과 같다). 막으려면 읽기 횟수나 속도 하한을 따로 정해야 한다. TLS 안의 비응용 레코드는 세지 않는다(확인 필요). 운영자 경보 웹훅(`monitoring.py`)은 보지 않았고, 상한으로 끝난 실패도 `last_error`가 `RemoteProtocolError`라 메시지로만 구분된다 | w4 | ADR-0064, HANDOFF -1au |
+| 기본 워커 하나 배치에서는 900초 이상 구간 클립이 최대 `FFMPEG_TIMEOUT_S` 동안 워커를 쥔다. 전역 클립 동시 한도, 다른 긴 작업의 임대 갱신, `complete`·`fail`의 소유 확인, 원본 받기·올리기 시간 한도, `worker-clips` 지표 수집이 없다. 살아 있는 워커 안에서 멈춘 클립은 임대가 계속 갱신돼 회수되지 않는다. 전부터 Compose에 `WORKER_RESOURCE_CLASSES`가 없다 | c7 | ADR-0069, HANDOFF -1bb |
 | PDF 렌더는 아직 요청 안에서 10초대가 걸린다(워커 이전·시간 상한 미완). 같은 이름 zip 항목, 큰 XML 항목의 내보내기 메모리, RLIMIT_AS 아래 lzma 큰 사전의 500이 남았다 | rep | ADR-0066 |
 | 웹 화면이 새 응답을 따로 안내하지 않는다: 보고서 내보내기의 429·409, 기한 지난 승인의 409. 클립 목록에 더 보기 버튼이 없고, 데이터셋이 500개를 넘으면 웹도 쪽 넘김이 필요하다 | rep, rpb, dsb, asb, dsa | 각 ADR |
-| `Content-Length`가 약 4300자리를 넘으면 `int()`가 실패해 500이 될 수 있다. uvicorn이 먼저 거절할 것으로 보지만 실행하지 않았다(확인 필요) | v5 | v5 항목 메모 |
+| `Content-Length`가 약 4300자리를 넘으면 `int()`가 실패해 500이 될 수 있다. uvicorn이 먼저 거절할 것으로 보지만 실행하지 않았다(확인 필요) | v5 | 이 문서(v5 항목 메모) |
 
 ## 운영에서 확인할 것
 
@@ -148,6 +155,7 @@
 7. **클립 한도 배수 4**: 개발 PC의 합성 영상으로 정한 값이다. 운영 하드웨어와 실제 해상 영상으로 다시 잰다(C7).
 8. **SeaweedFS 동작**: 수명주기 규칙 지원, 완료 거부에 쓰는 오류 코드, 최소 파트 크기 강제는 확인 필요다(C4, S46).
 9. **PDF 동시 렌더 기본값**: `REPORT_PDF_MAX_CONCURRENT=2`와 `Retry-After` 5초는 실측으로 고른 값이 아니다. 렌더러 라이브러리를 실행 중에 설치하면 프로세스를 다시 띄워야 PDF가 켜진다(V8, S37).
+10. **기간 보고서 관측값 질의 시간**: S30의 질의에 부분 질의 셋과 OR가 붙었고, 그중 하나는 행마다 도는 상관 EXISTS다. 큰 기관에서의 실행 시간은 재지 않았다(S30, ADR-0079).
 
 ## 밤 작업 방식
 
