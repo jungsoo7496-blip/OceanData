@@ -80,6 +80,12 @@
 | SHARING-5 | 같은 uniqueItems 위반이 S05와 S16에서 다른 오류 포인터를 받는다 | 낮음 | 확인 | 고침 (이 PR) |
 | SHARING-O3 | 요청 본문 스키마를 어긴 data_card가 400 VALIDATION_ERROR 대신 422 RULE_VIOLATION을 받는다(S01이 큐 경로로도 넓힘) | 낮음 | 확인 | 사람이 정할 것 |
 
+- **SHARING-1 같은 회차 재검수와 분류 지정의 교착** — 미탐 결정이 같은 회차의 다른 원본 비식별본에 재검수를 열 때, 그 원본을 먼저 잠근 뒤 비식별본을 잠근다(`deid._recheck_session`, 원본 ID 순서). 이제 분류 지정(`lock_family`)과 순서가 같아, 둘이 겹쳐도 409나 결정 실패 없이 차례로 끝난다. ADR-0074 결정 4와 `lock_family` 설명도 바로잡았다(ADR-0088). 여러 계보를 엇갈려 잠그는 드문 경우(같은 회차 미탐 결정끼리, 일괄 삭제)는 ADR-0053대로 409로 남긴다.
+- **SHARING-2 제공기관에게 보이던 다른 기관 버전** — 제공기관 주체는 `GET /v1/datasets`·`GET /v1/datasets/{id}`에서 자기 기관 자산이 든 버전만 본다. 데이터 카드와 샘플 썸네일 URL도 그 버전에서만 고른다. 계보 조회와 같은 규칙이고, 계약 설명에 적었다(ADR-0088).
+- **SHARING-3 쪽을 나누지 않던 이용 목록** — `GET /v1/access-requests`·`/v1/grants`는 ID 순으로, `/v1/usage-history`는 (초 단위 at, kind, 사건 ID) 순으로 `limit`·`cursor`대로 나누고 `next_cursor`를 준다. 이용 이력은 신청마다 따로 읽지 않고 질의 하나로 모은다. 계약을 먼저 고쳤고, 웹은 `apiAll`로 끝까지 따라 읽는다(ADR-0088).
+- **SHARING-4 공유 후보의 형식이 틀린 ID** — `asset_ids` 항목과 `session_id`가 계약 형식이 아니면 404 대신 400 `VALIDATION_ERROR`(`/asset_ids/<i>`·`/session_id`)다. 이때 아무 자산도 후보가 되지 않는다. 정규식은 `domain.ids.id_pattern` 한 곳에서 만든다(ADR-0088).
+- **SHARING-5 중복 ID 오류의 두 모양** — 공유 후보와 데이터셋 버전 모두 배열 자리 하나(`/asset_ids`·`/item_asset_ids`, `code: unique`)로 답한다. 다시 나온 ID는 다섯 개까지 메시지에 적는다(`errors.duplicate_items`). 포인터 자리는 웹훅·재처리·JSON Schema 검사와 같다(code 값은 JSON Schema 검사의 `schema.uniqueItems`·정책 초안의 `uniqueItems`와 아직 다르다). ADR-0072 결정 4의 틀린 문장도 바로잡았다(ADR-0088).
+
 ## 자산·비식별
 
 | id | 지적 | 심각도 | 판정 | 처리 |
