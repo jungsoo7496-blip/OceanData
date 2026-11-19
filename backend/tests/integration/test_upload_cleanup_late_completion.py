@@ -1,11 +1,13 @@
-"""통합 검토 UPLOADS-1 (ADR-0084): 503으로 끝난 완료를 저장소가 늦게 마친 경우의 정리.
+"""통합 검토 UPLOADS-1·UPLOADS-3 (ADR-0084): 503으로 끝난 완료를 저장소가 늦게 마친 경우의 정리, 만료 정리 한 번의 시간.
 
 UPLOADS-1: 완료 요청의 저장소 완료 호출이 시간 초과로 503이 되면(ADR-0082) 요청 트랜잭션이 되돌려져 업로드 행 잠금이 풀린다.
 저장소는 그 완료를 그 뒤에도 마칠 수 있다. 정리(취소·만료 정리기·자산 삭제)의 완성 객체 확인(HEAD)과 멀티파트 중단 사이에 그
 완료가 끝나면, 중단은 NoSuchUpload(성공으로 본다)라 정리는 객체가 없다고 보고 세션을 끝냈다. 완성 객체는 어느 자산에도 속하지
 않고 쿼터에도 세지 않은 채 남았고, 삭제 경로는 그 바이트를 빼고 삭제 증명을 냈다.
 
-실제 S3 API(moto 또는 TEST_S3_ENDPOINT), 합성 값.
+UPLOADS-3: 만료 정리기는 후보(최대 100개)를 차례로 정리하는데 시간 한도가 없었다. 응답하지 않는 저장소면 세션마다 저장소 호출
+시간 초과(어댑터 설정으로 약 90초)를 기다리고, 정리하지 못한 세션은 UPLOADING으로 남아(ADR-0065) 다음 주기에도 같은 일을 했다.
+그동안 그 워커는 작업·임대 회수·감시 규칙을 돌리지 못한다. 실제 S3 API(moto 또는 TEST_S3_ENDPOINT), 합성 값.
 """
 
 from __future__ import annotations
@@ -147,3 +149,33 @@ def test_failed_recheck_after_abort_keeps_the_session(
     assert again.status_code == 204, again.text
     assert _state(ictx, created) == ("ABORTED", 0, 0, None)
 
+
+# ---------------------------------------------------------------- UPLOADS-3
+def test_sweep_pass_stops_at_its_time_budget_while_storage_hangs(
+    ictx: Ctx, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """응답하지 않는 저장소: 정리 한 번이 시간 한도를 넘기면 남은 후보는 다음 주기로 넘긴다(세션·예약은 그대로)."""
+    started = [_start(ictx, 6570 + i) for i in range(3)]
+    for created, up, _ in started:
+        _expire(ictx, up.upload_id)
+    now = [1000.0]
+    calls: list[str] = []
+
+    def hung_head(_bucket: str, key: str) -> None:
+        calls.append(key)
+        now[0] += 90  # 읽기 시간 초과 30초 × 3회 시도(S3 어댑터 설정)
+        raise ReadTimeoutError(endpoint_url="http://127.0.0.1:1")
+
+    with monkeypatch.context() as patch, caplog.at_level(logging.WARNING, logger="app.services.ingest"):
+        patch.setattr("app.services.ingest.monotonic", lambda: now[0], raising=False)
+        patch.setattr(ictx.c.storage, "head_object", hung_head)
+        assert _sweep(ictx) == 0
+    assert len(calls) == 1, f"응답 없는 저장소에 세션마다 기다렸다: {len(calls)}번"  # 전: 3번(세션마다 약 90초)
+    spent = [rec for rec in caplog.records if rec.getMessage() == "expired_upload_sweep_budget_spent"]
+    assert [(rec.swept, rec.left) for rec in spent] == [(0, 2)]  # type: ignore[attr-defined]
+    for created, _, _ in started:
+        assert _state(ictx, created)[:2] == ("UPLOADING", SIZE)
+
+    assert _sweep(ictx) == 3  # 저장소가 돌아오면 다음 주기가 모두 정리한다
+    for created, _, _ in started:
+        assert _state(ictx, created) == ("EXPIRED", 0, 0, None)

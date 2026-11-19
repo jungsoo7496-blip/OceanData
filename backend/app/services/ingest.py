@@ -11,6 +11,7 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from time import monotonic
 from typing import Any
 
 from sqlalchemy import delete, or_, select, text
@@ -625,7 +626,7 @@ class IngestService:
         return self.upload_status(up)
 
 
-def sweep_expired(c: Container, limit: int = 100) -> int:
+def sweep_expired(c: Container, limit: int = 100, budget_s: float = 60.0) -> int:
     """만료된 업로드 세션 정리: 멀티파트 정리·예약 해제 (요구사항 3.3). 워커가 주기적으로 부른다.
 
     세션마다 따로 짧은 트랜잭션으로 정리하고 바로 확정한다(ADR-0059). 한 트랜잭션에 묶으면 앞 세션의 예약 해제가
@@ -634,14 +635,20 @@ def sweep_expired(c: Container, limit: int = 100) -> int:
     다른 세션 정리와 그 뒤 주기 작업은 막히지 않는다. 돌려주는 값은 정리에 성공한 세션 수다.
     저장소 정리를 확인하지 못한 세션은 그 트랜잭션을 되돌려 UPLOADING·예약을 그대로 두고, 다음 주기에 다시 시도한다
     (ADR-0065). 오류 로그에는 업로드 ID와 저장소 예외 이름만 남긴다.
+    한 번의 정리는 budget_s초를 넘기면 남은 후보를 다음 주기로 넘긴다(ADR-0084). 응답 없는 저장소에서 세션마다
+    저장소 시간 초과를 기다리느라 같은 워커의 작업·임대 회수·감시 규칙이 밀리지 않게 한다. 한도는 후보 사이에서만 본다.
     """
     now = c.clock.now()
+    deadline = monotonic() + budget_s
     expired = (Upload.status == "UPLOADING", Upload.expires_at <= now)
     with c.sessionmaker() as db:  # 후보만 고른다 — 잠금은 세션마다 정리 트랜잭션에서 잡는다
         candidates = db.scalars(select(Upload.upload_id).where(*expired).order_by(Upload.expires_at)
                                 .limit(limit)).all()
     done = 0
-    for upload_id in candidates:
+    for n, upload_id in enumerate(candidates):
+        if n and monotonic() >= deadline:
+            log.warning("expired_upload_sweep_budget_spent", extra={"swept": done, "left": len(candidates) - n})
+            break
         try:
             with c.sessionmaker.begin() as db:
                 up = db.scalars(select(Upload).where(Upload.upload_id == upload_id, *expired)
