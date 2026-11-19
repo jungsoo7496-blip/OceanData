@@ -7,14 +7,15 @@
 전이는 domain.md 5장 표에 없어 자산은 `RECEIVED`에 그대로 남는다(ADR-0071). 이 상태의 자산은 삭제도 409다(검증 중 삭제 거부, ADR-0046).
 
 **이 문서의 대상이 아닌 것:** 스토리지 장애로 객체를 읽지 못해 재시도를 다 쓴 자산은 검증이 먼저 `VALIDATING`으로 옮긴 뒤라
-`RECEIVED`에 남지 않고 `FAILED`(`ingest_context.failed_from=VALIDATING`)가 된다. 아래 명령의 목록에 나오지 않고, 예약도 묶인 채다.
-먼저 스토리지를 [06-storage-failure.md](06-storage-failure.md)로 복구한다.
-- 원 영상(`data_type=VIDEO`, `variant` ORIGINAL·CLIP)과 센서 파일(`SENSOR`) 자산: 운영자가 `POST /v1/assets/{id}/reprocess`
-  (다중 인증, 본문 `reason` 필수, `steps`는 영상이면 `["META"]` 등, 센서면 `["SENSOR_PARSE"]`)를 보낸다. 재처리가 상태를
-  `VALIDATING`으로 되돌리고 무결성 검증 작업을 다시 넣는다(응답 `job_ids`는 이 검증 작업). 검증이 이어서 끝나면 등록·예약 정산·
-  무결성 로그를 한 번 하고 보통 처리 순서가 돈다 — 요청한 `steps`는 따로 넣지 않는다(ADR-0076). `GET /v1/assets/{id}`의
-  `ingest_status`가 `REGISTERED` 이후로 바뀌고 기관 사용량(`GET /v1/usage`)의 `reserved_bytes`가 줄었는지 확인한다.
-- 그 밖의 유형은 재처리가 409라 되돌리는 절차가 아직 없다(ADR-0071 감수할 점). 해당 자산 ID를 수행 기록에 남긴다.
+`RECEIVED`에 남지 않고 `FAILED`(`ingest_context.failed_from=VALIDATING`)가 된다. 아래 명령의 목록에 나오지 않고, 예약도 풀리지 않은 채다.
+먼저 스토리지를 [06-storage-failure.md](06-storage-failure.md)로 복구한다. 그 뒤 운영자 재처리로 검증부터 다시 보낸다(ADR-0076).
+- 바이너리가 있는 영상 원본·클립(`data_type=VIDEO`, `variant` ORIGINAL·CLIP)과 센서 파일(`SENSOR`) 자산: `POST /v1/assets/{asset_id}/reprocess`
+  (PLATFORM_OPERATOR, 다중 인증, 본문 `reason` 필수, `steps`는 영상이면 처리 단계 하나 이상(예: `["META"]`), 센서면 `["SENSOR_PARSE"]` 하나)를
+  보낸다. 재처리가 상태를 `VALIDATING`으로 되돌리고 무결성 검증 작업을 다시 넣는다(응답 `job_ids`는 이 검증 작업). 검증이 자산을 등록하고
+  예약을 한 번만 정산한 뒤 보통 처리 순서가 돈다 — 요청한 `steps`는 따로 넣지 않는다. `GET /v1/assets/{id}`의 `ingest_status`가
+  `REGISTERED` 이후로 바뀌고 기관 사용량(`GET /v1/usage`)의 `reserved_bytes`가 줄었는지 확인한다.
+- 스토리지가 아직 읽히지 않으면 검증이 다시 재시도를 다 쓰고 `FAILED`가 되므로, 복구를 확인한 뒤 다시 요청한다.
+- 그 밖의 유형은 재처리가 409로 거부해 되돌리는 절차가 아직 없다(ADR-0071 감수할 점). 해당 자산 ID를 수행 기록에 남긴다.
 
 **판단 기준:** 이 상황만 따로 알리는 감시 규칙은 없다(PROCESSING_BACKLOG는 대기 중인 작업만 센다). 다음 신호가 보이면 확인한다.
 - 워커 로그 `job_failed`(`job_type=integrity_verify`), 메트릭 `worker_job_failures_total{job_type="integrity_verify"}` 증가.
